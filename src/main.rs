@@ -20,6 +20,13 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
     let config = Config::from_env()?;
+    if args.iter().map(String::as_str).collect::<Vec<_>>() == ["doctor"] {
+        let data_dir = config.data_dir.clone();
+        let report = tokio::task::spawn_blocking(move || eventglass::operations::doctor(&data_dir))
+            .await??;
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
     let app = AppState::open(config).await?;
     if args.iter().map(String::as_str).collect::<Vec<_>>() == ["admin", "setup-token"] {
         println!("{}", eventglass::http::issue_setup_token(&app).await?);

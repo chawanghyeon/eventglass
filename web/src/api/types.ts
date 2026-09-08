@@ -29,6 +29,7 @@ export type ProjectList = components["schemas"]["ProjectList"];
 export type Session = components["schemas"]["Session"];
 export type SetupRequest = components["schemas"]["SetupRequest"];
 export type SystemStatus = components["schemas"]["SystemStatus"];
+export type DoctorReport = components["schemas"]["DoctorReport"];
 export type User = components["schemas"]["User"];
 export type UserList = components["schemas"]["UserList"];
 export type CreateUserInput = components["schemas"]["CreateUserInput"];

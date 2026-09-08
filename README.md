@@ -18,6 +18,8 @@ EVENTGLASS_DATA_DIR=./data target/debug/eventglass serve
 
 서버 실행 **전에** 일회용 설정 토큰을 발급합니다. 실행 중에는 데이터 디렉터리 잠금 때문에 관리 CLI를 동시에 사용할 수 없습니다. 기본 주소는 `http://127.0.0.1:8080`이며, 브라우저의 초기 설정 화면에서 토큰으로 첫 관리자를 생성합니다. 토큰은 30분 후 만료됩니다.
 
+`EVENTGLASS_DATA_DIR=./data target/debug/eventglass doctor`는 서버를 시작하거나 DB를 초기화하지 않고 기존 metadata, catalog, local shard manifest를 읽기 전용으로 검사합니다.
+
 `EVENTGLASS_ADDR`, `EVENTGLASS_DATA_DIR`, `EVENTGLASS_BASE_URL`로 주소·데이터 위치·외부 origin을 설정합니다. 원격 접속용 origin은 HTTPS가 필요합니다. S3 빌드는 `EVENTGLASS_S3_URL=s3://bucket/prefix`를 사용하며 새 빈 prefix는 최초 한 번 `EVENTGLASS_S3_INITIALIZE=true`가 필요합니다. 호환 서버는 loopback `EVENTGLASS_S3_ENDPOINT`로만 지정할 수 있습니다.
 
 Webhook은 HTTPS와 공개 DNS 주소만 허용하고 redirect와 system proxy를 사용하지 않습니다. 사내 private 주소가 꼭 필요하면 정확한 host만 `EVENTGLASS_WEBHOOK_ALLOW_PRIVATE_HOSTS`에 쉼표로 나열합니다. 경보 delivery는 안정적인 `X-Eventglass-Delivery` ID를 보내며, 수신 성공 직후 프로세스가 종료될 수 있어 at-least-once입니다.

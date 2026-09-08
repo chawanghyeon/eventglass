@@ -9,6 +9,15 @@ use anyhow::{Context, Result, ensure};
 
 const MINIMUM_FREE_BYTES: u64 = 512 * 1024 * 1024;
 
+#[derive(Debug, Clone, Copy)]
+pub struct DiskStatus {
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub reserved_bytes: u64,
+    pub minimum_free_bytes: u64,
+    pub ingest_accepting: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReserveError {
     Unavailable,
@@ -76,6 +85,21 @@ impl DiskBudget {
             .lock()
             .map(|value| *value)
             .map_err(|_| ReserveError::Unavailable.into())
+    }
+
+    pub fn status(&self) -> Result<DiskStatus> {
+        let free = fs4::available_space(&self.root).map_err(|_| ReserveError::Unavailable)?;
+        let total = fs4::total_space(&self.root).map_err(|_| ReserveError::Unavailable)?;
+        let reserved = self.reserved_bytes()?;
+        let minimum = MINIMUM_FREE_BYTES.max(total / 10);
+        let next_ingest = 2 * crate::config::Limits::default().decoded_bytes as u64;
+        Ok(DiskStatus {
+            total_bytes: total,
+            free_bytes: free,
+            reserved_bytes: reserved,
+            minimum_free_bytes: minimum,
+            ingest_accepting: admit(free, total, reserved, next_ingest).is_ok(),
+        })
     }
 }
 

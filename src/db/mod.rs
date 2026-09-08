@@ -42,6 +42,43 @@ pub fn open_reader(path: &Path) -> Result<Connection> {
     Ok(connection)
 }
 
+/// Opens and verifies an existing metadata database without creating or migrating it.
+pub fn inspect(path: &Path) -> Result<Connection> {
+    let metadata = std::fs::symlink_metadata(path).context("inspect metadata database")?;
+    if !metadata.file_type().is_file() {
+        bail!("metadata database is not a regular file");
+    }
+    let connection = open_reader(path)?;
+    let integrity: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        bail!("metadata integrity check failed");
+    }
+    let version: i64 = connection.query_row(
+        "SELECT coalesce(max(version),0) FROM schema_migrations",
+        [],
+        |row| row.get(0),
+    )?;
+    if version != SCHEMA_VERSION {
+        bail!("unsupported metadata schema version {version}");
+    }
+    let checksum: String = connection.query_row(
+        "SELECT checksum FROM schema_migrations WHERE version=?1",
+        [SCHEMA_VERSION],
+        |row| row.get(0),
+    )?;
+    if checksum != initial_schema_checksum() {
+        bail!("applied migration checksum differs from this binary");
+    }
+    let foreign_key_errors: i64 =
+        connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })?;
+    if foreign_key_errors != 0 {
+        bail!("metadata foreign key check failed");
+    }
+    Ok(connection)
+}
+
 fn configure(connection: &Connection) -> Result<()> {
     connection.busy_timeout(Duration::from_secs(5))?;
     // Must precede the first table, and is a no-op for an established database.
@@ -60,7 +97,7 @@ fn migrate(connection: &mut Connection) -> Result<()> {
         [],
         |row| row.get(0),
     )?;
-    let expected = format!("{:x}", Sha256::digest(INITIAL_SCHEMA.as_bytes()));
+    let expected = initial_schema_checksum();
     if has_migrations {
         let max: i64 = tx.query_row(
             "SELECT coalesce(max(version),0) FROM schema_migrations",
@@ -97,6 +134,10 @@ fn migrate(connection: &mut Connection) -> Result<()> {
     }
     tx.commit()?;
     Ok(())
+}
+
+fn initial_schema_checksum() -> String {
+    format!("{:x}", Sha256::digest(INITIAL_SCHEMA.as_bytes()))
 }
 
 #[cfg(test)]

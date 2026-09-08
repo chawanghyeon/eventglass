@@ -378,16 +378,3 @@ pub(super) async fn update_user(
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
-
-pub(super) async fn status(
-    State(state): State<HttpState>,
-    headers: HeaderMap,
-) -> ApiResult<Response> {
-    authenticate(&state, &headers, false, true).await?;
-    Ok(json_no_store(json!({
-        "version": crate::VERSION,
-        "ready": state.app.indexer.as_ref().is_some_and(|indexer|indexer.ready()),
-        "implemented": ["setup", "auth", "users", "projects", "ingestion", "indexing", "search", "aggregate", "storage", "live", "correlation", "alerts"],
-        "pending": ["cold_hydration", "operations"]
-    })))
-}

@@ -7,6 +7,7 @@ import type {
   AlertInput,
   AlertUpdate,
   Credentials,
+  DoctorReport,
   Issue,
   IssuePage,
   IssueStatus,
@@ -158,6 +159,8 @@ export const endpoints = {
     ),
   systemStatus: (signal?: AbortSignal) =>
     apiRequest<SystemStatus>("/api/system/status", { signal }),
+  systemDoctor: (signal?: AbortSignal) =>
+    apiRequest<DoctorReport>("/api/system/doctor", { signal }),
   alerts: (signal?: AbortSignal) =>
     apiRequest<{ items: Alert[] }>("/api/alerts", { signal }).then(
       (response) => response.items,

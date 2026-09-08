@@ -422,6 +422,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/system/doctor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Run read-only metadata and shard consistency checks */
+        get: operations["getSystemDoctor"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/explore/aggregate": {
         parameters: {
             query?: never;
@@ -714,8 +731,53 @@ export interface components {
         SystemStatus: {
             version: string;
             ready: boolean;
-            implemented: string[];
-            pending: string[];
+            ingest_accepting: boolean;
+            installation_id: string;
+            storage_generation: string;
+            applied_inbox_id: components["schemas"]["NonNegativeDecimalString"];
+            applied_ingest_seq: components["schemas"]["NonNegativeDecimalString"];
+            inbox_records: components["schemas"]["NonNegativeDecimalString"];
+            inbox_bytes: components["schemas"]["NonNegativeDecimalString"];
+            database_bytes: components["schemas"]["NonNegativeDecimalString"];
+            wal_bytes: components["schemas"]["NonNegativeDecimalString"];
+            disk: {
+                total_bytes: components["schemas"]["NonNegativeDecimalString"];
+                free_bytes: components["schemas"]["NonNegativeDecimalString"];
+                reserved_bytes: components["schemas"]["NonNegativeDecimalString"];
+                minimum_free_bytes: components["schemas"]["NonNegativeDecimalString"];
+                ingest_accepting: boolean;
+            };
+            shards: {
+                active: components["schemas"]["NonNegativeDecimalString"];
+                local: components["schemas"]["NonNegativeDecimalString"];
+                remote_verified: components["schemas"]["NonNegativeDecimalString"];
+                remote_only: components["schemas"]["NonNegativeDecimalString"];
+                records: components["schemas"]["NonNegativeDecimalString"];
+                catalog_bytes: components["schemas"]["NonNegativeDecimalString"];
+                recoverable_records: components["schemas"]["NonNegativeDecimalString"];
+            };
+            backup: {
+                configured: boolean;
+                /** @enum {string} */
+                state: "disabled" | "no_checkpoint" | "lagging" | "current";
+                latest_checkpoint_id: string | null;
+                recoverable_through_ingest_seq: components["schemas"]["NonNegativeDecimalString"] | null;
+                lag_records: components["schemas"]["NonNegativeDecimalString"] | null;
+            };
+            alerts: {
+                pending_deliveries: components["schemas"]["NonNegativeDecimalString"];
+                failed_deliveries: components["schemas"]["NonNegativeDecimalString"];
+                evaluation_failures: components["schemas"]["NonNegativeDecimalString"];
+            };
+        };
+        DoctorReport: {
+            /** @constant */
+            ok: true;
+            schema_version: components["schemas"]["PositiveDecimalString"];
+            installation_id: string;
+            storage_generation: string;
+            checked_local_shards: components["schemas"]["NonNegativeDecimalString"];
+            checked_remote_only_shards: components["schemas"]["NonNegativeDecimalString"];
         };
         ErrorEnvelope: {
             error: {
@@ -1652,6 +1714,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemStatus"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getSystemDoctor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Consistency report */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DoctorReport"];
                 };
             };
             401: components["responses"]["Error"];

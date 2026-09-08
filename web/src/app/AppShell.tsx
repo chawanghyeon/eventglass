@@ -58,6 +58,10 @@ export function AppShell() {
                 <span aria-hidden="true">◎</span>
                 사용자
               </NavLink>
+              <NavLink to="/system">
+                <span aria-hidden="true">◉</span>
+                System
+              </NavLink>
             </>
           ) : null}
         </nav>

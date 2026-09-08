@@ -899,6 +899,25 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/system/doctor:
+    get:
+      operationId: getSystemDoctor
+      summary: Run read-only metadata and shard consistency checks
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Consistency report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DoctorReport"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/explore/aggregate:
     post:
       operationId: aggregate
@@ -1704,20 +1723,148 @@ components:
     SystemStatus:
       type: object
       additionalProperties: false
-      required: [version, ready, implemented, pending]
+      required:
+        [
+          version,
+          ready,
+          ingest_accepting,
+          installation_id,
+          storage_generation,
+          applied_inbox_id,
+          applied_ingest_seq,
+          inbox_records,
+          inbox_bytes,
+          database_bytes,
+          wal_bytes,
+          disk,
+          shards,
+          backup,
+          alerts,
+        ]
       properties:
         version:
           type: string
         ready:
           type: boolean
-        implemented:
-          type: array
-          items:
-            type: string
-        pending:
-          type: array
-          items:
-            type: string
+        ingest_accepting:
+          type: boolean
+        installation_id:
+          type: string
+        storage_generation:
+          type: string
+        applied_inbox_id:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        applied_ingest_seq:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        inbox_records:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        inbox_bytes:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        database_bytes:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        wal_bytes:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        disk:
+          type: object
+          additionalProperties: false
+          required:
+            [
+              total_bytes,
+              free_bytes,
+              reserved_bytes,
+              minimum_free_bytes,
+              ingest_accepting,
+            ]
+          properties:
+            total_bytes: { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            free_bytes: { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            reserved_bytes: { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            minimum_free_bytes: { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            ingest_accepting: { type: boolean }
+        shards:
+          type: object
+          additionalProperties: false
+          required:
+            [
+              active,
+              local,
+              remote_verified,
+              remote_only,
+              records,
+              catalog_bytes,
+              recoverable_records,
+            ]
+          properties:
+            active: { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            local: { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            remote_verified:
+              { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            remote_only:
+              { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            records: { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            catalog_bytes:
+              { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            recoverable_records:
+              { $ref: "#/components/schemas/NonNegativeDecimalString" }
+        backup:
+          type: object
+          additionalProperties: false
+          required:
+            [
+              configured,
+              state,
+              latest_checkpoint_id,
+              recoverable_through_ingest_seq,
+              lag_records,
+            ]
+          properties:
+            configured: { type: boolean }
+            state:
+              {
+                type: string,
+                enum: [disabled, no_checkpoint, lagging, current],
+              }
+            latest_checkpoint_id: { type: [string, "null"] }
+            recoverable_through_ingest_seq:
+              oneOf:
+                - $ref: "#/components/schemas/NonNegativeDecimalString"
+                - type: "null"
+            lag_records:
+              oneOf:
+                - $ref: "#/components/schemas/NonNegativeDecimalString"
+                - type: "null"
+        alerts:
+          type: object
+          additionalProperties: false
+          required: [pending_deliveries, failed_deliveries, evaluation_failures]
+          properties:
+            pending_deliveries:
+              { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            failed_deliveries:
+              { $ref: "#/components/schemas/NonNegativeDecimalString" }
+            evaluation_failures:
+              { $ref: "#/components/schemas/NonNegativeDecimalString" }
+    DoctorReport:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          ok,
+          schema_version,
+          installation_id,
+          storage_generation,
+          checked_local_shards,
+          checked_remote_only_shards,
+        ]
+      properties:
+        ok: { type: boolean, const: true }
+        schema_version: { $ref: "#/components/schemas/PositiveDecimalString" }
+        installation_id: { type: string }
+        storage_generation: { type: string }
+        checked_local_shards:
+          { $ref: "#/components/schemas/NonNegativeDecimalString" }
+        checked_remote_only_shards:
+          { $ref: "#/components/schemas/NonNegativeDecimalString" }
     ErrorEnvelope:
       type: object
       additionalProperties: false

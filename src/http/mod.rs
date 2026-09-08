@@ -13,6 +13,7 @@ mod projects;
 mod records;
 mod related;
 mod search;
+mod system;
 
 use std::sync::Arc;
 
@@ -20,7 +21,7 @@ use alerts::{
     create as create_alert, delete_alert, deliveries as alert_deliveries, list as alerts,
     retry_delivery, update as update_alert,
 };
-use auth::{create_user, list_users, login, logout, me, setup, status, update_user};
+use auth::{create_user, list_users, login, logout, me, setup, update_user};
 use axum::{
     Json, Router,
     http::{HeaderValue, StatusCode, header},
@@ -167,7 +168,8 @@ pub fn router(app: AppState) -> Router {
         .route("/api/projects/{id}", patch(update_project))
         .route("/api/projects/{id}/keys", post(create_key))
         .route("/api/projects/{id}/keys/{key_id}", delete(revoke_key))
-        .route("/api/system/status", get(status))
+        .route("/api/system/status", get(system::status))
+        .route("/api/system/doctor", get(system::doctor))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .layer(axum::middleware::map_response(no_store))
         .with_state(HttpState {

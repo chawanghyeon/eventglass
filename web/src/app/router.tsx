@@ -7,6 +7,7 @@ import { IssueDetailPage, IssuesPage } from "../features/issues";
 import { LogsPage } from "../features/logs";
 import { ProjectsPage } from "../features/projects";
 import { UsersPage } from "../features/users";
+import { SystemPage } from "../features/system";
 import { AppShell } from "./AppShell";
 import { ProtectedRoute } from "./ProtectedRoute";
 
@@ -26,6 +27,7 @@ export const router = createBrowserRouter([
           { path: "/projects", element: <ProjectsPage /> },
           { path: "/users", element: <UsersPage /> },
           { path: "/alerts", element: <AlertsPage /> },
+          { path: "/system", element: <SystemPage /> },
           { path: "/", element: <DashboardPage /> },
         ],
       },

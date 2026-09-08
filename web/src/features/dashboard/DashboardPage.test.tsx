@@ -86,8 +86,43 @@ const issuePage: IssuePage = { items: [], next_cursor: null };
 const systemStatus: SystemStatus = {
   version: "0.1.0",
   ready: true,
-  implemented: ["storage"],
-  pending: [],
+  ingest_accepting: true,
+  installation_id: "installation",
+  storage_generation: "generation",
+  applied_inbox_id: "9",
+  applied_ingest_seq: "91",
+  inbox_records: "0",
+  inbox_bytes: "0",
+  database_bytes: "4096",
+  wal_bytes: "0",
+  disk: {
+    total_bytes: "1073741824",
+    free_bytes: "805306368",
+    reserved_bytes: "0",
+    minimum_free_bytes: "536870912",
+    ingest_accepting: true,
+  },
+  shards: {
+    active: "1",
+    local: "0",
+    remote_verified: "0",
+    remote_only: "0",
+    records: "91",
+    catalog_bytes: "4096",
+    recoverable_records: "0",
+  },
+  backup: {
+    configured: false,
+    state: "disabled",
+    latest_checkpoint_id: null,
+    recoverable_through_ingest_seq: null,
+    lag_records: null,
+  },
+  alerts: {
+    pending_deliveries: "0",
+    failed_deliveries: "0",
+    evaluation_failures: "0",
+  },
 };
 
 function renderPage() {
