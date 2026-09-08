@@ -387,7 +387,7 @@ pub(super) async fn status(
     Ok(json_no_store(json!({
         "version": crate::VERSION,
         "ready": state.app.indexer.as_ref().is_some_and(|indexer|indexer.ready()),
-        "implemented": ["setup", "auth", "users", "projects", "ingestion", "indexing", "search", "aggregate", "storage", "live", "alerts"],
+        "implemented": ["setup", "auth", "users", "projects", "ingestion", "indexing", "search", "aggregate", "storage", "live", "correlation", "alerts"],
         "pending": ["cold_hydration", "operations"]
     })))
 }

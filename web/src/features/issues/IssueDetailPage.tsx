@@ -300,6 +300,7 @@ export function IssueDetailPage() {
             ))}
             {selectedOccurrence ? (
               <RecordDetailPanel
+                detailToken={occurrenceDetail.data?.detail_token}
                 error={
                   occurrenceDetail.isError
                     ? describeApiError(occurrenceDetail.error)

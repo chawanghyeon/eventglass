@@ -14,6 +14,7 @@ import type {
   LoginResponse,
   OccurrencePage,
   RecordDetail,
+  RelatedRecords,
   SearchFilters,
   SearchPage,
   Project,
@@ -186,6 +187,15 @@ export const endpoints = {
     apiRequest<undefined>(
       `/api/alert-deliveries/${encodeURIComponent(id)}/retry`,
       { method: "POST", signal },
+    ),
+  relatedRecords: (
+    detailToken: string,
+    windowSeconds = 3600,
+    signal?: AbortSignal,
+  ) =>
+    apiRequest<RelatedRecords>(
+      `/api/records/${encodeURIComponent(detailToken)}/related?window_seconds=${windowSeconds}`,
+      { signal },
     ),
   logs: (
     input: {

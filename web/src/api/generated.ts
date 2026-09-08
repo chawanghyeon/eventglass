@@ -318,6 +318,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/records/{detail_token}/related": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Find authorized records related to one signed record identity */
+        get: operations["getRelatedRecords"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/alerts": {
         parameters: {
             query?: never;
@@ -611,6 +628,19 @@ export interface components {
         RecordDetail: {
             record_id: string;
             raw: unknown;
+            detail_token?: string;
+        };
+        RelatedRecords: {
+            reference_record_id: string;
+            /** @enum {string} */
+            strategy: "trace_id" | "request_id" | "project_service_user_time" | "project_service_error_time";
+            exact: boolean;
+            window_seconds: number;
+            watermark: components["schemas"]["NonNegativeDecimalString"];
+            /** @constant */
+            complete: true;
+            truncated: boolean;
+            rows: components["schemas"]["SearchRow"][];
         };
         /** @enum {string} */
         AlertTimeBasis: "received_at" | "timestamp";
@@ -1400,6 +1430,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecordDetail"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            410: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+            504: components["responses"]["Error"];
+        };
+    };
+    getRelatedRecords: {
+        parameters: {
+            query?: {
+                window_seconds?: number;
+            };
+            header?: never;
+            path: {
+                detail_token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Related records and the correlation strategy actually used */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RelatedRecords"];
                 };
             };
             400: components["responses"]["Error"];

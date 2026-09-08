@@ -1,4 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { describeApiError } from "../api/client";
+import { endpoints } from "../api/endpoints";
 import { Button } from "./Button";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
@@ -49,6 +52,7 @@ function frameLabel(frame: JsonObject): string {
 }
 
 export function RecordDetailPanel({
+  detailToken,
   error,
   heading,
   onClose,
@@ -57,6 +61,7 @@ export function RecordDetailPanel({
   raw,
   recordId,
 }: {
+  detailToken?: string;
   error?: string;
   heading: string;
   onClose: () => void;
@@ -66,8 +71,16 @@ export function RecordDetailPanel({
   recordId: string;
 }) {
   const closeButton = useRef<HTMLButtonElement>(null);
+  const [relatedWindow, setRelatedWindow] = useState(3600);
   const exceptions = exceptionValues(raw);
   const breadcrumbs = breadcrumbValues(raw);
+  const related = useQuery({
+    queryKey: ["related-records", detailToken ?? "none", relatedWindow],
+    queryFn: ({ signal }) =>
+      endpoints.relatedRecords(detailToken ?? "", relatedWindow, signal),
+    enabled: Boolean(detailToken),
+    retry: false,
+  });
 
   useEffect(() => closeButton.current?.focus(), []);
 
@@ -172,8 +185,85 @@ export function RecordDetailPanel({
             <h3 id="raw-heading">Scrubbed JSON</h3>
             <pre>{JSON.stringify(raw, null, 2)}</pre>
           </section>
+          {detailToken ? (
+            <section
+              className="record-section"
+              aria-labelledby="related-heading"
+            >
+              <div className="related-heading">
+                <div>
+                  <h3 id="related-heading">Related Logs</h3>
+                  {related.data ? (
+                    <p>
+                      {related.data.exact ? "정확한 ID 연결" : "시간 기반 추정"}{" "}
+                      · {strategyLabel(related.data.strategy)}
+                    </p>
+                  ) : null}
+                </div>
+                <label>
+                  시간 범위
+                  <select
+                    onChange={(event) =>
+                      setRelatedWindow(Number(event.target.value))
+                    }
+                    value={relatedWindow}
+                  >
+                    <option value={3600}>±1시간</option>
+                    <option value={21600}>±6시간</option>
+                    <option value={86400}>±24시간</option>
+                  </select>
+                </label>
+              </div>
+              {related.isPending ? <Spinner label="연관 로그 검색 중" /> : null}
+              {related.isError ? (
+                <Notice tone="error">
+                  <span>{describeApiError(related.error)}</span>
+                  <Button
+                    onClick={() => void related.refetch()}
+                    type="button"
+                    variant="quiet"
+                  >
+                    다시 시도
+                  </Button>
+                </Notice>
+              ) : null}
+              {related.data?.rows.length === 0 ? (
+                <p className="inline-empty">
+                  연결 기준에 맞는 다른 로그가 없습니다.
+                </p>
+              ) : null}
+              {related.data?.rows.length ? (
+                <ol className="related-list">
+                  {related.data.rows.map((row) => (
+                    <li key={row.record_id}>
+                      <time>
+                        {new Date(row.timestamp).toLocaleString("ko-KR")}
+                      </time>
+                      <strong>{row.message || "(빈 메시지)"}</strong>
+                      <span>
+                        {row.service} · {row.level} · {row.kind}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              ) : null}
+            </section>
+          ) : null}
         </>
       ) : null}
     </section>
   );
+}
+
+function strategyLabel(strategy: string): string {
+  switch (strategy) {
+    case "trace_id":
+      return "동일 trace_id";
+    case "request_id":
+      return "동일 request_id";
+    case "project_service_user_time":
+      return "같은 프로젝트·서비스·사용자와 근접 시각";
+    default:
+      return "같은 프로젝트·서비스의 Error ±30초";
+  }
 }

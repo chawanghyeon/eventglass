@@ -9,6 +9,7 @@ import { endpoints } from "../../api/endpoints";
 import type {
   AggregateResponse,
   Project,
+  RelatedRecords,
   SearchPage,
   SearchRow,
   Session,
@@ -97,6 +98,26 @@ function aggregate(): AggregateResponse {
   };
 }
 
+function related(): RelatedRecords {
+  return {
+    reference_record_id: "a".repeat(64),
+    strategy: "trace_id",
+    exact: true,
+    window_seconds: 3600,
+    watermark: "9007199254740999",
+    complete: true,
+    truncated: false,
+    rows: [
+      row({
+        record_id: "b".repeat(64),
+        detail_token: "related-detail-token",
+        message: "correlated request",
+        trace_id: "trace-a",
+      }),
+    ],
+  };
+}
+
 function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location">{location.search}</output>;
@@ -133,6 +154,7 @@ function renderPage(path = basePath) {
 afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   vi.spyOn(endpoints, "aggregate").mockResolvedValue(aggregate());
+  vi.spyOn(endpoints, "relatedRecords").mockResolvedValue(related());
 });
 
 describe("LogsPage", () => {
@@ -289,5 +311,30 @@ describe("LogsPage", () => {
       (await screen.findAllByText(/<script>alert/)).length,
     ).toBeGreaterThanOrEqual(2);
     expect(container.querySelector("script")).toBeNull();
+  });
+
+  it("shows the actual correlation strategy and lets the user widen its time window", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(endpoints, "logs").mockResolvedValue(page());
+    vi.spyOn(endpoints, "recordDetail").mockResolvedValue({
+      record_id: "a".repeat(64),
+      raw: { message: "request finished" },
+    });
+    const relatedRequest = vi.mocked(endpoints.relatedRecords);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "상세 보기" }));
+    expect(
+      await screen.findByText("정확한 ID 연결 · 동일 trace_id"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("correlated request")).toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("시간 범위"), "21600");
+    await waitFor(() =>
+      expect(relatedRequest).toHaveBeenLastCalledWith(
+        "detail-token",
+        21600,
+        expect.anything(),
+      ),
+    );
   });
 });

@@ -306,7 +306,7 @@ async fn detail_is_exact_scrubbed_and_fails_closed() -> anyhow::Result<()> {
     )
     .await?;
     assert_eq!(status, StatusCode::OK, "{detail}");
-    assert_eq!(detail.as_object().unwrap().len(), 2);
+    assert_eq!(detail.as_object().unwrap().len(), 3);
     assert_eq!(detail["record_id"], record_id);
     assert_eq!(detail["raw"]["extra"]["password"], "[Filtered]");
     assert_eq!(detail["raw"]["extra"]["safe"], "retained");
@@ -453,6 +453,142 @@ async fn detail_is_exact_scrubbed_and_fails_closed() -> anyhow::Result<()> {
         StatusCode::FORBIDDEN
     );
 
+    app.indexer.as_ref().unwrap().shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn related_records_use_the_signed_reference_and_report_the_strategy() -> anyhow::Result<()> {
+    let (_dir, app, router, cookie) = fixture().await?;
+    let project = ProjectContext {
+        project_id: 1,
+        slug: "detail".into(),
+        public_key: "detail-public".into(),
+        scrub_keys: vec![],
+    };
+    let mut records = Vec::new();
+    let received_at_us = eventglass::model::now_us()?;
+    for (ordinal, (event_id, message, timestamp)) in [
+        (
+            "11111111111111111111111111111111",
+            "trace reference",
+            "2026-09-08T00:00:00Z",
+        ),
+        (
+            "22222222222222222222222222222222",
+            "trace neighbor",
+            "2026-09-08T00:00:10Z",
+        ),
+        (
+            "33333333333333333333333333333333",
+            "different trace",
+            "2026-09-08T00:00:20Z",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let trace_id = if ordinal < 2 { "trace-a" } else { "trace-b" };
+        records.extend(
+            sentry::normalize_store(
+                &serde_json::to_vec(&json!({
+                    "event_id":event_id,
+                    "timestamp":timestamp,
+                    "message":message,
+                    "service":"api",
+                    "contexts":{"trace":{"trace_id":trace_id}}
+                }))?,
+                &project,
+                uuid::Uuid::new_v4(),
+                received_at_us,
+                &Default::default(),
+            )?
+            .records,
+        );
+    }
+    app.db
+        .call(move |db| {
+            ingest::accept(
+                db,
+                IngestProject {
+                    id: 1,
+                    slug: "detail".into(),
+                    public_key: "detail-public".into(),
+                },
+                "related-records-acceptance",
+                records,
+                &Default::default(),
+            )
+        })
+        .await?;
+    app.indexer.as_ref().unwrap().wake();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if app
+                .indexer
+                .as_ref()
+                .unwrap()
+                .snapshot()
+                .unwrap()
+                .boundary
+                .ingest_seq
+                == 3
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await?;
+    let page = search(&router, &cookie).await?;
+    let reference = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["message"] == "trace reference")
+        .unwrap();
+    let token = reference["detail_token"].as_str().unwrap();
+    let (status, related) = request(
+        &router,
+        "GET",
+        &format!("/api/records/{token}/related?window_seconds=3600"),
+        &cookie,
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{related}");
+    assert_eq!(related["strategy"], "trace_id");
+    assert_eq!(related["exact"], true);
+    assert_eq!(related["truncated"], false);
+    assert_eq!(related["window_seconds"], 3600);
+    assert_eq!(related["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(related["rows"][0]["message"], "trace neighbor");
+    assert_ne!(related["rows"][0]["record_id"], reference["record_id"]);
+    assert!(related["rows"][0]["detail_token"].is_string());
+    assert_eq!(
+        request(
+            &router,
+            "GET",
+            &format!("/api/records/{token}/related?window_seconds=29"),
+            &cookie,
+            None,
+        )
+        .await?
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        request(
+            &router,
+            "GET",
+            &format!("/api/records/{token}/related"),
+            "",
+            None,
+        )
+        .await?
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
     app.indexer.as_ref().unwrap().shutdown().await?;
     Ok(())
 }

@@ -8,6 +8,7 @@ export type IssueStatus = components["schemas"]["IssueStatus"];
 export type IssueUpdate = components["schemas"]["IssueUpdate"];
 export type LoginResponse = components["schemas"]["LoginResponse"];
 export type RecordDetail = components["schemas"]["RecordDetail"];
+export type RelatedRecords = components["schemas"]["RelatedRecords"];
 export type SearchFilters = components["schemas"]["SearchFilters"];
 export type SearchPage = components["schemas"]["SearchPage"];
 export type SearchRow = components["schemas"]["SearchRow"];

@@ -83,7 +83,7 @@ pub(super) async fn get_record(
         .await
         .map_err(scope_error)?;
 
-    let detail = load_native(
+    let mut detail = load_native(
         &state,
         shard_id,
         NativeDetail::Watermark {
@@ -119,6 +119,7 @@ pub(super) async fn get_record(
     if current_scope.projects != scope.projects {
         return Err(token_error(TokenError::AuthorizationChanged));
     }
+    detail.detail_token = Some(detail_token);
 
     Ok(detail_response(detail))
 }

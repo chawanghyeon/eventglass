@@ -1084,6 +1084,39 @@ textarea {
   margin: 0;
   font-size: 1rem;
 }
+.related-heading {
+  align-items: end;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+.related-heading p {
+  color: var(--muted);
+  margin: 0.25rem 0 0;
+}
+.related-heading label {
+  min-width: 9rem;
+}
+.related-list {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.related-list li {
+  background: #f6f8f9;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.7rem;
+}
+.related-list time,
+.related-list span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
 .exception-list,
 .frame-list,
 .breadcrumb-list {

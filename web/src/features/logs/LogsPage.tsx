@@ -377,6 +377,7 @@ export function LogsPage() {
       ) : null}
       {selected ? (
         <RecordDetailPanel
+          detailToken={selected.detail_token}
           error={detail.isError ? describeApiError(detail.error) : undefined}
           heading="로그 상세"
           onClose={closeDetail}

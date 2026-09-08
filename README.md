@@ -2,7 +2,7 @@
 
 Eventglass: 단일 Rust 프로세스 기반 Error Tracking + Application Log 검색 서버.
 
-관리자·프로젝트 관리, Sentry 수신과 durable Inbox, Indexer의 검색 공개·재시작 복구, Issue·검색·집계·Live·경보 API와 UI, S3 checkpoint 복구를 구현했습니다. cold hydration과 운영 배포 검증은 진행 중입니다. 전체 범위는 [구현 설계](docs/observe/implementation.md)와 [아키텍처](docs/observe/architecture.md), 개발 명령은 [개발 안내](CONTRIBUTING.md)를 확인하세요.
+관리자·프로젝트 관리, Sentry 수신과 durable Inbox, Indexer의 검색 공개·재시작 복구, Issue·검색·집계·Live·Related Logs·경보 API와 UI, S3 checkpoint 복구를 구현했습니다. cold hydration과 운영 배포 검증은 진행 중입니다. 전체 범위는 [구현 설계](docs/observe/implementation.md)와 [아키텍처](docs/observe/architecture.md), 개발 명령은 [개발 안내](CONTRIBUTING.md)를 확인하세요.
 
 제품명과 실행 파일은 저장소 이름에 맞춰 **Eventglass / `eventglass`**를 사용합니다. 첨부된 원안은 변경하지 않아 원안과 과거 실행 증거에는 이전 이름이 남아 있습니다.
 

@@ -91,6 +91,7 @@ run_integration() {
     run_nonempty_test_target "Indexer coordinator" --test indexer
     run_nonempty_test_target "Indexer SQLite finalization" --test indexer_db
     run_nonempty_test_target "Issue API" --test issues
+    run_nonempty_test_target "Issue occurrence detail" --test issue_detail
     run_nonempty_test_target "signed search tokens" --test tokens
     run_nonempty_test_target "query authorization scope" --test query_scope
     run_nonempty_test_target "native search" --test search

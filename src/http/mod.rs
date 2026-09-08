@@ -11,6 +11,7 @@ mod issues;
 mod live;
 mod projects;
 mod records;
+mod related;
 mod search;
 
 use std::sync::Arc;
@@ -154,6 +155,7 @@ pub fn router(app: AppState) -> Router {
         .route("/api/alert-deliveries", get(alert_deliveries))
         .route("/api/alert-deliveries/{id}/retry", post(retry_delivery))
         .route("/api/records/{detail_token}", get(records::get_record))
+        .route("/api/records/{detail_token}/related", get(related::related))
         .route("/api/issues", get(list_issues))
         .route("/api/issues/{id}", get(get_issue).patch(update_issue))
         .route("/api/issues/{id}/events", get(list_occurrences))

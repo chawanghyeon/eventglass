@@ -249,7 +249,8 @@ async fn occurrence_detail_uses_durable_identity_and_current_authorization() -> 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
         let body = json_body(response).await?;
-        assert_eq!(body.as_object().unwrap().len(), 2);
+        assert_eq!(body.as_object().unwrap().len(), 3);
+        assert!(body["detail_token"].is_string());
         assert_eq!(body["record_id"], record_one);
         assert_eq!(body["raw"]["message"], HOSTILE);
         assert_eq!(body["raw"]["breadcrumbs"][0]["message"], HOSTILE);

@@ -19,6 +19,21 @@ use super::{active::Published, schema};
 pub struct RecordDetail {
     pub record_id: String,
     pub raw: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail_token: Option<String>,
+    #[serde(skip_serializing)]
+    pub correlation: CorrelationSeed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CorrelationSeed {
+    pub project_id: i64,
+    pub ingest_seq: i64,
+    pub timestamp_us: i64,
+    pub service: String,
+    pub trace_id: Option<String>,
+    pub request_id: Option<String>,
+    pub user_id: Option<String>,
 }
 
 /// Loads one record from the already selected active-shard snapshot.
@@ -144,10 +159,60 @@ fn load_bounded(
     let raw_field = expected_schema.get_field("raw_json")?;
     let raw = serde_json::from_str(exactly_one_str(&document, raw_field, "raw_json")?)
         .map_err(|error| anyhow::anyhow!("invalid native raw_json: {error}"))?;
+    let timestamp_field = expected_schema.get_field("timestamp")?;
+    let service_field = expected_schema.get_field("service")?;
     Ok(Some(RecordDetail {
         record_id: stored_record.to_owned(),
         raw,
+        detail_token: None,
+        correlation: CorrelationSeed {
+            project_id: stored_project,
+            ingest_seq: stored_sequence,
+            timestamp_us: exactly_one_date(&document, timestamp_field, "timestamp")?,
+            service: exactly_one_str(&document, service_field, "service")?.to_owned(),
+            trace_id: optional_str(
+                &document,
+                expected_schema.get_field("trace_id")?,
+                "trace_id",
+            )?,
+            request_id: optional_str(
+                &document,
+                expected_schema.get_field("request_id")?,
+                "request_id",
+            )?,
+            user_id: optional_str(&document, expected_schema.get_field("user_id")?, "user_id")?,
+        },
     }))
+}
+
+fn optional_str(
+    document: &TantivyDocument,
+    field: tantivy::schema::Field,
+    name: &'static str,
+) -> Result<Option<String>> {
+    let mut values = document.get_all(field);
+    let value = values.next().map(|value| {
+        value
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("invalid native {name}"))
+    });
+    ensure!(values.next().is_none(), "duplicate native {name}");
+    value.transpose()
+}
+
+fn exactly_one_date(
+    document: &TantivyDocument,
+    field: tantivy::schema::Field,
+    name: &'static str,
+) -> Result<i64> {
+    let mut values = document.get_all(field);
+    let value = values
+        .next()
+        .and_then(|value| value.as_datetime())
+        .ok_or_else(|| anyhow::anyhow!("missing or invalid native {name}"))?;
+    ensure!(values.next().is_none(), "duplicate native {name}");
+    Ok(value.into_timestamp_micros())
 }
 
 fn exactly_one_str<'a>(

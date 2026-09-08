@@ -16,7 +16,7 @@ use crate::db::{
     issue_detail::{self as metadata, AuthorizedOccurrence, IssueDetailError},
     search as authorization,
 };
-use crate::search::tokens::TokenError;
+use crate::search::tokens::{Position, TokenError};
 
 fn invalid_id(code: &'static str) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, code)
@@ -66,7 +66,7 @@ pub(super) async fn get_occurrence_detail(
         .call(move |db| authorization::local_detail_shard(db, &detail_shard_id))
         .await
         .map_err(scope_error)?;
-    let detail = load_native(
+    let mut detail = load_native(
         &state,
         initial.location.shard_id.clone(),
         NativeDetail::Occurrence {
@@ -93,6 +93,22 @@ pub(super) async fn get_occurrence_detail(
     if current.location != initial.location {
         return Err(unavailable());
     }
+    detail.detail_token = Some(
+        state
+            .app
+            .tokens
+            .issue(
+                super::search::context(&initial.authorization, "record-detail-v1".into()),
+                published.boundary.ingest_seq,
+                Position::Detail {
+                    project_id: initial.location.project_id,
+                    shard_id: initial.location.shard_id,
+                    record_id: initial.location.record_id,
+                },
+                crate::model::now_us()?,
+            )
+            .map_err(token_error)?,
+    );
     Ok(detail_response(detail))
 }
 

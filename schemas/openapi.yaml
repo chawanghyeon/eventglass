@@ -665,6 +665,51 @@ paths:
           $ref: "#/components/responses/Error"
         "504":
           $ref: "#/components/responses/Error"
+  /api/records/{detail_token}/related:
+    get:
+      operationId: getRelatedRecords
+      summary: Find authorized records related to one signed record identity
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: detail_token
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 12288
+        - name: window_seconds
+          in: query
+          schema:
+            type: integer
+            minimum: 30
+            maximum: 86400
+            default: 3600
+      responses:
+        "200":
+          description: Related records and the correlation strategy actually used
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RelatedRecords"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
   /api/alerts:
     get:
       operationId: listAlerts
@@ -859,38 +904,38 @@ paths:
       operationId: aggregate
       summary: Aggregate an authorized read snapshot
       security:
-      - cookieAuth: []
+        - cookieAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/AggregateRequest'
+              $ref: "#/components/schemas/AggregateRequest"
       responses:
-        '200':
+        "200":
           description: Exact native aggregation for the shared read snapshot
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/AggregateResponse'
-        '400':
-          $ref: '#/components/responses/Error'
-        '401':
-          $ref: '#/components/responses/Error'
-        '403':
-          $ref: '#/components/responses/Error'
-        '409':
-          $ref: '#/components/responses/Error'
-        '410':
-          $ref: '#/components/responses/Error'
-        '422':
-          $ref: '#/components/responses/Error'
-        '429':
-          $ref: '#/components/responses/Error'
-        '503':
-          $ref: '#/components/responses/Error'
-        '504':
-          $ref: '#/components/responses/Error'
+                $ref: "#/components/schemas/AggregateResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     cookieAuth:
@@ -1412,6 +1457,49 @@ components:
           type: string
           pattern: "^[0-9a-f]{64}$"
         raw: {}
+        detail_token:
+          type: string
+    RelatedRecords:
+      type: object
+      additionalProperties: false
+      required:
+        - reference_record_id
+        - strategy
+        - exact
+        - window_seconds
+        - watermark
+        - complete
+        - truncated
+        - rows
+      properties:
+        reference_record_id:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        strategy:
+          type: string
+          enum:
+            - trace_id
+            - request_id
+            - project_service_user_time
+            - project_service_error_time
+        exact:
+          type: boolean
+        window_seconds:
+          type: integer
+          minimum: 30
+          maximum: 86400
+        watermark:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        complete:
+          type: boolean
+          const: true
+        truncated:
+          type: boolean
+        rows:
+          type: array
+          maxItems: 50
+          items:
+            $ref: "#/components/schemas/SearchRow"
     AlertTimeBasis:
       type: string
       enum: [received_at, timestamp]
@@ -1433,7 +1521,15 @@ components:
               const: regression
         - type: object
           additionalProperties: false
-          required: [type, query, window_seconds, threshold, cooldown_seconds, time_basis]
+          required:
+            [
+              type,
+              query,
+              window_seconds,
+              threshold,
+              cooldown_seconds,
+              time_basis,
+            ]
           properties:
             type:
               type: string
@@ -1643,48 +1739,48 @@ components:
 
     AggregateMetricInput:
       oneOf:
-      - type: object
-        additionalProperties: false
-        required:
-        - op
-        properties:
-          op:
-            type: string
-            enum:
-            - count
-          name: &id001
-            type: string
-            minLength: 1
-            maxLength: 128
-      - type: object
-        additionalProperties: false
-        required:
-        - op
-        - field
-        properties:
-          op:
-            type: string
-            enum:
-            - sum
-            - min
-            - max
-            - avg
-          name: *id001
-          field:
-            type: string
-            pattern: ^attributes\..+
-            maxLength: 523
+        - type: object
+          additionalProperties: false
+          required:
+            - op
+          properties:
+            op:
+              type: string
+              enum:
+                - count
+            name: &id001
+              type: string
+              minLength: 1
+              maxLength: 128
+        - type: object
+          additionalProperties: false
+          required:
+            - op
+            - field
+          properties:
+            op:
+              type: string
+              enum:
+                - sum
+                - min
+                - max
+                - avg
+            name: *id001
+            field:
+              type: string
+              pattern: ^attributes\..+
+              maxLength: 523
     AggregateRequest:
       type: object
       additionalProperties: false
       required:
-      - start
-      - end
+        - start
+        - end
       properties:
         projects:
           type: array
           items:
-            $ref: '#/components/schemas/SearchProjectId'
+            $ref: "#/components/schemas/SearchProjectId"
           maxItems: 1000
         start:
           type: string
@@ -1696,24 +1792,24 @@ components:
           type: string
           maxLength: 8192
         filters:
-          $ref: '#/components/schemas/SearchFilters'
+          $ref: "#/components/schemas/SearchFilters"
         read_token:
           type: string
           maxLength: 12288
         metrics:
           type: array
           items:
-            $ref: '#/components/schemas/AggregateMetricInput'
+            $ref: "#/components/schemas/AggregateMetricInput"
           maxItems: 8
         group_by:
           type: array
           items: &id002
             type: string
             enum:
-            - service
-            - level
-            - environment
-            - release
+              - service
+              - level
+              - environment
+              - release
           maxItems: 2
           uniqueItems: true
         group_limit:
@@ -1725,174 +1821,174 @@ components:
           type: object
           additionalProperties: false
           required:
-          - field
-          - interval
+            - field
+            - interval
           properties:
             field:
               type: string
               enum:
-              - timestamp
+                - timestamp
             interval:
               type: string
               enum:
-              - auto
-              - 10s
-              - 1m
-              - 5m
-              - 1h
-              - 6h
-              - 1d
+                - auto
+                - 10s
+                - 1m
+                - 5m
+                - 1h
+                - 6h
+                - 1d
     AggregateMetric:
       oneOf:
-      - type: object
-        additionalProperties: false
-        required:
-        - name
-        - op
-        - value
-        - numeric_value_count
-        properties:
-          name: *id001
-          op:
-            type: string
-            enum:
-            - count
-          value:
-            $ref: '#/components/schemas/NonNegativeDecimalString'
-          numeric_value_count:
-            type: 'null'
-      - type: object
-        additionalProperties: false
-        required:
-        - name
-        - op
-        - value
-        - numeric_value_count
-        properties:
-          name: *id001
-          op:
-            type: string
-            enum:
-            - sum
-            - min
-            - max
-            - avg
-          value:
-            type:
-            - number
-            - 'null'
-          numeric_value_count:
-            oneOf:
-            - $ref: '#/components/schemas/NonNegativeDecimalString'
-            - type: 'null'
+        - type: object
+          additionalProperties: false
+          required:
+            - name
+            - op
+            - value
+            - numeric_value_count
+          properties:
+            name: *id001
+            op:
+              type: string
+              enum:
+                - count
+            value:
+              $ref: "#/components/schemas/NonNegativeDecimalString"
+            numeric_value_count:
+              type: "null"
+        - type: object
+          additionalProperties: false
+          required:
+            - name
+            - op
+            - value
+            - numeric_value_count
+          properties:
+            name: *id001
+            op:
+              type: string
+              enum:
+                - sum
+                - min
+                - max
+                - avg
+            value:
+              type:
+                - number
+                - "null"
+            numeric_value_count:
+              oneOf:
+                - $ref: "#/components/schemas/NonNegativeDecimalString"
+                - type: "null"
     AggregateBucketKey:
       oneOf:
-      - type: object
-        additionalProperties: false
-        required:
-        - type
-        - timestamp_us
-        properties:
-          type:
-            type: string
-            enum:
-            - timestamp
-          timestamp_us:
-            $ref: '#/components/schemas/Int64String'
-      - type: object
-        additionalProperties: false
-        required:
-        - type
-        - value
-        properties:
-          type:
-            type: string
-            enum:
-            - string
-          value:
-            type: string
+        - type: object
+          additionalProperties: false
+          required:
+            - type
+            - timestamp_us
+          properties:
+            type:
+              type: string
+              enum:
+                - timestamp
+            timestamp_us:
+              $ref: "#/components/schemas/Int64String"
+        - type: object
+          additionalProperties: false
+          required:
+            - type
+            - value
+          properties:
+            type:
+              type: string
+              enum:
+                - string
+            value:
+              type: string
     AggregateBucket:
       type: object
       additionalProperties: false
       required:
-      - key
-      - doc_count
-      - metrics
-      - children
+        - key
+        - doc_count
+        - metrics
+        - children
       properties:
         key:
-          $ref: '#/components/schemas/AggregateBucketKey'
+          $ref: "#/components/schemas/AggregateBucketKey"
         doc_count:
-          $ref: '#/components/schemas/NonNegativeDecimalString'
+          $ref: "#/components/schemas/NonNegativeDecimalString"
         metrics:
           type: array
           items:
-            $ref: '#/components/schemas/AggregateMetric'
+            $ref: "#/components/schemas/AggregateMetric"
         children:
           oneOf:
-          - $ref: '#/components/schemas/AggregateBucketSet'
-          - type: 'null'
+            - $ref: "#/components/schemas/AggregateBucketSet"
+            - type: "null"
     AggregateBucketSet:
       type: object
       additionalProperties: false
       required:
-      - dimension
-      - buckets
-      - has_more
+        - dimension
+        - buckets
+        - has_more
       properties:
         dimension:
           oneOf:
-          - type: object
-            additionalProperties: false
-            required:
-            - histogram
-            properties:
-              histogram:
-                type: object
-                additionalProperties: false
-                required:
-                - interval_ms
-                properties:
-                  interval_ms:
-                    type: integer
-                    minimum: 1
-          - type: object
-            additionalProperties: false
-            required:
-            - group
-            properties:
-              group:
-                type: object
-                additionalProperties: false
-                required:
-                - field
-                properties:
-                  field: *id002
+            - type: object
+              additionalProperties: false
+              required:
+                - histogram
+              properties:
+                histogram:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - interval_ms
+                  properties:
+                    interval_ms:
+                      type: integer
+                      minimum: 1
+            - type: object
+              additionalProperties: false
+              required:
+                - group
+              properties:
+                group:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - field
+                  properties:
+                    field: *id002
         buckets:
           type: array
           items:
-            $ref: '#/components/schemas/AggregateBucket'
+            $ref: "#/components/schemas/AggregateBucket"
         has_more:
           type: boolean
     AggregateWarning:
       type: object
       additionalProperties: false
       required:
-      - numeric_exclusion_count_unavailable
+        - numeric_exclusion_count_unavailable
       properties:
         numeric_exclusion_count_unavailable:
           type: object
           additionalProperties: false
           required:
-          - metric
-          - field
+            - metric
+            - field
           properties:
             metric: *id001
             field:
               type: object
               additionalProperties: false
               required:
-              - json
+                - json
               properties:
                 json:
                   type: string
@@ -1900,41 +1996,41 @@ components:
       type: object
       additionalProperties: false
       required:
-      - record_count
-      - metrics
-      - buckets
-      - warnings
-      - read_token
-      - watermark
-      - complete
-      - took_ms
-      - searched_shards
-      - hydrated_shards
+        - record_count
+        - metrics
+        - buckets
+        - warnings
+        - read_token
+        - watermark
+        - complete
+        - took_ms
+        - searched_shards
+        - hydrated_shards
       properties:
         record_count:
-          $ref: '#/components/schemas/NonNegativeDecimalString'
+          $ref: "#/components/schemas/NonNegativeDecimalString"
         metrics:
           type: array
           items:
-            $ref: '#/components/schemas/AggregateMetric'
+            $ref: "#/components/schemas/AggregateMetric"
         buckets:
           oneOf:
-          - $ref: '#/components/schemas/AggregateBucketSet'
-          - type: 'null'
+            - $ref: "#/components/schemas/AggregateBucketSet"
+            - type: "null"
         warnings:
           type: array
           items:
-            $ref: '#/components/schemas/AggregateWarning'
+            $ref: "#/components/schemas/AggregateWarning"
         read_token:
           type: string
         watermark:
-          $ref: '#/components/schemas/NonNegativeDecimalString'
+          $ref: "#/components/schemas/NonNegativeDecimalString"
         complete:
           type: boolean
           const: true
         took_ms:
-          $ref: '#/components/schemas/NonNegativeDecimalString'
+          $ref: "#/components/schemas/NonNegativeDecimalString"
         searched_shards:
-          $ref: '#/components/schemas/NonNegativeDecimalString'
+          $ref: "#/components/schemas/NonNegativeDecimalString"
         hydrated_shards:
-          $ref: '#/components/schemas/NonNegativeDecimalString'
+          $ref: "#/components/schemas/NonNegativeDecimalString"
