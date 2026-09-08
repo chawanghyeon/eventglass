@@ -17,6 +17,7 @@ async fn app() -> Result<(tempfile::TempDir, AppState)> {
         base_url: "http://localhost:8080".parse()?,
         s3_url: None,
         s3_endpoint: None,
+        s3_initialize: false,
     })
     .await?;
     app.db.call(|db|{

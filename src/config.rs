@@ -10,6 +10,7 @@ pub struct Config {
     pub base_url: Url,
     pub s3_url: Option<String>,
     pub s3_endpoint: Option<Url>,
+    pub s3_initialize: bool,
 }
 
 impl Config {
@@ -32,6 +33,13 @@ impl Config {
                 .map(|value| Url::parse(&value))
                 .transpose()
                 .context("EVENTGLASS_S3_ENDPOINT must be a URL")?,
+            s3_initialize: match std::env::var("EVENTGLASS_S3_INITIALIZE").as_deref() {
+                Err(std::env::VarError::NotPresent) | Ok("0" | "false") => false,
+                Ok("1" | "true") => true,
+                Ok(_) | Err(std::env::VarError::NotUnicode(_)) => {
+                    bail!("EVENTGLASS_S3_INITIALIZE must be true, false, 1, or 0")
+                }
+            },
         };
         config.validate()?;
         Ok(config)
@@ -89,6 +97,9 @@ impl Config {
                 }
             }
         }
+        if self.s3_initialize && self.s3_url.is_none() {
+            bail!("EVENTGLASS_S3_INITIALIZE requires EVENTGLASS_S3_URL");
+        }
         Ok(())
     }
 }
@@ -115,6 +126,7 @@ mod tests {
                 base_url: origin.parse().unwrap(),
                 s3_url: None,
                 s3_endpoint: None,
+                s3_initialize: false,
             };
             assert_eq!(config.validate().is_ok(), accepted, "{origin}");
         }
@@ -128,6 +140,7 @@ mod tests {
             base_url: "https://eventglass.example.test".parse().unwrap(),
             s3_url: Some("s3://eventglass/tenant".into()),
             s3_endpoint: None,
+            s3_initialize: false,
         };
         assert!(base.validate().is_ok());
         assert!(

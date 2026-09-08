@@ -132,6 +132,26 @@ pub async fn ensure_installation(
     Ok(actual)
 }
 
+pub async fn read_installation(store: &dyn ObjectStore) -> Result<Option<InstallationDocument>> {
+    let objects = list_all(store).await?;
+    if objects.is_empty() {
+        return Ok(None);
+    }
+    ensure!(
+        objects
+            .iter()
+            .any(|object| object.key == "installation.json"),
+        "non-empty S3 prefix has no installation identity"
+    );
+    let document: InstallationDocument = serde_json::from_slice(
+        &store
+            .get_small("installation.json", MAX_CONTROL_BYTES)
+            .await?,
+    )?;
+    validate_installation(&document)?;
+    Ok(Some(document))
+}
+
 pub async fn publish(
     store: &dyn ObjectStore,
     candidate: &LocalCheckpoint,
@@ -404,8 +424,49 @@ async fn restore_candidate(
         .await??;
         std::fs::remove_file(compressed)?;
     }
+    let snapshot_path = snapshot.clone();
+    tokio::task::spawn_blocking(move || secure_restored_snapshot(&snapshot_path)).await??;
     File::open(&shard_root)?.sync_all()?;
     File::open(attempt)?.sync_all()?;
+    Ok(())
+}
+
+pub fn install_prepared(data_dir: &Path, prepared: PreparedRestore) -> Result<()> {
+    ensure!(
+        prepared.directory.parent() == Some(data_dir),
+        "restore staging directory must be inside the data directory"
+    );
+    ensure!(
+        !data_dir.join("meta.db").exists(),
+        "a local database already exists"
+    );
+    ensure!(
+        prepared.directory.join("meta.db").is_file() && prepared.directory.join("shards").is_dir(),
+        "restore staging layout is incomplete"
+    );
+    let quarantine = data_dir
+        .join("quarantine")
+        .join(format!("restore-{}", uuid::Uuid::new_v4()));
+    let mut quarantined = false;
+    for name in ["meta.db-wal", "meta.db-shm", "shards"] {
+        let source = data_dir.join(name);
+        if source.exists() {
+            if !quarantined {
+                std::fs::create_dir_all(&quarantine)?;
+                quarantined = true;
+            }
+            std::fs::rename(source, quarantine.join(name))?;
+        }
+    }
+    if quarantined {
+        File::open(quarantine.parent().context("restore quarantine parent")?)?.sync_all()?;
+    }
+    std::fs::rename(prepared.directory.join("shards"), data_dir.join("shards"))?;
+    File::open(data_dir)?.sync_all()?;
+    std::fs::rename(prepared.directory.join("meta.db"), data_dir.join("meta.db"))?;
+    File::open(data_dir)?.sync_all()?;
+    std::fs::remove_dir(prepared.directory)?;
+    File::open(data_dir)?.sync_all()?;
     Ok(())
 }
 
@@ -484,6 +545,23 @@ fn validate_snapshot(path: &Path, cut: &CheckpointCut) -> Result<()> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     ensure!(actual == cut.shards, "restored SQLite catalog mismatch");
+    Ok(())
+}
+
+fn secure_restored_snapshot(path: &Path) -> Result<()> {
+    let mut connection = crate::db::open(path)?;
+    let transaction = connection.transaction()?;
+    transaction.execute("DELETE FROM sessions", [])?;
+    transaction.execute("DELETE FROM settings WHERE key='token_hmac_v1'", [])?;
+    transaction.execute(
+        "UPDATE runtime_state
+         SET storage_generation=?1,authorization_epoch=authorization_epoch+1
+         WHERE singleton=1",
+        [uuid::Uuid::new_v4().to_string()],
+    )?;
+    transaction.commit()?;
+    connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
+    File::open(path)?.sync_all()?;
     Ok(())
 }
 
@@ -828,6 +906,21 @@ mod tests {
             rusqlite::params![installation_id, generation],
         )?;
         database.execute(
+            "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
+             VALUES(1,'restore@example.test','hash','admin',1,1,1)",
+            [],
+        )?;
+        database.execute(
+            "INSERT INTO sessions(token_hash,user_id,expires_at_us,created_at_us,last_seen_at_us)
+             VALUES('old-session',1,100,1,1)",
+            [],
+        )?;
+        database.execute(
+            "INSERT INTO settings(key,value_json,updated_at_us)
+             VALUES('token_hmac_v1','[1,2,3]',1)",
+            [],
+        )?;
+        database.execute(
             "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
                 last_applied_inbox_id,record_count,size_bytes,created_at_us,sealed_at_us)
              VALUES(?1,1,?2,1,'local',0,0,?3,1,1)",
@@ -941,7 +1034,11 @@ mod tests {
             b"corrupt snapshot".to_vec(),
         );
 
-        let destination = root.path().join("prepared");
+        let data_dir = root.path().join("data");
+        std::fs::create_dir(&data_dir)?;
+        std::fs::create_dir(data_dir.join("shards"))?;
+        std::fs::write(data_dir.join("shards/orphan"), b"old local state")?;
+        let destination = data_dir.join(".prepared");
         let restored = prepare_restore(
             &store,
             &installation_id,
@@ -964,6 +1061,39 @@ mod tests {
                 .join(&newer.document.shards[0].id)
                 .exists()
         );
+        let old_generation = restored.document.cut.storage_generation.clone();
+        install_prepared(&data_dir, restored)?;
+        assert!(data_dir.join("meta.db").is_file());
+        assert!(
+            data_dir
+                .join("shards")
+                .join(&older.document.shards[0].id)
+                .is_dir()
+        );
+        let restored_db = crate::db::open_reader(&data_dir.join("meta.db"))?;
+        assert_eq!(
+            restored_db.query_row("SELECT count(*) FROM sessions", [], |row| {
+                row.get::<_, i64>(0)
+            })?,
+            0
+        );
+        assert_eq!(
+            restored_db.query_row(
+                "SELECT count(*) FROM settings WHERE key='token_hmac_v1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?,
+            0
+        );
+        assert_ne!(
+            restored_db.query_row(
+                "SELECT storage_generation FROM runtime_state WHERE singleton=1",
+                [],
+                |row| row.get::<_, String>(0),
+            )?,
+            old_generation
+        );
+        assert!(data_dir.join("quarantine").is_dir());
 
         let cancelled = root.path().join("cancelled");
         assert!(

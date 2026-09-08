@@ -16,6 +16,7 @@ async fn embedded_spa_assets_head_and_api_isolation() -> anyhow::Result<()> {
         base_url: "http://localhost:8080".parse()?,
         s3_url: None,
         s3_endpoint: None,
+        s3_initialize: false,
     })
     .await?;
     let router = eventglass::http::router(app);

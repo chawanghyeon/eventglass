@@ -14,6 +14,7 @@ async fn app() -> anyhow::Result<(tempfile::TempDir, AppState, axum::Router)> {
         base_url: "http://localhost:8080".parse()?,
         s3_url: None,
         s3_endpoint: None,
+        s3_initialize: false,
     })
     .await?;
     state.db.call(|db| {
