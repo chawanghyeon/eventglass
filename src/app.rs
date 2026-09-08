@@ -20,6 +20,7 @@ pub struct AppState {
     pub indexer: Option<crate::indexer::Indexer>,
     pub query_permit: Arc<Semaphore>,
     pub tokens: Arc<crate::search::tokens::TokenCodec>,
+    pub disk_budget: crate::storage::budget::DiskBudget,
     _directory_lock: Arc<File>,
 }
 
@@ -61,6 +62,7 @@ impl AppState {
             Ok(())
         }).await?;
         let token_key = db.call(crate::db::search::token_key).await?;
+        let disk_budget = crate::storage::budget::DiskBudget::new(&config.data_dir);
         Ok(Self {
             db,
             config,
@@ -69,6 +71,7 @@ impl AppState {
             indexer: None,
             query_permit: Arc::new(Semaphore::new(1)),
             tokens: Arc::new(crate::search::tokens::TokenCodec::new(token_key)),
+            disk_budget,
             _directory_lock: lock,
         })
     }

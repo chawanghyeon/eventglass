@@ -129,7 +129,7 @@ async fn ingest_record(app: &AppState) -> anyhow::Result<()> {
             scrub_keys: vec![],
         },
         uuid::Uuid::new_v4(),
-        1_788_825_600_000_001,
+        eventglass::model::now_us()?,
         &Default::default(),
     )?
     .records;
@@ -238,7 +238,7 @@ async fn ingest_duplicate_logs(app: &AppState) -> anyhow::Result<String> {
             scrub_keys: vec![],
         },
         uuid::Uuid::new_v4(),
-        1_788_825_601_000_000,
+        eventglass::model::now_us()?,
         &Default::default(),
     )?
     .records

@@ -149,24 +149,30 @@ async fn receive(
     .await
     .map_err(|_| ApiError(StatusCode::REQUEST_TIMEOUT, "ingest_body_timeout"))?
     .map_err(|_| ApiError(StatusCode::PAYLOAD_TOO_LARGE, "ingest_body_unreadable"))?;
-    let directory = app.config.data_dir.clone();
-    let (decoded, auth, permit) = tokio::task::spawn_blocking(move || -> ApiResult<_> {
-        let _held = &permit;
-        let free = fs4::available_space(directory)
-            .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "disk_unavailable"))?;
-        if free < 512 * 1024 * 1024 + 2 * limits.decoded_bytes as u64 {
-            return Err(ApiError(StatusCode::TOO_MANY_REQUESTS, "disk_reserve"));
-        }
-        let decoded = sentry::decode_body(&wire, encoding, &limits).map_err(wire_error)?;
-        let auth = if is_envelope {
-            sentry::envelope_auth(&decoded).map_err(wire_error)?
-        } else {
-            None
-        };
-        Ok((decoded, auth, permit))
-    })
-    .await
-    .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "ingest_worker_failed"))??;
+    let disk_budget = app.disk_budget.clone();
+    let (decoded, auth, permit, disk_reservation) =
+        tokio::task::spawn_blocking(move || -> ApiResult<_> {
+            let _held = &permit;
+            let disk_reservation = disk_budget
+                .reserve(2 * limits.decoded_bytes as u64)
+                .map_err(|error| {
+                    match error.downcast_ref::<crate::storage::budget::ReserveError>() {
+                        Some(crate::storage::budget::ReserveError::Exhausted) => {
+                            ApiError(StatusCode::TOO_MANY_REQUESTS, "disk_reserve")
+                        }
+                        _ => ApiError(StatusCode::SERVICE_UNAVAILABLE, "disk_unavailable"),
+                    }
+                })?;
+            let decoded = sentry::decode_body(&wire, encoding, &limits).map_err(wire_error)?;
+            let auth = if is_envelope {
+                sentry::envelope_auth(&decoded).map_err(wire_error)?
+            } else {
+                None
+            };
+            Ok((decoded, auth, permit, disk_reservation))
+        })
+        .await
+        .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "ingest_worker_failed"))??;
     let key = match (transport_key, auth) {
         (Some(key), Some(auth)) if auth.project_id == project_id && auth.public_key == key => key,
         (None, Some(auth)) if auth.project_id == project_id => auth.public_key,
@@ -186,30 +192,31 @@ async fn receive(
     };
     let acceptance_id = uuid::Uuid::new_v4();
     let received_at = crate::model::now_us()?;
-    let (normalized, permit) = tokio::task::spawn_blocking(move || -> ApiResult<_> {
-        let _held = &permit;
-        let result = if is_envelope {
-            sentry::normalize_envelope(
-                &decoded,
-                &context,
-                acceptance_id,
-                received_at,
-                &Limits::default(),
-            )
-        } else {
-            sentry::normalize_store(
-                &decoded,
-                &context,
-                acceptance_id,
-                received_at,
-                &Limits::default(),
-            )
-        }
-        .map_err(wire_error)?;
-        Ok((result, permit))
-    })
-    .await
-    .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "ingest_worker_failed"))??;
+    let (normalized, permit, disk_reservation) =
+        tokio::task::spawn_blocking(move || -> ApiResult<_> {
+            let _held = &permit;
+            let result = if is_envelope {
+                sentry::normalize_envelope(
+                    &decoded,
+                    &context,
+                    acceptance_id,
+                    received_at,
+                    &Limits::default(),
+                )
+            } else {
+                sentry::normalize_store(
+                    &decoded,
+                    &context,
+                    acceptance_id,
+                    received_at,
+                    &Limits::default(),
+                )
+            }
+            .map_err(wire_error)?;
+            Ok((result, permit, disk_reservation))
+        })
+        .await
+        .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "ingest_worker_failed"))??;
     let event_id = normalized
         .records
         .first()
@@ -219,6 +226,7 @@ async fn receive(
         .call(move |db| {
             // The worker owns this guard even when the HTTP request is cancelled.
             let _permit = permit;
+            let _disk_reservation = disk_reservation;
             ingest::accept(
                 db,
                 project,
