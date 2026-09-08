@@ -116,6 +116,27 @@ jobs:
       - name: Run process crash and recovery smoke
         run: ./scripts/check crash-smoke
 
+  storage:
+    name: storage-s3-compatible
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Restore Rust dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          cache-bin: 'false'
+      - name: Fetch locked Rust dependencies
+        run: cargo fetch --locked
+      - name: Verify checkpoint and restore against pinned MinIO
+        run: ./scripts/check storage
+
   release-smoke:
     name: release-smoke
     runs-on: ubuntu-24.04
@@ -230,7 +251,7 @@ jobs:
   required:
     name: required
     if: ${{ always() }}
-    needs: [hygiene, contracts, web, integration, release-smoke, sdk-live, resource, security]
+    needs: [hygiene, contracts, web, integration, storage, release-smoke, sdk-live, resource, security]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -240,6 +261,7 @@ jobs:
           test "${{ needs.contracts.result }}" = success
           test "${{ needs.web.result }}" = success
           test "${{ needs.integration.result }}" = success
+          test "${{ needs.storage.result }}" = success
           test "${{ needs.release-smoke.result }}" = success
           test "${{ needs.sdk-live.result }}" = success
           test "${{ needs.resource.result }}" = success

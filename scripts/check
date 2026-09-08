@@ -63,6 +63,13 @@ run_s3_smoke() {
     run_nonempty_test_target "S3 namespace and client build" --lib --features s3 storage::s3::tests::
 }
 
+run_storage() {
+    need_command cargo
+    need_command docker
+    need_command curl
+    "$REPO_ROOT/scripts/check-s3-compatible"
+}
+
 run_contracts() {
     need_command cargo
     [ -f "$REPO_ROOT/tests/contracts.rs" ] || fail "missing required Cargo test target tests/contracts.rs"
@@ -127,6 +134,7 @@ case "${1:-}" in
     quick) run_quick ;;
     rust) run_rust ;;
     s3-smoke) run_s3_smoke ;;
+    storage) run_storage ;;
     contracts) run_contracts ;;
     web) run_web ;;
     integration) run_integration ;;
@@ -136,5 +144,5 @@ case "${1:-}" in
     resource) "$REPO_ROOT/scripts/check-resource" ;;
     container) "$REPO_ROOT/scripts/check-container" ;;
     security) "$REPO_ROOT/scripts/check-security" ;;
-    *) fail "usage: ./scripts/check {quick|rust|s3-smoke|contracts|web|integration|crash-smoke|embed-smoke|sdk-live|resource|container|security}" ;;
+    *) fail "usage: ./scripts/check {quick|rust|s3-smoke|storage|contracts|web|integration|crash-smoke|embed-smoke|sdk-live|resource|container|security}" ;;
 esac

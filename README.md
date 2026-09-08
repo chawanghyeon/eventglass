@@ -28,4 +28,4 @@ Webhook은 HTTPS와 공개 DNS 주소만 허용하고 redirect와 system proxy�
 
 작업 이력과 단계별 검증 결과는 Git 커밋과 CI에 기록합니다. 별도 단계별 실행 일지는 만들지 않습니다.
 
-실제 SDK 호환성 게이트는 Python Sentry SDK 2.69.0의 기본 로깅·DEBUG opt-in·FastAPI·Celery fork, Node SDK 10.73.0의 Error·Message·structured logs, Browser SDK 10.73.0의 Error·Message·console log와 Chromium cross-origin CORS, Go SDK 0.49.0의 Error·Message를 localhost의 실제 Eventglass 프로세스에 보냅니다. 실제 AWS S3 계약은 RC 전 검증 대상이며 현재 지원 완료로 표시하지 않습니다.
+실제 SDK 호환성 게이트는 Python Sentry SDK 2.69.0의 기본 로깅·DEBUG opt-in·FastAPI·Celery fork, Node SDK 10.73.0의 Error·Message·structured logs, Browser SDK 10.73.0의 Error·Message·console log와 Chromium cross-origin CORS, Go SDK 0.49.0의 Error·Message를 localhost의 실제 Eventglass 프로세스에 보냅니다. S3-compatible 게이트는 MinIO RELEASE.2025-09-07T16-13-09Z에서 conditional create, pagination, checksum/multipart abort, checkpoint fallback과 전체 로컬 데이터 유실 복구를 검증합니다. 실제 AWS S3 계약은 RC 전 검증 대상이며 현재 지원 완료로 표시하지 않습니다.

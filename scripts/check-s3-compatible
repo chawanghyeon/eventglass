@@ -1,0 +1,64 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+SERVER_IMAGE='minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e'
+CLIENT_IMAGE='minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727'
+RUN_ID=$$
+NETWORK="eventglass-s3-$RUN_ID"
+SERVER="eventglass-s3-$RUN_ID"
+BUCKET="eventglass-$RUN_ID"
+PREFIX="contract-$RUN_ID"
+ACCESS_KEY="eventglass$RUN_ID"
+SECRET_KEY="eventglass-compatible-${RUN_ID}-only" # pragma: allowlist secret
+
+cleanup() {
+    docker rm -f "$SERVER" >/dev/null 2>&1 || :
+    docker network rm "$NETWORK" >/dev/null 2>&1 || :
+}
+trap cleanup EXIT HUP INT TERM
+
+docker network create "$NETWORK" >/dev/null
+docker run --detach --name "$SERVER" \
+    --network "$NETWORK" \
+    --network-alias minio \
+    --publish 127.0.0.1::9000 \
+    --env "MINIO_ROOT_USER=$ACCESS_KEY" \
+    --env "MINIO_ROOT_PASSWORD=$SECRET_KEY" \
+    "$SERVER_IMAGE" server /data --console-address :9001 >/dev/null
+
+PORT=$(docker port "$SERVER" 9000/tcp | sed 's/.*://')
+ATTEMPT=0
+while ! curl --fail --silent "http://127.0.0.1:$PORT/minio/health/ready" >/dev/null; do
+    ATTEMPT=$((ATTEMPT + 1))
+    if [ "$ATTEMPT" -ge 200 ]; then
+        docker logs "$SERVER" >&2
+        exit 1
+    fi
+    sleep 0.1
+done
+
+docker run --rm \
+    --network "$NETWORK" \
+    --env "MC_HOST_local=http://$ACCESS_KEY:$SECRET_KEY@minio:9000" \
+    "$CLIENT_IMAGE" mb "local/$BUCKET" >/dev/null
+
+cd "$ROOT"
+SELECTED=$(cargo test --locked --features s3 --test s3_compatible -- \
+    --ignored --exact minio_checkpoint_and_object_contract --list --format terse \
+    | awk '/: test$/ {count++} END {print count+0}')
+[ "$SELECTED" -eq 1 ] || {
+    printf 'storage gate selected %s tests, expected 1\n' "$SELECTED" >&2
+    exit 1
+}
+printf 'storage gate selected %s compatible S3 test\n' "$SELECTED"
+AWS_ACCESS_KEY_ID=$ACCESS_KEY \
+AWS_SECRET_ACCESS_KEY=$SECRET_KEY \
+AWS_REGION=us-east-1 \
+AWS_EC2_METADATA_DISABLED=true \
+EVENTGLASS_S3_TEST_ENDPOINT="http://127.0.0.1:$PORT" \
+EVENTGLASS_S3_TEST_BUCKET=$BUCKET \
+EVENTGLASS_S3_TEST_PREFIX=$PREFIX \
+cargo test --locked --features s3 --test s3_compatible \
+    minio_checkpoint_and_object_contract -- --ignored --exact --nocapture
