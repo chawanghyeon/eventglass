@@ -97,6 +97,7 @@ run_integration() {
     run_nonempty_test_target "HTTP search" --test search_http
     run_nonempty_test_target "stored record detail" --test records_http
     run_nonempty_test_target "native immutable seal" --test seal
+    run_nonempty_test_target "sealed shard archive" --test archive
 }
 
 run_crash_smoke() {
