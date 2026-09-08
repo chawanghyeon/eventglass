@@ -523,6 +523,73 @@ paths:
           $ref: "#/components/responses/Error"
         "504":
           $ref: "#/components/responses/Error"
+  /api/logs/live:
+    get:
+      operationId: streamLogs
+      summary: Stream received records in ingest sequence order
+      description: |
+        Uses a fixed absolute received-time scope. Each record and completed scan
+        checkpoint carries a signed SSE id. Reconnect with Last-Event-ID or the
+        equivalent resume query parameter.
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: projects
+          in: query
+          description: Comma-separated positive decimal project IDs. Omitted means all active projects visible to the principal.
+          schema:
+            type: string
+        - name: start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: query
+          in: query
+          schema:
+            type: string
+            maxLength: 8192
+        - name: filters
+          in: query
+          description: JSON-encoded SearchFilters object.
+          schema:
+            type: string
+        - name: resume
+          in: query
+          schema:
+            type: string
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SSE record, checkpoint, resync_required, and error events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/explore/search:
     post:
       operationId: searchLogs

@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use tokio::sync::{Notify, watch};
+use tokio::sync::{Notify, broadcast, watch};
 
 use crate::{
     config::Limits,
@@ -41,6 +41,7 @@ struct Control {
     wake: Arc<Notify>,
     join: Mutex<Option<tokio::task::JoinHandle<()>>>,
     backup: Option<crate::storage::backup::BackupCoordinator>,
+    updates: broadcast::Sender<i64>,
 }
 
 impl Drop for Control {
@@ -61,6 +62,7 @@ struct RunContext {
     data_dir: std::path::PathBuf,
     installation: String,
     backup: Option<crate::storage::backup::BackupCoordinator>,
+    updates: broadcast::Sender<i64>,
 }
 
 struct RotateContext<'a> {
@@ -192,10 +194,12 @@ impl Indexer {
             failed: false,
         }));
         let (stop, receiver) = watch::channel(false);
+        let (updates, _) = broadcast::channel(64);
         let wake = Arc::new(Notify::new());
         let worker_view = view.clone();
         let worker_wake = wake.clone();
         let worker_backup = backup.clone();
+        let worker_updates = updates.clone();
         let join = tokio::spawn(async move {
             if let Err(error) = run(
                 RunContext {
@@ -205,6 +209,7 @@ impl Indexer {
                     data_dir: worker_directory,
                     installation: worker_installation,
                     backup: worker_backup,
+                    updates: worker_updates,
                 },
                 active,
                 shard_id,
@@ -225,6 +230,7 @@ impl Indexer {
                 wake,
                 join: Mutex::new(Some(join)),
                 backup,
+                updates,
             }),
             view,
             registry,
@@ -259,6 +265,10 @@ impl Indexer {
 
     pub fn wake(&self) {
         self.control.wake.notify_one();
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<i64> {
+        self.control.updates.subscribe()
     }
 
     pub async fn shutdown(&self) -> Result<()> {
@@ -334,6 +344,7 @@ async fn run(
         data_dir,
         installation,
         backup,
+        updates,
     } = context;
     loop {
         if *stop.borrow() {
@@ -411,6 +422,7 @@ async fn run(
         view.write()
             .map_err(|_| anyhow::anyhow!("index publication lock poisoned"))?
             .published = published;
+        let _ = updates.send(finalized.ingest_seq);
         let active_path = data_dir.join("shards").join(&shard_id);
         let measured = tokio::task::spawn_blocking(move || {
             crate::storage::manifest::active_size(&active_path)

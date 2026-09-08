@@ -5,7 +5,7 @@ use eventglass::{
     search::{
         query::{
             I64Bound, JsonScalar, KeywordField, QueryScope, RowCursor, SearchError, SearchRequest,
-            SearchShard, TimeField, TypedFilter, search,
+            SearchShard, TimeField, TypedFilter, search, search_live,
         },
         schema,
     },
@@ -266,6 +266,36 @@ fn received_time_basis_filters_and_paginates_by_received_at() -> anyhow::Result<
         record_id: first.rows[0].record_id.clone(),
     });
     assert_eq!(search(&[shard], &search_request)?.rows[0].ingest_seq, 2);
+    Ok(())
+}
+
+#[test]
+fn live_search_orders_sequence_ascending_across_shards_and_resumes_exclusively()
+-> anyhow::Result<()> {
+    let mut one = record(1, 1, 1, "one");
+    one.received_at_us = 500;
+    let mut three = record(3, 1, 3, "three");
+    three.received_at_us = 500;
+    let mut two = record(2, 1, 2, "two");
+    two.received_at_us = 500;
+    let (_a, shard_a) = shard("a", &[three, one])?;
+    let (_b, shard_b) = shard("b", &[two])?;
+    let mut live = request(vec![1], 400, 600, 3);
+    live.scope.time_field = TimeField::ReceivedAt;
+    live.limit = 2;
+    let first = search_live(&[shard_a.clone(), shard_b.clone()], &live, 0)?;
+    assert_eq!(
+        first
+            .rows
+            .iter()
+            .map(|row| row.ingest_seq)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    assert!(first.has_more);
+    let second = search_live(&[shard_a, shard_b], &live, 2)?;
+    assert_eq!(second.rows[0].ingest_seq, 3);
+    assert!(!second.has_more);
     Ok(())
 }
 

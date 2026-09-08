@@ -189,3 +189,19 @@ export const endpoints = {
       { signal },
     ),
 };
+
+export function liveLogsUrl(input: {
+  projects: string[];
+  start: string;
+  end: string;
+  query: string;
+  filters: SearchFilters;
+}): string {
+  const query = new URLSearchParams({ start: input.start, end: input.end });
+  if (input.projects.length > 0)
+    query.set("projects", input.projects.join(","));
+  if (input.query) query.set("query", input.query);
+  if (Object.values(input.filters).some((values) => values?.length))
+    query.set("filters", JSON.stringify(input.filters));
+  return `/api/logs/live?${query}`;
+}

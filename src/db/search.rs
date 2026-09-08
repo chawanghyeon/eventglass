@@ -155,6 +155,33 @@ pub fn event_candidates(
     Ok(rows.into_iter().map(|(id, _)| id).collect())
 }
 
+pub fn received_candidates(
+    db: &Connection,
+    start_us: i64,
+    end_us: i64,
+    watermark: i64,
+) -> Result<Vec<String>> {
+    ensure!(start_us < end_us && watermark >= 0, ScopeError::Invalid);
+    let mut statement = db.prepare(
+        "SELECT id,state FROM shards
+         WHERE (min_ingest_seq IS NULL OR min_ingest_seq<=?1)
+           AND (min_received_at_us IS NULL OR max_received_at_us>=?2)
+           AND (max_received_at_us IS NULL OR min_received_at_us<?3)
+         ORDER BY id",
+    )?;
+    let rows = statement
+        .query_map(params![watermark, start_us, end_us], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    ensure!(
+        rows.iter()
+            .all(|(_, state)| matches!(state.as_str(), "active" | "local" | "remote_verified")),
+        "candidate shard is not locally available"
+    );
+    Ok(rows.into_iter().map(|(id, _)| id).collect())
+}
+
 pub fn local_detail_shard(db: &Connection, shard_id: &str) -> Result<()> {
     let state: Option<String> = db
         .query_row("SELECT state FROM shards WHERE id=?1", [shard_id], |row| {

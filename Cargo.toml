@@ -37,6 +37,7 @@ tar = "0.4"
 tantivy = { version = "=0.26.1", features = ["zstd-compression"] }
 time = { version = "0.3", features = ["parsing", "formatting"] }
 tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+tokio-stream = "0.1"
 tower-http = { version = "0.6", features = ["cors", "limit", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

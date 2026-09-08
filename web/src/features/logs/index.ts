@@ -13,3 +13,4 @@ export {
   writeLogSearch,
   type LogSearchState,
 } from "./state";
+export { useLiveLogs, type LiveStatus } from "./useLiveLogs";

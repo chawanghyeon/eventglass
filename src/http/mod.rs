@@ -7,6 +7,7 @@ mod auth;
 mod ingest;
 mod issue_detail;
 mod issues;
+mod live;
 mod projects;
 mod records;
 mod search;
@@ -131,6 +132,7 @@ pub fn router(app: AppState) -> Router {
         .route("/api/explore/search", post(search::post_search))
         .route("/api/explore/aggregate", post(aggregate::post_aggregate))
         .route("/api/logs", get(search::get_logs))
+        .route("/api/logs/live", get(live::live))
         .route("/api/records/{detail_token}", get(records::get_record))
         .route("/api/issues", get(list_issues))
         .route("/api/issues/{id}", get(get_issue).patch(update_issue))

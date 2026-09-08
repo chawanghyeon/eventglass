@@ -444,6 +444,37 @@ textarea {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 0.72rem;
 }
+.live-list {
+  display: grid;
+  gap: 0;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid #e8edef;
+}
+.live-list li {
+  border-bottom: 1px solid #e8edef;
+}
+.live-list button {
+  width: 100%;
+  display: grid;
+  gap: 0.3rem;
+  padding: 0.85rem 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.live-list button:hover,
+.live-list button:focus-visible {
+  color: #075d56;
+}
+.live-list span {
+  color: #607077;
+  font-size: 0.82rem;
+}
 .histogram {
   min-width: 0;
   margin: 0;

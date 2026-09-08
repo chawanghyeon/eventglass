@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ApiError, describeApiError } from "../../api/client";
+import { liveLogsUrl } from "../../api/endpoints";
 import type { SearchRow } from "../../api/types";
 import { Button } from "../../components/Button";
 import { Histogram } from "../../components/Histogram";
@@ -18,6 +19,7 @@ import {
   readLogSearch,
   writeLogSearch,
 } from "./state";
+import { useLiveLogs } from "./useLiveLogs";
 
 const resettableCodes = new Set([
   "invalid_search_token",
@@ -36,8 +38,23 @@ export function LogsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [initialBounds] = useState(defaultBounds);
   const [selected, setSelected] = useState<SearchRow>();
+  const [liveStart, setLiveStart] = useState<string>();
   const selectedTrigger = useRef<HTMLButtonElement>(null);
   const state = useMemo(() => readLogSearch(searchParams), [searchParams]);
+  const liveUrl = useMemo(
+    () =>
+      liveStart
+        ? liveLogsUrl({
+            projects: state.projects,
+            start: liveStart,
+            end: "9999-12-31T23:59:59Z",
+            query: state.query,
+            filters: state.filters,
+          })
+        : undefined,
+    [liveStart, state.filters, state.projects, state.query],
+  );
+  const live = useLiveLogs(liveUrl);
   const criteriaKey = writeLogSearch(state).toString();
   const [paging, setPaging] = useState<{
     criteriaKey: string;
@@ -140,7 +157,71 @@ export function LogsPage() {
         {logs.data ? (
           <span className="count-badge">{logs.data.rows.length}개 표시</span>
         ) : null}
+        <Button
+          onClick={() => {
+            if (liveStart) {
+              setLiveStart(undefined);
+            } else {
+              setLiveStart(new Date(Date.now() - 15 * 60 * 1000).toISOString());
+            }
+          }}
+          type="button"
+          variant={liveStart ? "quiet" : "primary"}
+        >
+          {liveStart ? "Live 중지" : "Live 시작"}
+        </Button>
       </header>
+
+      {liveStart ? (
+        <section className="snapshot-panel" aria-labelledby="live-heading">
+          <header>
+            <div>
+              <p className="eyebrow">수신 시각 기준 · 최근 15분부터</p>
+              <h2 id="live-heading">Live Logs</h2>
+            </div>
+            <span>
+              {live.status === "open"
+                ? `연결됨 · seq ${live.checkpoint ?? "동기화 중"}`
+                : live.status === "reconnecting"
+                  ? "재연결 중"
+                  : live.status === "connecting"
+                    ? "연결 중"
+                    : "연결 종료"}
+            </span>
+          </header>
+          {live.status === "resync_required" ? (
+            <Notice tone="error">
+              처리 한도를 넘어 연결을 닫았습니다. Live를 다시 시작해 현재
+              범위에서 동기화해 주세요.
+            </Notice>
+          ) : null}
+          {live.status === "error" ? (
+            <Notice tone="error">
+              Live 연결이 종료되었습니다 ({live.errorCode ?? "live_unavailable"}
+              ).
+            </Notice>
+          ) : null}
+          {live.rows.length === 0 && live.status === "open" ? (
+            <p>새로 수신된 조건 일치 기록이 없습니다.</p>
+          ) : null}
+          {live.rows.length > 0 ? (
+            <ol className="live-list" aria-label="Live 수신 기록">
+              {live.rows.map((row) => (
+                <li key={row.record_id}>
+                  <button onClick={() => setSelected(row)} type="button">
+                    <strong>{row.message || "(빈 메시지)"}</strong>
+                    <span>
+                      수신 {new Date(row.received_at).toLocaleString("ko-KR")} ·
+                      발생 {new Date(row.timestamp).toLocaleString("ko-KR")} ·
+                      seq {row.ingest_seq}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+        </section>
+      ) : null}
 
       <LogFilters
         committed={state}

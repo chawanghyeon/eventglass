@@ -95,6 +95,7 @@ run_integration() {
     run_nonempty_test_target "query authorization scope" --test query_scope
     run_nonempty_test_target "native search" --test search
     run_nonempty_test_target "HTTP search" --test search_http
+    run_nonempty_test_target "Live SSE catch-up" --test live_http
     run_nonempty_test_target "stored record detail" --test records_http
     run_nonempty_test_target "native immutable seal" --test seal
     run_nonempty_test_target "sealed shard archive" --test archive

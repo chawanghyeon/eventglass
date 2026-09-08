@@ -348,6 +348,96 @@ pub fn search(shards: &[SearchShard], request: &SearchRequest) -> Result<SearchP
     Ok(SearchPage { rows, has_more })
 }
 
+/// Live catch-up uses the same validated query and projection but orders the
+/// globally unique ingest sequence ascending after an acknowledged scan point.
+pub fn search_live(
+    shards: &[SearchShard],
+    request: &SearchRequest,
+    after_sequence: i64,
+) -> Result<SearchPage> {
+    validate_request(request)?;
+    if request.cursor.is_some()
+        || request.scope.time_field != TimeField::ReceivedAt
+        || after_sequence < 0
+        || after_sequence > request.scope.watermark
+    {
+        return Err(SearchError::InvalidRequest("invalid_live_scope"));
+    }
+    let expected_schema = schema::build();
+    for shard in shards {
+        if shard.searcher.schema() != &expected_schema {
+            return Err(SearchError::SchemaMismatch {
+                shard_id: shard.id.clone(),
+            });
+        }
+    }
+    if request.scope.project_ids.is_empty() || shards.is_empty() {
+        return Ok(SearchPage {
+            rows: Vec::new(),
+            has_more: false,
+        });
+    }
+    let sequence = expected_schema
+        .get_field("ingest_seq")
+        .map_err(SearchError::Native)?;
+    let query = Box::new(BooleanQuery::new(vec![
+        (Occur::Must, build_query(&expected_schema, request)?),
+        (
+            Occur::Must,
+            Box::new(RangeQuery::new(
+                Bound::Excluded(Term::from_field_i64(sequence, after_sequence)),
+                Bound::Included(Term::from_field_i64(sequence, request.scope.watermark)),
+            )),
+        ),
+    ]));
+    let candidate_limit = request
+        .limit
+        .checked_add(1)
+        .ok_or(SearchError::InvalidRequest("limit_overflow"))?;
+    let mut selected = BinaryHeap::with_capacity(candidate_limit);
+    for (shard_index, shard) in shards.iter().enumerate() {
+        let collector = TopDocs::with_limit(candidate_limit)
+            .order_by::<Option<i64>>((SortByStaticFastValue::for_field("ingest_seq"), Order::Asc));
+        for (sequence, address) in shard.searcher.search(query.as_ref(), &collector)? {
+            let sequence = sequence.ok_or_else(|| SearchError::CorruptDocument {
+                shard_id: shard.id.clone(),
+                field: "ingest_seq",
+            })?;
+            let candidate = LiveCandidate {
+                ingest_seq: sequence,
+                shard_index,
+                address,
+            };
+            if selected.len() < candidate_limit {
+                selected.push(candidate);
+            } else if selected.peek().is_some_and(|worst| candidate < *worst) {
+                selected.pop();
+                selected.push(candidate);
+            }
+        }
+    }
+    let mut selected = selected.into_vec();
+    selected.sort_unstable();
+    let has_more = selected.len() > request.limit;
+    let mut rows = Vec::with_capacity(request.limit.min(selected.len()));
+    let mut row_string_bytes = 0usize;
+    for candidate in selected.into_iter().take(request.limit) {
+        let row = load_row(&shards[candidate.shard_index], candidate.address)?;
+        row_string_bytes = row_string_bytes.checked_add(row.string_bytes()).ok_or(
+            SearchError::ResultTooLarge {
+                limit_bytes: MAX_ROW_STRING_BYTES,
+            },
+        )?;
+        if row_string_bytes > MAX_ROW_STRING_BYTES {
+            return Err(SearchError::ResultTooLarge {
+                limit_bytes: MAX_ROW_STRING_BYTES,
+            });
+        }
+        rows.push(row);
+    }
+    Ok(SearchPage { rows, has_more })
+}
+
 fn validate_request(request: &SearchRequest) -> Result<()> {
     if request.query.len() > MAX_QUERY_BYTES {
         return Err(SearchError::InvalidRequest("query_too_long"));
@@ -657,6 +747,13 @@ fn json_i64_bound(field: Field, path: &str, bound: I64Bound) -> Bound<Term> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct Candidate {
     time_us: i64,
+    ingest_seq: i64,
+    shard_index: usize,
+    address: DocAddress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct LiveCandidate {
     ingest_seq: i64,
     shard_index: usize,
     address: DocAddress,

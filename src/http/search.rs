@@ -26,7 +26,7 @@ pub(super) enum ProjectId {
     Number(i64),
 }
 impl ProjectId {
-    fn parse(self) -> ApiResult<i64> {
+    pub(super) fn parse(self) -> ApiResult<i64> {
         let value = match self {
             Self::Number(value) => value,
             Self::Decimal(value)
@@ -53,7 +53,7 @@ pub(super) struct Filters {
     loggers: Vec<String>,
 }
 impl Filters {
-    fn canonicalize(&mut self) -> ApiResult<()> {
+    pub(super) fn canonicalize(&mut self) -> ApiResult<()> {
         for values in [
             &mut self.kinds,
             &mut self.services,
@@ -77,7 +77,7 @@ impl Filters {
         }
         Ok(())
     }
-    fn native(&self) -> Vec<TypedFilter> {
+    pub(super) fn native(&self) -> Vec<TypedFilter> {
         [
             (KeywordField::Kind, &self.kinds),
             (KeywordField::Service, &self.services),
@@ -157,20 +157,20 @@ pub(super) fn context(auth: &Authorization, request_hash: String) -> TokenContex
         request_hash,
     }
 }
-fn timestamp(value: &str) -> ApiResult<i64> {
+pub(super) fn timestamp(value: &str) -> ApiResult<i64> {
     let date = time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
         .map_err(|_| invalid())?;
     let us = i64::try_from(date.unix_timestamp_nanos() / 1000).map_err(|_| invalid())?;
     us.checked_mul(1000).ok_or_else(invalid)?;
     Ok(us)
 }
-fn hash(value: &impl Serialize) -> ApiResult<String> {
+pub(super) fn hash(value: &impl Serialize) -> ApiResult<String> {
     Ok(format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(value).map_err(|_| invalid())?)
     ))
 }
-fn format_timestamp(value: i64) -> ApiResult<String> {
+pub(super) fn format_timestamp(value: i64) -> ApiResult<String> {
     time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1000)
         .map_err(|_| unavailable())?
         .format(&time::format_description::well_known::Rfc3339)

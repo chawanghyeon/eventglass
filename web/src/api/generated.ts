@@ -262,6 +262,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/logs/live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream received records in ingest sequence order
+         * @description Uses a fixed absolute received-time scope. Each record and completed scan
+         *     checkpoint carries a signed SSE id. Reconnect with Last-Event-ID or the
+         *     equivalent resume query parameter.
+         */
+        get: operations["streamLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/explore/search": {
         parameters: {
             query?: never;
@@ -1148,6 +1170,44 @@ export interface operations {
             429: components["responses"]["Error"];
             503: components["responses"]["Error"];
             504: components["responses"]["Error"];
+        };
+    };
+    streamLogs: {
+        parameters: {
+            query: {
+                /** @description Comma-separated positive decimal project IDs. Omitted means all active projects visible to the principal. */
+                projects?: string;
+                start: string;
+                end: string;
+                query?: string;
+                /** @description JSON-encoded SearchFilters object. */
+                filters?: string;
+                resume?: string;
+            };
+            header?: {
+                "Last-Event-ID"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description SSE record, checkpoint, resync_required, and error events */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/event-stream": string;
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            410: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     searchLogs: {
