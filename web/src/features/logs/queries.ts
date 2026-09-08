@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { endpoints } from "../../api/endpoints";
+import type { AggregateRequest } from "../../api/types";
 import type { LogSearchState } from "./state";
 
 export const logKeys = {
@@ -21,6 +22,8 @@ export const logKeys = {
     readToken: string,
     detailToken: string,
   ) => ["logs", userId, projectId, readToken, "detail", detailToken] as const,
+  histogram: (userId: string, request: AggregateRequest) =>
+    ["logs", userId, "histogram", request] as const,
 };
 
 export function logsQuery(userId: string, state: LogSearchState) {
@@ -40,6 +43,13 @@ export function logsQuery(userId: string, state: LogSearchState) {
         },
         signal,
       ),
+  });
+}
+
+export function logsHistogramQuery(userId: string, request: AggregateRequest) {
+  return queryOptions({
+    queryKey: logKeys.histogram(userId, request),
+    queryFn: ({ signal }) => endpoints.aggregate(request, signal),
   });
 }
 

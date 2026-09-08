@@ -1,5 +1,6 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { LoginPage, SetupPage } from "../features/auth";
+import { ExplorePage } from "../features/explore";
 import { IssueDetailPage, IssuesPage } from "../features/issues";
 import { LogsPage } from "../features/logs";
 import { ProjectsPage } from "../features/projects";
@@ -18,6 +19,7 @@ export const router = createBrowserRouter([
         children: [
           { path: "/issues", element: <IssuesPage /> },
           { path: "/logs", element: <LogsPage /> },
+          { path: "/explore", element: <ExplorePage /> },
           { path: "/issues/:id", element: <IssueDetailPage /> },
           { path: "/projects", element: <ProjectsPage /> },
           { path: "/users", element: <UsersPage /> },

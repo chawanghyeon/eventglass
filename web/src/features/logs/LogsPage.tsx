@@ -9,10 +9,9 @@ import { Notice } from "../../components/Notice";
 import { RecordDetailPanel } from "../../components/RecordDetailPanel";
 import { Spinner } from "../../components/Spinner";
 import { useSession } from "../auth";
-import { aggregateQuery } from "../explore";
 import { projectsQuery } from "../projects";
 import { LogFilters } from "./LogFilters";
-import { logsQuery, recordDetailQuery } from "./queries";
+import { logsHistogramQuery, logsQuery, recordDetailQuery } from "./queries";
 import {
   defaultBounds,
   isValidLogSearch,
@@ -76,7 +75,7 @@ export function LogsPage() {
     histogram: { field: "timestamp" as const, interval: "auto" as const },
   };
   const histogram = useQuery({
-    ...aggregateQuery(user?.id ?? "unknown", histogramRequest),
+    ...logsHistogramQuery(user?.id ?? "unknown", histogramRequest),
     enabled: Boolean(user && logs.data?.read_token && valid),
     retry: false,
   });
