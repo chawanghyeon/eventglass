@@ -28,6 +28,10 @@ export function AppShell() {
           <span>Eventglass</span>
         </div>
         <nav aria-label="주요 메뉴">
+          <NavLink end to="/">
+            <span aria-hidden="true">◫</span>
+            Dashboard
+          </NavLink>
           <NavLink to="/explore">
             <span aria-hidden="true">▥</span>
             Explore
