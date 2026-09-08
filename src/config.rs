@@ -9,6 +9,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub base_url: Url,
     pub s3_url: Option<String>,
+    pub s3_endpoint: Option<Url>,
 }
 
 impl Config {
@@ -26,12 +27,20 @@ impl Config {
                     .unwrap_or_else(|_| "http://127.0.0.1:8080".into()),
             )?,
             s3_url: std::env::var("EVENTGLASS_S3_URL").ok(),
+            s3_endpoint: std::env::var("EVENTGLASS_S3_ENDPOINT")
+                .ok()
+                .map(|value| Url::parse(&value))
+                .transpose()
+                .context("EVENTGLASS_S3_ENDPOINT must be a URL")?,
         };
         config.validate()?;
         Ok(config)
     }
 
     pub fn validate(&self) -> Result<()> {
+        if let Some(location) = &self.s3_url {
+            crate::storage::s3::S3Location::parse(location)?;
+        }
         if !matches!(self.base_url.scheme(), "http" | "https")
             || self.base_url.host_str().is_none()
             || !self.base_url.username().is_empty()
@@ -53,6 +62,31 @@ impl Config {
                 bail!(
                     "HTTP is allowed only for a loopback base URL; configure HTTPS for remote access"
                 );
+            }
+        }
+        if let Some(endpoint) = &self.s3_endpoint {
+            if !matches!(endpoint.scheme(), "http" | "https")
+                || endpoint.host_str().is_none()
+                || !endpoint.username().is_empty()
+                || endpoint.password().is_some()
+                || endpoint.query().is_some()
+                || endpoint.fragment().is_some()
+            {
+                bail!("EVENTGLASS_S3_ENDPOINT must be an HTTP(S) URL without credentials");
+            }
+            if self.s3_url.is_none() {
+                bail!("EVENTGLASS_S3_ENDPOINT requires EVENTGLASS_S3_URL");
+            }
+            if endpoint.scheme() == "http" {
+                let local = match endpoint.host() {
+                    Some(url::Host::Domain(name)) => name == "localhost",
+                    Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                    Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                    None => false,
+                };
+                if !local {
+                    bail!("HTTP S3 endpoints are limited to loopback compatibility tests");
+                }
             }
         }
         Ok(())
@@ -80,9 +114,46 @@ mod tests {
                 data_dir: PathBuf::from("unused"),
                 base_url: origin.parse().unwrap(),
                 s3_url: None,
+                s3_endpoint: None,
             };
             assert_eq!(config.validate().is_ok(), accepted, "{origin}");
         }
+    }
+
+    #[test]
+    fn s3_namespace_and_compatibility_endpoint_are_validated_separately() {
+        let base = Config {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            data_dir: PathBuf::from("unused"),
+            base_url: "https://eventglass.example.test".parse().unwrap(),
+            s3_url: Some("s3://eventglass/tenant".into()),
+            s3_endpoint: None,
+        };
+        assert!(base.validate().is_ok());
+        assert!(
+            Config {
+                s3_url: Some("https://eventglass/tenant".into()),
+                ..base.clone()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Config {
+                s3_endpoint: Some("http://127.0.0.1:9000".parse().unwrap()),
+                ..base.clone()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            Config {
+                s3_endpoint: Some("http://minio.example.test".parse().unwrap()),
+                ..base
+            }
+            .validate()
+            .is_err()
+        );
     }
 }
 

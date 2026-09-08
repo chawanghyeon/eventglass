@@ -3,3 +3,4 @@ pub mod budget;
 pub mod checkpoint;
 pub mod manifest;
 pub mod registry;
+pub mod s3;

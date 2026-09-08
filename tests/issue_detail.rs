@@ -83,6 +83,7 @@ async fn fixture() -> anyhow::Result<(tempfile::TempDir, AppState, Router, Sessi
         data_dir: directory.path().into(),
         base_url: ORIGIN.parse()?,
         s3_url: None,
+        s3_endpoint: None,
     })
     .await?;
     let router = eventglass::http::router(app.clone());

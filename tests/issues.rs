@@ -30,6 +30,7 @@ async fn fixture() -> anyhow::Result<Fixture> {
         data_dir: directory.path().to_path_buf(),
         base_url: ORIGIN.parse()?,
         s3_url: None,
+        s3_endpoint: None,
     })
     .await?;
     let router = eventglass::http::router(state.clone());

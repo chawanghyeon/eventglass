@@ -17,7 +17,10 @@ embed-ui = []
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
 argon2 = "0.5"
+aws-config = { version = "=1.11.0", default-features = false, features = ["behavior-version-latest", "credentials-process", "default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "=1.145.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "http-1x", "rt-tokio", "rustls"] }
 axum = "0.8"
 base64 = "0.22"
 fs4 = "0.13"
@@ -31,7 +34,7 @@ sha2 = "0.10"
 subtle = "2"
 tantivy = { version = "=0.26.1", features = ["zstd-compression"] }
 time = { version = "0.3", features = ["parsing", "formatting"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "net", "signal", "sync", "time"] }
 tower-http = { version = "0.6", features = ["cors", "limit", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

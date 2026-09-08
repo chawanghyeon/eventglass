@@ -16,6 +16,7 @@ async fn app() -> anyhow::Result<(tempfile::TempDir, AppState, Router)> {
         data_dir: dir.path().to_path_buf(),
         base_url: "http://localhost:8080".parse()?,
         s3_url: None,
+        s3_endpoint: None,
     })
     .await?;
     let router = eventglass::http::router(state.clone());
