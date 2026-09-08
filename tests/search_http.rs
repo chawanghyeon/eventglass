@@ -100,7 +100,7 @@ async fn ingest(app: &AppState, project: i64, id: u32, message: &str) -> anyhow:
         "other-public"
     };
     let records = sentry::normalize_store(&serde_json::to_vec(&json!({"event_id":format!("{id:032x}"),"timestamp":"2026-09-08T00:00:00.000001Z","message":message,"extra":{"password":"sensitive-value"}}))?,
-        &ProjectContext {project_id:project,slug:slug.into(),public_key:key.into(),scrub_keys:vec![]}, uuid::Uuid::new_v4(),1788825600000001,&Default::default())?.records;
+        &ProjectContext {project_id:project,slug:slug.into(),public_key:key.into(),scrub_keys:vec![]}, uuid::Uuid::new_v4(),eventglass::model::now_us()?,&Default::default())?.records;
     app.db
         .call(move |db| {
             ingest::accept(

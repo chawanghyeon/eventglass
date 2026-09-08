@@ -300,3 +300,15 @@ pub fn local_size(root: &Path, manifest: &Manifest) -> Result<u64> {
                 .context("sealed shard size overflow")
         })
 }
+
+pub fn active_size(root: &Path) -> Result<u64> {
+    fs::read_dir(root)?.try_fold(0u64, |sum, entry| {
+        let metadata = fs::symlink_metadata(entry?.path())?;
+        ensure!(
+            metadata.file_type().is_file(),
+            "active shard contains a non-regular entry"
+        );
+        sum.checked_add(metadata.len())
+            .context("active shard size overflow")
+    })
+}

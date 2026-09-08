@@ -74,6 +74,84 @@ pub fn local_catalog(db: &Connection) -> Result<Vec<LocalCatalogShard>> {
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+const ROLLOVER_BYTES: u64 = 256 * 1024 * 1024;
+const ROLLOVER_AGE_US: i64 = 60 * 60 * 1_000_000;
+
+pub fn rotation_plan(
+    db: &Connection,
+    active_id: &str,
+    measured_size: Option<u64>,
+    now_us: i64,
+) -> Result<Option<crate::storage::manifest::ShardStats>> {
+    let measured_size = measured_size.map(i64::try_from).transpose()?;
+    if let Some(size) = measured_size {
+        ensure!(
+            db.execute(
+                "UPDATE shards SET size_bytes=?1 WHERE id=?2 AND state='active'",
+                params![size, active_id],
+            )? == 1,
+            "active shard disappeared while measuring rollover"
+        );
+    }
+    let row: SealRow = db.query_row(
+        "SELECT state,last_applied_inbox_id,record_count,min_timestamp_us,max_timestamp_us,
+                min_received_at_us,max_received_at_us,min_ingest_seq,max_ingest_seq
+         FROM shards WHERE id=?1",
+        [active_id],
+        |r| {
+            Ok(SealRow {
+                state: r.get(0)?,
+                last_applied_inbox_id: r.get(1)?,
+                record_count: r.get(2)?,
+                min_timestamp_us: r.get(3)?,
+                max_timestamp_us: r.get(4)?,
+                min_received_at_us: r.get(5)?,
+                max_received_at_us: r.get(6)?,
+                min_ingest_seq: r.get(7)?,
+                max_ingest_seq: r.get(8)?,
+            })
+        },
+    )?;
+    ensure!(row.state == "active", "rollover target is not active");
+    let (applied, first_received, catalog_size): (Boundary, Option<i64>, i64) = db.query_row(
+        "SELECT r.last_applied_inbox_id,r.last_applied_ingest_seq,
+                s.first_record_received_at_us,s.size_bytes
+         FROM runtime_state r JOIN shards s ON s.id=r.active_shard_id
+         WHERE r.singleton=1 AND s.id=?1",
+        [active_id],
+        |r| {
+            Ok((
+                Boundary {
+                    inbox_id: r.get(0)?,
+                    ingest_seq: r.get(1)?,
+                },
+                r.get(2)?,
+                r.get(3)?,
+            ))
+        },
+    )?;
+    ensure!(
+        row.last_applied_inbox_id == applied.inbox_id,
+        "active shard is not published through SQLite A"
+    );
+    let age_due = first_received
+        .and_then(|first| first.checked_add(ROLLOVER_AGE_US))
+        .is_some_and(|deadline| now_us >= deadline);
+    let size_due = u64::try_from(catalog_size).is_ok_and(|size| size >= ROLLOVER_BYTES);
+    if row.record_count == 0 || !(age_due || size_due) {
+        return Ok(None);
+    }
+    Ok(Some(crate::storage::manifest::ShardStats {
+        record_count: u64::try_from(row.record_count)?,
+        min_timestamp_us: row.min_timestamp_us,
+        max_timestamp_us: row.max_timestamp_us,
+        min_received_at_us: row.min_received_at_us,
+        max_received_at_us: row.max_received_at_us,
+        min_ingest_seq: row.min_ingest_seq,
+        max_ingest_seq: row.max_ingest_seq,
+    }))
+}
+
 struct SealRow {
     state: String,
     last_applied_inbox_id: i64,

@@ -52,6 +52,14 @@ struct View {
     failed: bool,
 }
 
+struct RunContext {
+    db: DbWorker,
+    view: Arc<RwLock<View>>,
+    wake: Arc<Notify>,
+    data_dir: std::path::PathBuf,
+    installation: String,
+}
+
 impl Indexer {
     /// Startup completes recovery before exposing a ready Indexer handle.
     pub async fn start(db: DbWorker, data_dir: &Path) -> Result<Self> {
@@ -93,11 +101,13 @@ impl Indexer {
         let registry =
             crate::storage::registry::Registry::new(&directory, catalog.installation_id.clone());
         let installation = catalog.installation_id;
+        let worker_installation = installation.clone();
         let applied = catalog.applied;
         let existing = catalog.active_id;
         let is_new = existing.is_none();
         let shard_id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let native_id = shard_id.clone();
+        let worker_directory = directory.clone();
         let mut active = tokio::task::spawn_blocking(move || -> Result<_> {
             let root = directory.join("shards");
             let path = root.join(&native_id);
@@ -153,11 +163,15 @@ impl Indexer {
         let worker_wake = wake.clone();
         let join = tokio::spawn(async move {
             if let Err(error) = run(
-                db,
+                RunContext {
+                    db,
+                    view: worker_view.clone(),
+                    wake: worker_wake,
+                    data_dir: worker_directory,
+                    installation: worker_installation,
+                },
                 active,
                 shard_id,
-                worker_view.clone(),
-                worker_wake,
                 receiver,
             )
             .await
@@ -227,16 +241,44 @@ impl Indexer {
 }
 
 async fn run(
-    db: DbWorker,
+    context: RunContext,
     mut active: ActiveShard,
-    shard_id: String,
-    view: Arc<RwLock<View>>,
-    wake: Arc<Notify>,
+    mut shard_id: String,
     mut stop: watch::Receiver<bool>,
 ) -> Result<()> {
+    let RunContext {
+        db,
+        view,
+        wake,
+        data_dir,
+        installation,
+    } = context;
     loop {
         if *stop.borrow() {
             return Ok(());
+        }
+        let now = crate::model::now_us()?;
+        let active_id = shard_id.clone();
+        if let Some(plan) = db
+            .call(move |db| shards::rotation_plan(db, &active_id, None, now))
+            .await?
+        {
+            let rotated = rotate(
+                db.clone(),
+                active,
+                shard_id,
+                plan,
+                &data_dir,
+                &installation,
+                now,
+            )
+            .await?;
+            active = rotated.0;
+            shard_id = rotated.1;
+            view.write()
+                .map_err(|_| anyhow::anyhow!("index publication lock poisoned"))?
+                .published = rotated.2;
+            continue;
         }
         let batch = db
             .call(|db| metadata::prepare(db, &Limits::default()))
@@ -284,7 +326,82 @@ async fn run(
         view.write()
             .map_err(|_| anyhow::anyhow!("index publication lock poisoned"))?
             .published = published;
+        let active_path = data_dir.join("shards").join(&shard_id);
+        let measured = tokio::task::spawn_blocking(move || {
+            crate::storage::manifest::active_size(&active_path)
+        })
+        .await??;
+        let now = crate::model::now_us()?;
+        let active_id = shard_id.clone();
+        if let Some(plan) = db
+            .call(move |db| shards::rotation_plan(db, &active_id, Some(measured), now))
+            .await?
+        {
+            let rotated = rotate(
+                db.clone(),
+                active,
+                shard_id,
+                plan,
+                &data_dir,
+                &installation,
+                now,
+            )
+            .await?;
+            active = rotated.0;
+            shard_id = rotated.1;
+            view.write()
+                .map_err(|_| anyhow::anyhow!("index publication lock poisoned"))?
+                .published = rotated.2;
+        }
     }
+}
+
+async fn rotate(
+    db: DbWorker,
+    active: ActiveShard,
+    shard_id: String,
+    stats: crate::storage::manifest::ShardStats,
+    data_dir: &Path,
+    installation: &str,
+    now_us: i64,
+) -> Result<(ActiveShard, String, Published)> {
+    let path = data_dir.join("shards").join(&shard_id);
+    let (manifest, size) = tokio::task::spawn_blocking(move || -> Result<_> {
+        let manifest = active.seal(&path, stats, now_us)?;
+        let size = crate::storage::manifest::local_size(&path, &manifest)?;
+        Ok((manifest, size))
+    })
+    .await??;
+    crash_point("after_seal_manifest");
+    let boundary = manifest.boundary;
+    db.call(move |db| shards::finalize_seal(db, &manifest, size))
+        .await?;
+    crash_point("after_seal_catalog");
+
+    let next_id = uuid::Uuid::new_v4().to_string();
+    let native_id = next_id.clone();
+    let directory = data_dir.to_owned();
+    let installation = installation.to_owned();
+    let mut next = tokio::task::spawn_blocking(move || -> Result<_> {
+        let root = directory.join("shards");
+        let path = root.join(&native_id);
+        std::fs::create_dir(&path)?;
+        let active = ActiveShard::create(&path, &installation, &native_id, boundary)?;
+        std::fs::File::open(&root)?.sync_all()?;
+        Ok(active)
+    })
+    .await??;
+    crash_point("after_new_active_create");
+    let adopted_id = next_id.clone();
+    db.call(move |db| shards::adopt_initial(db, &adopted_id, boundary, now_us))
+        .await?;
+    crash_point("after_new_active_adopt");
+    let published = tokio::task::spawn_blocking(move || -> Result<_> {
+        let published = next.publish(boundary)?;
+        Ok((next, published))
+    })
+    .await??;
+    Ok((published.0, next_id, published.1))
 }
 
 #[inline]

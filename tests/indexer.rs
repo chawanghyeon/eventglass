@@ -39,7 +39,7 @@ async fn accepted_error_replay_is_deduped_and_logs_remain_distinct() -> Result<(
         b"{\"event_id\":\"0123456789abcdef0123456789abcdef\",\"message\":\"coordinator error\"}",
         &context,
         uuid::Uuid::new_v4(),
-        1788860000000000,
+        eventglass::model::now_us()?,
         &Default::default(),
     )?
     .records
@@ -104,6 +104,88 @@ async fn accepted_error_replay_is_deduped_and_logs_remain_distinct() -> Result<(
         }
     );
     assert_eq!((inbox, occurrences, issues), (0, 1, 1));
+    indexer.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn first_record_age_rolls_over_only_after_publish_and_keeps_the_old_reader() -> Result<()> {
+    let (dir, app) = app().await?;
+    let app = app.start_core().await?;
+    let indexer = app.indexer.as_ref().unwrap();
+    let initial = indexer.snapshot()?;
+    let received_at = eventglass::model::now_us()? - 2 * 60 * 60 * 1_000_000;
+    let mut records = sentry::normalize_store(
+        b"{\"event_id\":\"fedcba9876543210fedcba9876543210\",\"message\":\"aged shard\"}",
+        &ProjectContext {
+            project_id: 1,
+            slug: "test".into(),
+            public_key: "public".into(),
+            scrub_keys: vec![],
+        },
+        uuid::Uuid::new_v4(),
+        received_at,
+        &Default::default(),
+    )?
+    .records;
+    let record_id = records[0].record_id.clone();
+    app.db
+        .call(move |db| {
+            ingest::accept(
+                db,
+                IngestProject {
+                    id: 1,
+                    slug: "test".into(),
+                    public_key: "public".into(),
+                },
+                "aged-rollover",
+                std::mem::take(&mut records),
+                &Default::default(),
+            )
+        })
+        .await?;
+    indexer.wake();
+    let next = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let snapshot = indexer.snapshot()?;
+            if snapshot.shard_id != initial.shard_id && snapshot.boundary.ingest_seq == 1 {
+                return Ok::<_, anyhow::Error>(snapshot);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    assert_eq!(next.searcher.num_docs(), 0);
+    let initial_id = initial.shard_id.clone();
+    let states = app
+        .db
+        .call(move |db| {
+            Ok((
+                db.query_row(
+                    "SELECT state FROM shards WHERE id=?1",
+                    [&initial_id],
+                    |row| row.get::<_, String>(0),
+                )?,
+                db.query_row(
+                    "SELECT count(*) FROM shards WHERE state='active'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+            ))
+        })
+        .await?;
+    assert_eq!(states, ("local".into(), 1));
+    assert!(
+        dir.path()
+            .join("shards")
+            .join(&initial.shard_id)
+            .join(eventglass::storage::manifest::NAME)
+            .is_file()
+    );
+    let pins = indexer.pin_shards(std::slice::from_ref(&initial.shard_id))?;
+    assert_eq!(pins[0].published().searcher.num_docs(), 1);
+    let detail = eventglass::search::detail::load(pins[0].published(), 1, &record_id, 1)?;
+    assert!(detail.is_some());
     indexer.shutdown().await?;
     Ok(())
 }
