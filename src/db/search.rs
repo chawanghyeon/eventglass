@@ -148,9 +148,11 @@ pub fn event_candidates(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     ensure!(
-        rows.iter()
-            .all(|(_, state)| matches!(state.as_str(), "active" | "local" | "remote_verified")),
-        "candidate shard is not locally available"
+        rows.iter().all(|(_, state)| matches!(
+            state.as_str(),
+            "active" | "local" | "remote_verified" | "remote_only"
+        )),
+        "candidate shard has an unsupported state"
     );
     Ok(rows.into_iter().map(|(id, _)| id).collect())
 }
@@ -175,9 +177,11 @@ pub fn received_candidates(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     ensure!(
-        rows.iter()
-            .all(|(_, state)| matches!(state.as_str(), "active" | "local" | "remote_verified")),
-        "candidate shard is not locally available"
+        rows.iter().all(|(_, state)| matches!(
+            state.as_str(),
+            "active" | "local" | "remote_verified" | "remote_only"
+        )),
+        "candidate shard has an unsupported state"
     );
     Ok(rows.into_iter().map(|(id, _)| id).collect())
 }

@@ -12,10 +12,7 @@ use super::{
     records::{NativeDetail, compare_authorization, detail_response, load_native, unavailable},
     search::{scope_error, token_error},
 };
-use crate::db::{
-    issue_detail::{self as metadata, AuthorizedOccurrence, IssueDetailError},
-    search as authorization,
-};
+use crate::db::issue_detail::{self as metadata, AuthorizedOccurrence, IssueDetailError};
 use crate::search::tokens::{Position, TokenError};
 
 fn invalid_id(code: &'static str) -> ApiError {
@@ -59,13 +56,6 @@ pub(super) async fn get_occurrence_detail(
     if published.boundary.ingest_seq < initial.location.ingest_seq {
         return Err(unavailable());
     }
-    let detail_shard_id = initial.location.shard_id.clone();
-    state
-        .app
-        .db
-        .call(move |db| authorization::local_detail_shard(db, &detail_shard_id))
-        .await
-        .map_err(scope_error)?;
     let mut detail = load_native(
         &state,
         initial.location.shard_id.clone(),

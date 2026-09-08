@@ -103,6 +103,7 @@ run_integration() {
     run_nonempty_test_target "native immutable seal" --test seal
     run_nonempty_test_target "sealed shard archive" --test archive
     run_nonempty_test_target "operational status and doctor" --test operations
+    run_nonempty_test_target "cold shard hydration" --test cold
 }
 
 run_crash_smoke() {

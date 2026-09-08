@@ -101,6 +101,53 @@ impl Indexer {
                 catalog = db.call(|db| shards::startup(db)).await?;
             }
         }
+        let remote_only = db
+            .call(|db| {
+                let mut statement =
+                    db.prepare("SELECT id FROM shards WHERE state='remote_only' ORDER BY id")?;
+                Ok(statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
+            })
+            .await?;
+        let recovery_root = data_dir.join("shards");
+        let recovery_installation = catalog.installation_id.clone();
+        let recovered = tokio::task::spawn_blocking(move || -> Result<Vec<(String, u64)>> {
+            let mut recovered = Vec::new();
+            for id in remote_only {
+                let path = recovery_root.join(&id);
+                if !path.exists() {
+                    continue;
+                }
+                let manifest =
+                    crate::storage::manifest::verify(&path, &recovery_installation, &id)?;
+                let size = crate::storage::manifest::local_size(&path, &manifest)?;
+                recovered.push((id, size));
+            }
+            Ok(recovered)
+        })
+        .await??;
+        if !recovered.is_empty() {
+            db.call(move |db| {
+                let transaction = db.transaction()?;
+                for (id, size) in recovered {
+                    ensure!(
+                        transaction.execute(
+                            "UPDATE shards SET state='remote_verified',size_bytes=?1
+                             WHERE id=?2 AND state='remote_only'
+                               AND remote_archive_key IS NOT NULL
+                               AND archive_sha256 IS NOT NULL
+                               AND recovery_checkpoint_id IS NOT NULL",
+                            rusqlite::params![i64::try_from(size)?, id],
+                        )? == 1,
+                        "remote-only shard changed during startup reconciliation"
+                    );
+                }
+                transaction.commit()?;
+                Ok(())
+            })
+            .await?;
+        }
         let local_catalog = db.call(|db| shards::local_catalog(db)).await?;
         let catalog_root = directory.join("shards");
         let catalog_installation = catalog.installation_id.clone();
@@ -261,6 +308,10 @@ impl Indexer {
                 }
             })
             .collect()
+    }
+
+    pub fn registry(&self) -> crate::storage::registry::Registry {
+        self.registry.clone()
     }
 
     pub fn wake(&self) {

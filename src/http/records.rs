@@ -75,14 +75,6 @@ pub(super) async fn get_record(
     if verified.watermark > published.boundary.ingest_seq {
         return Err(unavailable());
     }
-    let detail_shard_id = shard_id.clone();
-    state
-        .app
-        .db
-        .call(move |db| authorization::local_detail_shard(db, &detail_shard_id))
-        .await
-        .map_err(scope_error)?;
-
     let mut detail = load_native(
         &state,
         shard_id,
@@ -142,6 +134,14 @@ pub(super) async fn load_native(
     shard_id: String,
     lookup: NativeDetail,
 ) -> ApiResult<Option<RecordDetail>> {
+    super::search::hydrate_candidates(state, std::slice::from_ref(&shard_id)).await?;
+    let detail_shard_id = shard_id.clone();
+    state
+        .app
+        .db
+        .call(move |db| authorization::local_detail_shard(db, &detail_shard_id))
+        .await
+        .map_err(scope_error)?;
     let permit = state
         .app
         .query_permit

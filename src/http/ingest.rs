@@ -137,6 +137,13 @@ async fn receive(
             return Err(ApiError(StatusCode::PAYLOAD_TOO_LARGE, "ingest_too_large"));
         }
     }
+    if !app.disk_budget.status()?.ingest_accepting
+        && let Some(cold) = &app.cold
+    {
+        cold.reclaim_for_ingest(&app.disk_budget)
+            .await
+            .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "disk_reclaim_failed"))?;
+    }
     let permit = app
         .ingress_permit
         .clone()

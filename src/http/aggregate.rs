@@ -1,7 +1,10 @@
 //! Fixed Explore aggregate DTO mapped to the shared read scope and native aggregation.
 use super::{
     ApiError, ApiResult, HttpState,
-    search::{Filters, ProjectId, ReadInput, capture_read, revalidate_read, token_error},
+    search::{
+        Filters, ProjectId, ReadInput, capture_read, hydrate_candidates, revalidate_read,
+        token_error,
+    },
 };
 use crate::search::{
     aggregate::{
@@ -186,6 +189,7 @@ pub(super) async fn post_aggregate(
         filters,
         ..
     } = prepared;
+    let hydrated_shards = hydrate_candidates(&state, &candidate_ids).await?;
     let histogram = input
         .histogram
         .map(|value| histogram(value, scope.start_us, scope.end_us))
@@ -249,6 +253,6 @@ pub(super) async fn post_aggregate(
     Ok(Json(
         json!({"record_count":result.record_count.to_string(),"metrics":result.metrics.into_iter().map(metric_value).collect::<Vec<_>>(),
         "buckets":result.buckets.map(buckets),"warnings":result.warnings,"read_token":read_token,"watermark":watermark.to_string(),
-        "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":searched_shards.to_string(),"hydrated_shards":"0"}),
+        "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":searched_shards.to_string(),"hydrated_shards":hydrated_shards.to_string()}),
     ))
 }

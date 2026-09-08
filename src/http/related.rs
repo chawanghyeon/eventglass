@@ -100,13 +100,6 @@ pub(super) async fn related(
         .call(move |db| authorization::capture(db, principal_id, vec![selected_project]))
         .await
         .map_err(scope_error)?;
-    let detail_shard_id = shard_id.clone();
-    state
-        .app
-        .db
-        .call(move |db| authorization::local_detail_shard(db, &detail_shard_id))
-        .await
-        .map_err(scope_error)?;
     let reference = load_native(
         &state,
         shard_id,

@@ -284,6 +284,7 @@ async fn execute(
     if watermark > active_boundary.ingest_seq {
         return Err(unavailable());
     }
+    let hydrated_shards = hydrate_candidates(&state, &candidate_ids).await?;
     let permit = state
         .app
         .query_permit
@@ -391,8 +392,24 @@ async fn execute(
         .map_err(token_error)?;
     Ok(Json(
         json!({"rows":rows,"next_cursor":next_cursor,"read_token":read_token,"watermark":watermark.to_string(),
-        "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":searched_shards.to_string(),"hydrated_shards":"0"}),
+        "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":searched_shards.to_string(),"hydrated_shards":hydrated_shards.to_string()}),
     ))
+}
+
+pub(super) async fn hydrate_candidates(
+    state: &HttpState,
+    shard_ids: &[String],
+) -> ApiResult<usize> {
+    let Some(cold) = &state.app.cold else {
+        return Ok(0);
+    };
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        cold.ensure_local(shard_ids),
+    )
+    .await
+    .map_err(|_| ApiError(StatusCode::GATEWAY_TIMEOUT, "cold_storage_timeout"))?
+    .map_err(|_| unavailable())
 }
 
 /// Common read scope for rows and aggregation. Operation-specific parameters do not enter read hash.

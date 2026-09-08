@@ -3,6 +3,7 @@
 
 use std::{
     collections::HashMap,
+    fs::File,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -93,6 +94,46 @@ impl Registry {
             },
         );
         Ok(ShardPin { shard })
+    }
+
+    pub fn evict_local(
+        &self,
+        shard_id: &str,
+        mark_remote_only: impl FnOnce() -> Result<bool>,
+        rollback: impl FnOnce() -> Result<()>,
+    ) -> Result<bool> {
+        uuid::Uuid::parse_str(shard_id).context("invalid eviction shard ID")?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("shard registry lock poisoned"))?;
+        if state
+            .open
+            .get(shard_id)
+            .is_some_and(|cached| Arc::strong_count(&cached.shard) > 1)
+        {
+            return Ok(false);
+        }
+        let path = self.root.join(shard_id);
+        let metadata = std::fs::symlink_metadata(&path)?;
+        ensure!(
+            metadata.file_type().is_dir(),
+            "eviction target is not a directory"
+        );
+        if !mark_remote_only()? {
+            return Ok(false);
+        }
+        let data_dir = self.root.parent().context("shard root has no parent")?;
+        let tombstone = data_dir.join(format!(".evict-{}-{}.tmp", shard_id, uuid::Uuid::new_v4()));
+        if let Err(error) = std::fs::rename(&path, &tombstone) {
+            rollback()?;
+            return Err(error.into());
+        }
+        state.open.remove(shard_id);
+        File::open(&self.root)?.sync_all()?;
+        std::fs::remove_dir_all(&tombstone)?;
+        File::open(data_dir)?.sync_all()?;
+        Ok(true)
     }
 }
 

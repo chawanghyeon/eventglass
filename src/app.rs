@@ -21,6 +21,7 @@ pub struct AppState {
     pub query_permit: Arc<Semaphore>,
     pub live_permit: Arc<Semaphore>,
     pub alerts: Option<crate::alerts::AlertCoordinator>,
+    pub cold: Option<crate::storage::cold::ColdStorage>,
     pub tokens: Arc<crate::search::tokens::TokenCodec>,
     pub disk_budget: crate::storage::budget::DiskBudget,
     _directory_lock: Arc<File>,
@@ -82,6 +83,7 @@ impl AppState {
             query_permit: Arc::new(Semaphore::new(1)),
             live_permit: Arc::new(Semaphore::new(32)),
             alerts: None,
+            cold: None,
             tokens: Arc::new(crate::search::tokens::TokenCodec::new(token_key)),
             disk_budget,
             _directory_lock: lock,
@@ -93,7 +95,15 @@ impl AppState {
     pub async fn start_core(mut self) -> Result<Self> {
         anyhow::ensure!(self.indexer.is_none(), "core is already running");
         #[cfg(feature = "s3")]
-        let backup = build_backup_coordinator(&self.config, &self.db).await;
+        let remote = build_remote_store(&self.config, &self.db).await;
+        #[cfg(feature = "s3")]
+        let backup = remote.as_ref().map(|store| {
+            crate::storage::backup::BackupCoordinator::new(
+                self.db.clone(),
+                &self.config.data_dir,
+                Arc::clone(store),
+            )
+        });
         #[cfg(not(feature = "s3"))]
         let backup = None;
         let indexer = crate::indexer::Indexer::start_with_backup(
@@ -102,6 +112,28 @@ impl AppState {
             backup,
         )
         .await?;
+        #[cfg(feature = "s3")]
+        if let Some(store) = remote {
+            let installation = self
+                .db
+                .call(|db| {
+                    db.query_row(
+                        "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(Into::into)
+                })
+                .await?;
+            self.cold = Some(crate::storage::cold::ColdStorage::new(
+                self.db.clone(),
+                &self.config.data_dir,
+                installation,
+                store,
+                indexer.registry(),
+                self.disk_budget.clone(),
+            ));
+        }
         self.alerts = Some(crate::alerts::AlertCoordinator::start(
             self.db.clone(),
             indexer.clone(),
@@ -113,16 +145,16 @@ impl AppState {
 }
 
 #[cfg(feature = "s3")]
-async fn build_backup_coordinator(
+async fn build_remote_store(
     config: &Config,
     db: &DbWorker,
-) -> Option<crate::storage::backup::BackupCoordinator> {
-    let result: Result<Option<crate::storage::backup::BackupCoordinator>> = async {
+) -> Option<Arc<dyn crate::storage::s3::ObjectStore>> {
+    let result: Result<Option<Arc<dyn crate::storage::s3::ObjectStore>>> = async {
         let Some(value) = &config.s3_url else {
             return Ok(None);
         };
         let location = crate::storage::s3::S3Location::parse(value)?;
-        let store = Arc::new(
+        let store: Arc<dyn crate::storage::s3::ObjectStore> = Arc::new(
             crate::storage::s3::AwsObjectStore::load(location, config.s3_endpoint.as_ref()).await?,
         );
         let local_installation = db
@@ -143,17 +175,13 @@ async fn build_backup_coordinator(
             remote.installation_id == local_installation,
             "S3 installation identity differs from the local database"
         );
-        Ok(Some(crate::storage::backup::BackupCoordinator::new(
-            db.clone(),
-            &config.data_dir,
-            store,
-        )))
+        Ok(Some(store))
     }
     .await;
     match result {
         Ok(coordinator) => coordinator,
         Err(error) => {
-            tracing::warn!(reason = %error, "S3 backup is unavailable; local service continues");
+            tracing::warn!(reason = %error, "S3 storage is unavailable; local service continues");
             None
         }
     }
