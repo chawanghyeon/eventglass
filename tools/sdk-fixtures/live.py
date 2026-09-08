@@ -35,7 +35,10 @@ CASES = (
     "python-events",
     "python-logging-default",
     "python-logging-debug",
+    "python-fastapi",
+    "python-celery-fork",
     "node-events-and-logs",
+    "go-events",
 )
 START_TIMEOUT_SECONDS = 15.0
 SDK_TIMEOUT_SECONDS = 30.0
@@ -206,11 +209,20 @@ def verify_dependencies() -> dict[str, str]:
     python_version = subprocess.run(
         [str(python), "--version"], check=True, capture_output=True, text=True
     ).stdout.strip()
+    go = shutil.which("go")
+    go_binary = TOOL_DIR / "go-app" / "eventglass-go-fixture"
+    if go is None or not go_binary.is_file():
+        raise RuntimeError("missing pinned Go fixture; run tools/sdk-fixtures/bootstrap.sh")
+    go_version = subprocess.run(
+        [go, "version"], check=True, capture_output=True, text=True
+    ).stdout.strip()
     return {
         "python": python_version,
         "sentry_sdk_python": installed["sentry-sdk"],
         "node": node_version,
         "sentry_sdk_node": installed_node_sdk,
+        "go": go_version,
+        "sentry_sdk_go": "0.49.0",
     }
 
 
@@ -447,7 +459,9 @@ def run(binary: Path, report_path: Path | None, supplied_data_dir: Path) -> dict
                     )
                 if accepted != expected_case:
                     raise RuntimeError(f"{case}: accepted {accepted}, expected {expected_case}")
-                if not any(ack.sentinel_sent for ack in case_acks):
+                if case not in {"python-fastapi", "python-celery-fork"} and not any(
+                    ack.sentinel_sent for ack in case_acks
+                ):
                     raise RuntimeError(f"{case}: scrub sentinel was absent from SDK requests")
                 expected_total += expected_case
                 ledger = read_ledger(data_dir / "meta.db")

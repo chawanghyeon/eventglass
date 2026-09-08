@@ -542,14 +542,20 @@ fn event_message(raw: &Value) -> String {
     {
         return message;
     }
-    raw.get("exception")
-        .and_then(|value| value.get("values"))
-        .and_then(Value::as_array)
-        .and_then(|values| values.last())
+    last_exception(raw)
         .and_then(|exception| exception.get("value"))
         .and_then(Value::as_str)
         .unwrap_or("event")
         .to_owned()
+}
+
+fn last_exception(raw: &Value) -> Option<&Value> {
+    let exception = raw.get("exception")?;
+    exception
+        .get("values")
+        .and_then(Value::as_array)
+        .or_else(|| exception.as_array())
+        .and_then(|values| values.last())
 }
 
 fn event_attributes(raw: &Value) -> Value {
@@ -584,11 +590,7 @@ fn flattened_log_attributes(raw: &Value) -> Result<Value, SentryError> {
 
 fn default_fingerprint_parts(raw: &Value, message: &str, logger: Option<&str>) -> Vec<String> {
     let mut parts = Vec::new();
-    let exception = raw
-        .get("exception")
-        .and_then(|value| value.get("values"))
-        .and_then(Value::as_array)
-        .and_then(|values| values.last());
+    let exception = last_exception(raw);
     if let Some(exception) = exception {
         if let Some(kind) = exception.get("type").and_then(Value::as_str) {
             parts.push(format!("type:{}", normalize_fingerprint_text(kind)));

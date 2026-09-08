@@ -20,7 +20,10 @@ const CASES: &[&str] = &[
     "python-events",
     "python-logging-default",
     "python-logging-debug",
+    "python-fastapi",
+    "python-celery-fork",
     "node-events-and-logs",
+    "go-events",
 ];
 
 #[test]
@@ -66,18 +69,18 @@ fn real_sdks_reach_running_eventglass() -> Result<()> {
     let report: Value = serde_json::from_slice(&std::fs::read(&report_path)?)?;
     ensure!(report["result"] == "pass");
     ensure!(report["localhost_only"] == true);
-    ensure!(report["acknowledged_records"] == 17);
-    ensure!(report["durable_cut_before_restart"] == 17);
-    ensure!(report["durable_cut_after_restart"] == 17);
+    ensure!(report["acknowledged_records"] == 21);
+    ensure!(report["durable_cut_before_restart"] == 21);
+    ensure!(report["durable_cut_after_restart"] == 21);
     ensure!(report["gzip_exercised"] == true);
     ensure!(report["chunked_transfer_exercised"] == true);
     ensure!(report["event_and_log_envelope_items_exercised"] == true);
     ensure!(report["sdk_mode"] == "live-sequential");
 
-    let records = native_records(&data_dir, 17)?;
-    ensure!(records.len() == 17, "expected 17 published native records");
+    let records = native_records(&data_dir, 21)?;
+    ensure!(records.len() == 21, "expected 21 published native records");
     compare_expected(&root, &records, CASES)?;
-    verify_native_storage(&records, 17)?;
+    verify_native_storage(&records, 21)?;
 
     let direct_data_dir = directory.path().join("direct-data");
     std::fs::create_dir(&direct_data_dir)?;
@@ -131,7 +134,7 @@ fn real_sdks_reach_running_eventglass() -> Result<()> {
         })
         .sum::<Result<u64>>()?;
     println!(
-        "SDK live PASS: {} observed HTTP requests, 17 ACKed/native records, {wire_bytes} wire \
+        "SDK live PASS: {} observed HTTP requests, 21 ACKed/native records, {wire_bytes} wire \
          bytes, {decoded_bytes} decoded bytes, restart preserved cut; direct Node added 8 exact \
          native records without observer; scrub sentinel absent",
         requests.len()
@@ -291,7 +294,7 @@ fn compare_expected(root: &Path, native: &[Value], cases: &[&str]) -> Result<()>
     actual.sort();
     ensure!(
         actual == expected,
-        "native normalized subsets differ from G07 mappings"
+        "native normalized subsets differ from G07 mappings\nactual={actual:#?}\nexpected={expected:#?}"
     );
 
     let native_json = serde_json::to_string(native)?;

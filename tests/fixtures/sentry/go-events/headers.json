@@ -1,0 +1,28 @@
+[
+  {
+    "method": "POST",
+    "path": "/api/1/envelope/",
+    "response_status": 202,
+    "headers": {
+      "accept-encoding": "gzip",
+      "content-length": "1630",
+      "content-type": "application/x-sentry-envelope",
+      "host": "127.0.0.1:PORT",
+      "user-agent": "sentry.go/0.49.0",
+      "x-sentry-auth": "Sentry sentry_version=7, sentry_client=sentry.go/0.49.0, sentry_key=fixturePublicKey"
+    }
+  },
+  {
+    "method": "POST",
+    "path": "/api/1/envelope/",
+    "response_status": 202,
+    "headers": {
+      "accept-encoding": "gzip",
+      "content-length": "1613",
+      "content-type": "application/x-sentry-envelope",
+      "host": "127.0.0.1:PORT",
+      "user-agent": "sentry.go/0.49.0",
+      "x-sentry-auth": "Sentry sentry_version=7, sentry_client=sentry.go/0.49.0, sentry_key=fixturePublicKey"
+    }
+  }
+]

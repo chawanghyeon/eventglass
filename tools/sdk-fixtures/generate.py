@@ -65,6 +65,26 @@ EXPECTED: dict[str, dict[str, Any]] = {
             {"kind": "log", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "debug", "logger": "fixture.python", "message": "python opt-in debug"},
         ],
     },
+    "python-fastapi": {
+        "schema_version": 1,
+        "fixture_role": "normalization_contract_mapping",
+        "assertion": "unordered_record_subsets",
+        "server_normalization_executed": False,
+        "mapping_only": True,
+        "records": [
+            {"kind": "error", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "error", "message": "fastapi fixture exception"},
+        ],
+    },
+    "python-celery-fork": {
+        "schema_version": 1,
+        "fixture_role": "normalization_contract_mapping",
+        "assertion": "unordered_record_subsets",
+        "server_normalization_executed": False,
+        "mapping_only": True,
+        "records": [
+            {"kind": "error", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "error", "message": "celery fixture exception"},
+        ],
+    },
     "node-events-and-logs": {
         "schema_version": 1,
         "fixture_role": "normalization_contract_mapping",
@@ -80,6 +100,17 @@ EXPECTED: dict[str, dict[str, Any]] = {
             {"kind": "log", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "warning", "message": "node fixture warning"},
             {"kind": "log", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "error", "message": "node fixture error"},
             {"kind": "log", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "fatal", "message": "node fixture fatal"},
+        ],
+    },
+    "go-events": {
+        "schema_version": 1,
+        "fixture_role": "normalization_contract_mapping",
+        "assertion": "unordered_record_subsets",
+        "server_normalization_executed": False,
+        "mapping_only": True,
+        "records": [
+            {"kind": "error", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "error", "message": "go fixture exception"},
+            {"kind": "error", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "info", "message": "go fixture message"},
         ],
     },
 }
@@ -269,6 +300,8 @@ def command_for(case: str) -> list[str]:
         return [str(python), str(TOOL_DIR / "python-app" / "app.py"), mode]
     if case == "node-events-and-logs":
         return ["node", str(TOOL_DIR / "node-app" / "app.mjs")]
+    if case == "go-events":
+        return [str(TOOL_DIR / "go-app" / "eventglass-go-fixture")]
     raise ValueError(case)
 
 
@@ -282,7 +315,11 @@ def sdk_version(case: str) -> tuple[str, str]:
         )
         return "sentry-sdk", result.stdout.strip()
     package = json.loads((TOOL_DIR / "node-app" / "node_modules" / "@sentry" / "node" / "package.json").read_text())
-    return "@sentry/node", package["version"]
+    if case == "node-events-and-logs":
+        return "@sentry/node", package["version"]
+    if case == "go-events":
+        return "github.com/getsentry/sentry-go", "0.49.0"
+    raise ValueError(case)
 
 
 def run_case(case: str) -> None:
@@ -363,11 +400,18 @@ def run_case(case: str) -> None:
             raise RuntimeError(f"{case}: expected message absent from SDK captures: {record['message']}")
 
     package_name, package_version = sdk_version(case)
-    runtime = (
-        subprocess.run([sys.executable, "--version"], capture_output=True, text=True, check=True).stdout.strip()
-        if case.startswith("python-")
-        else subprocess.run(["node", "--version"], capture_output=True, text=True, check=True).stdout.strip()
-    )
+    if case.startswith("python-"):
+        runtime = subprocess.run(
+            [sys.executable, "--version"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+    elif case.startswith("node-"):
+        runtime = subprocess.run(
+            ["node", "--version"], capture_output=True, text=True, check=True
+        ).stdout.strip()
+    else:
+        runtime = subprocess.run(
+            ["go", "version"], capture_output=True, text=True, check=True
+        ).stdout.strip()
     metadata = {
         "schema_version": 1,
         "case": case,
@@ -380,6 +424,8 @@ def run_case(case: str) -> None:
             {"enable_logs": True, "logging_level": "INFO", "event_level": "ERROR", "sentry_logs_level": "DEBUG" if case == "python-logging-debug" else "default(INFO)"}
             if case.startswith("python-")
             else {"enableLogs": True, "defaultIntegrations": False}
+            if case.startswith("node-")
+            else {"attach_stacktrace": True, "flush_after_each_event": True}
         ),
         "expected_kinds": sorted({record["kind"] for record in expected["records"]}),
         "requests": request_manifest,

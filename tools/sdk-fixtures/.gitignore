@@ -3,3 +3,6 @@
 .pip-cache/
 __pycache__/
 node-app/node_modules/
+.go-mod-cache/
+.go-build-cache/
+go-app/eventglass-go-fixture

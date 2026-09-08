@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
 import os
 import sys
 
@@ -87,6 +88,71 @@ def send_debug_log() -> None:
     logger.debug("python opt-in debug", extra=log_extra(query_rows=7))
 
 
+def send_fastapi_exception() -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from sentry_sdk.integrations.asgi import SentryAsgiMiddleware
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+
+    sentry_sdk.init(
+        dsn=os.environ["SENTRY_FIXTURE_DSN"],
+        default_integrations=False,
+        integrations=[FastApiIntegration()],
+        environment="fixture",
+        release="eventglass-sdk-fixture@1",
+        send_client_reports=False,
+    )
+    if secret := os.environ.get("SENTRY_FIXTURE_SECRET"):
+        sentry_sdk.set_extra("password", secret)
+    app = FastAPI()
+    app.add_middleware(SentryAsgiMiddleware)
+
+    @app.get("/fixture")
+    def fixture() -> None:
+        raise RuntimeError("fastapi fixture exception")
+
+    response = TestClient(app, raise_server_exceptions=False).get("/fixture")
+    if response.status_code != 500:
+        raise RuntimeError(f"FastAPI fixture returned {response.status_code}")
+    sentry_sdk.flush(timeout=5.0)
+
+
+def _run_celery_task() -> None:
+    from celery import Celery
+    from sentry_sdk.integrations.celery import CeleryIntegration
+
+    sentry_sdk.init(
+        dsn=os.environ["SENTRY_FIXTURE_DSN"],
+        default_integrations=False,
+        integrations=[CeleryIntegration()],
+        environment="fixture",
+        release="eventglass-sdk-fixture@1",
+        send_client_reports=False,
+    )
+    if secret := os.environ.get("SENTRY_FIXTURE_SECRET"):
+        sentry_sdk.set_extra("password", secret)
+    app = Celery("eventglass-fixture", broker="memory://", backend="cache+memory://")
+    app.conf.task_always_eager = True
+
+    @app.task(name="eventglass.fixture")
+    def fixture_task() -> None:
+        raise RuntimeError("celery fixture exception")
+
+    try:
+        fixture_task.apply(throw=True)
+    except RuntimeError:
+        pass
+    sentry_sdk.flush(timeout=5.0)
+
+
+def send_celery_fork_exception() -> None:
+    process = multiprocessing.get_context("fork").Process(target=_run_celery_task)
+    process.start()
+    process.join(15)
+    if process.exitcode != 0:
+        raise RuntimeError(f"Celery fork fixture exited {process.exitcode}")
+
+
 def main() -> int:
     mode = sys.argv[1]
     if mode == "events":
@@ -95,6 +161,10 @@ def main() -> int:
         send_default_logs()
     elif mode == "logging-debug":
         send_debug_log()
+    elif mode == "fastapi":
+        send_fastapi_exception()
+    elif mode == "celery-fork":
+        send_celery_fork_exception()
     else:
         raise SystemExit(f"unknown mode: {mode}")
 

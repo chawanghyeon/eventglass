@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "case": "go-events",
+  "capture": "real_sdk_to_localhost_http",
+  "sdk": {
+    "package": "github.com/getsentry/sentry-go",
+    "version": "0.49.0"
+  },
+  "runtime": "go version go1.26.5 darwin/arm64",
+  "dsn": "http://fixturePublicKey@127.0.0.1:PORT/1",
+  "response": {
+    "status": 202,
+    "content_type": "application/json",
+    "body": "{}"
+  },
+  "integration_options": {
+    "attach_stacktrace": true,
+    "flush_after_each_event": true
+  },
+  "expected_kinds": [
+    "error"
+  ],
+  "requests": [
+    {
+      "file": "envelopes/001.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "content-length",
+      "wire_bytes": 1630,
+      "decompressed_bytes": 1630,
+      "sha256": "31e513bdce424ef1d1509779c1b30166ed980f2896525e42a26043ac857c588d",
+      "item_types": [
+        "event"
+      ]
+    },
+    {
+      "file": "envelopes/002.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "content-length",
+      "wire_bytes": 1613,
+      "decompressed_bytes": 1613,
+      "sha256": "7eddbe02b0246476938c56022c5b3acc2721dfa310bcb529cb3f1d0316b51464",
+      "item_types": [
+        "event"
+      ]
+    }
+  ],
+  "sanitization": [
+    "dynamic event/trace/span IDs replaced by stable ordinal IDs",
+    "timestamps fixed to 2026-01-02T03:04:05Z",
+    "repository path replaced by <REPO>",
+    "localhost ephemeral port replaced by PORT",
+    "inner item byte lengths and outer HTTP content-length recomputed"
+  ]
+}
