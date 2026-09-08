@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Run the deterministic capacity smoke under one Linux CPU and 512 MiB."""
+
+import argparse
+import hashlib
+import json
+import pathlib
+import subprocess
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+IMAGE = "rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97"
+MEMORY_BYTES = 536_870_912
+PROFILES = {"100k": 100_000, "1m": 1_000_000, "10m": 10_000_000}
+
+
+def run_container(arguments, stdout=None):
+    identifier = subprocess.check_output(
+        ["docker", "create", *arguments], text=True
+    ).strip()
+    print(f"Benchmark container: {identifier}", flush=True)
+    try:
+        result = subprocess.run(
+            ["docker", "start", "--attach", identifier], stdout=stdout
+        )
+        state = json.loads(
+            subprocess.check_output(
+                ["docker", "inspect", "--format", "{{json .State}}", identifier],
+                text=True,
+            )
+        )
+        if result.returncode or state["ExitCode"] or state["OOMKilled"]:
+            raise RuntimeError("Container failed: " + json.dumps(state))
+        return state
+    finally:
+        subprocess.run(
+            ["docker", "rm", "--force", identifier],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+
+
+def source_hash():
+    digest = hashlib.sha256()
+    roots = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs"]
+    paths = [ROOT / name for name in roots]
+    for directory in ["src", "migrations", "tests"]:
+        paths.extend(path for path in (ROOT / directory).rglob("*") if path.is_file())
+    for path in sorted(paths):
+        digest.update(str(path.relative_to(ROOT)).encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("profile", choices=PROFILES, nargs="?", default="100k")
+    parser.add_argument("--report", type=pathlib.Path)
+    args = parser.parse_args()
+    records = PROFILES[args.profile]
+    report = (args.report or ROOT / f".tools/benchmark/{args.profile}.json").resolve()
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.unlink(missing_ok=True)
+    subprocess.run(
+        ["docker", "info", "--format", "{{.OSType}}/{{.Architecture}}"], check=True
+    )
+    revision = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True
+    ).strip()
+    target_volume = "eventglass-benchmark-target"
+    cargo_volume = "eventglass-benchmark-cargo"
+    mounts = [
+        "--mount",
+        f"type=bind,src={ROOT},dst=/workspace,readonly",
+        "--mount",
+        f"type=volume,src={target_volume},dst=/target",
+        "--mount",
+        f"type=volume,src={cargo_volume},dst=/cargo",
+        "--workdir",
+        "/workspace",
+    ]
+    try:
+        print(
+            "Build phase: 2 CPUs / 4 GiB. Benchmark phase: "
+            f"1 CPU / {MEMORY_BYTES} bytes / no swap / {records} records.",
+            flush=True,
+        )
+        artifact_log = report.parent / f".{args.profile}-artifacts.jsonl"
+        with artifact_log.open("w") as output:
+            run_container(
+                [
+                    "--cpus=2",
+                    "--memory=4294967296",
+                    "--memory-swap=4294967296",
+                    *mounts,
+                    "-e",
+                    "CARGO_HOME=/cargo",
+                    "-e",
+                    "CARGO_TARGET_DIR=/target",
+                    "-e",
+                    "CARGO_BUILD_JOBS=2",
+                    IMAGE,
+                    "cargo",
+                    "test",
+                    "--locked",
+                    "--test",
+                    "benchmark",
+                    "--no-run",
+                    "--message-format=json",
+                ],
+                stdout=output,
+            )
+        executable = None
+        for line in artifact_log.read_text().splitlines():
+            item = json.loads(line)
+            if (
+                item.get("reason") == "compiler-artifact"
+                and item.get("target", {}).get("name") == "benchmark"
+                and item.get("executable")
+            ):
+                executable = item["executable"]
+        artifact_log.unlink()
+        if executable is None:
+            raise RuntimeError("benchmark test executable was not produced")
+
+        limited = [
+            "--cpus=1",
+            f"--memory={MEMORY_BYTES}",
+            f"--memory-swap={MEMORY_BYTES}",
+            "--network=none",
+            *mounts,
+        ]
+        list_output = subprocess.check_output(
+            [
+                "docker",
+                "run",
+                "--rm",
+                *limited,
+                IMAGE,
+                executable,
+                "--ignored",
+                "--exact",
+                "seeded_dataset_capacity",
+                "--list",
+                "--format",
+                "terse",
+            ],
+            text=True,
+        )
+        selected = sum(line.endswith(": test") for line in list_output.splitlines())
+        if selected != 1:
+            raise RuntimeError(f"benchmark selected {selected} tests instead of one")
+        state = run_container(
+            [
+                *limited,
+                "--mount",
+                f"type=bind,src={report.parent},dst=/report",
+                "-e",
+                f"EVENTGLASS_BENCH_PROFILE={args.profile}-development",
+                "-e",
+                f"EVENTGLASS_BENCH_RECORDS={records}",
+                "-e",
+                f"EVENTGLASS_BENCH_REPORT=/report/{report.name}",
+                "-e",
+                f"EVENTGLASS_BENCH_REVISION={revision}",
+                "-e",
+                "EVENTGLASS_BENCH_RUST_VERSION=1.97.1",
+                IMAGE,
+                executable,
+                "--ignored",
+                "--exact",
+                "seeded_dataset_capacity",
+                "--nocapture",
+            ]
+        )
+        evidence = json.loads(report.read_text())
+        cgroup = evidence["cgroup"]
+        if cgroup["memory.max"] != str(MEMORY_BYTES):
+            raise RuntimeError("memory.max does not prove the 512 MiB limit")
+        if cgroup["memory.swap.max"] != "0":
+            raise RuntimeError("memory.swap.max does not prove swap is disabled")
+        quota, period = map(int, cgroup["cpu.max"].split())
+        if quota != period:
+            raise RuntimeError("cpu.max does not prove one CPU")
+        memory_events = dict(
+            line.split() for line in cgroup["memory.events"].splitlines()
+        )
+        if int(memory_events.get("oom", "0")) != 0:
+            raise RuntimeError("benchmark cgroup recorded an OOM")
+        evidence.update(
+            {
+                "image": IMAGE,
+                "source_sha256": source_hash(),
+                "runtime_limits": {
+                    "cpus": 1,
+                    "memory_bytes": MEMORY_BYTES,
+                    "swap_bytes": 0,
+                },
+                "container_oom_killed": state["OOMKilled"],
+                "selected_tests": selected,
+            }
+        )
+        report.write_text(json.dumps(evidence, indent=2) + "\n")
+        print(f"Benchmark evidence: {report}", flush=True)
+        print(
+            f"Passed: {records} records; peak: {cgroup['memory.peak']} bytes; "
+            f"seed: {evidence['seed_records_per_second']:.1f} records/s",
+            flush=True,
+        )
+    finally:
+        artifact_log = report.parent / f".{args.profile}-artifacts.jsonl"
+        artifact_log.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":
+    main()

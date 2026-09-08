@@ -15,9 +15,10 @@ Rust 1.97.1, Node 22.22.2/npm 10.9.7, Python 3.12를 사용합니다. `./scripts
 ./tools/sdk-fixtures/bootstrap-live.sh
 ./scripts/check sdk-live      # 실제 Python/Node/Browser/Go SDK 전송
 ./scripts/check resource      # Linux 실행: CPU 1 / 1GiB / swap 0
+./scripts/check benchmark-100k # Linux 10만 건: CPU 1 / 512MiB / swap 0
 ```
 
-`storage`와 `resource`는 실행 가능한 Docker가 필요합니다. `storage`는 digest로 고정한 MinIO를 임시 network와 localhost 포트에서 실행하고 임시 credential·bucket·prefix만 사용합니다. Linux 자원 검사는 2 CPU/4GiB에서 빌드한 뒤 생성된 테스트 프로그램만 1 CPU/1GiB 제한 컨테이너에서 실행합니다. cgroup 제한값과 OOM 여부를 검사하고 `.tools/resource/report.json`을 생성합니다. 첫 검사 범위에서 제외된 대규모 workload 등은 보고서에 명시합니다. 512MiB 추가 검사는 `./scripts/check-resource --memory-bytes 536870912`로 실행합니다.
+`storage`, `resource`, `benchmark-100k`는 실행 가능한 Docker가 필요합니다. `storage`는 digest로 고정한 MinIO를 임시 network와 localhost 포트에서 실행하고 임시 credential·bucket·prefix만 사용합니다. Linux 자원 검사는 2 CPU/4GiB에서 빌드한 뒤 생성된 테스트 프로그램만 1 CPU/1GiB 제한 컨테이너에서 실행합니다. cgroup 제한값과 OOM 여부를 검사하고 `.tools/resource/report.json`을 생성합니다. 512MiB 추가 검사는 `./scripts/check-resource --memory-bytes 536870912`로 실행합니다. 10만 건 benchmark는 같은 방식으로 빌드와 측정을 분리하고 실제 Inbox→Indexer→검색·집계 경로를 CPU 1/512MiB/swap 0에서 실행해 `.tools/benchmark/100k.json`을 생성합니다. 100만·1천만 건 수동 검증은 각각 `./scripts/check-benchmark 1m`, `./scripts/check-benchmark 10m`으로 실행합니다.
 
 Hook은 check-only입니다. 필요할 때 `cargo fmt --all`과 `npm --prefix web exec prettier -- --write .`을 실행하고 diff를 검토합니다. `SKIP`·`--no-verify`로 실패를 숨기지 않습니다.
 

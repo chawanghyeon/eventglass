@@ -220,6 +220,18 @@ jobs:
       - name: Verify Linux runtime under one CPU and one GiB without swap
         run: ./scripts/check resource
 
+  benchmark:
+    name: benchmark-100k-1cpu-512m
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Verify the seeded 100K workload under one CPU and 512 MiB
+        run: ./scripts/check benchmark-100k
+
   security:
     name: security
     runs-on: ubuntu-24.04
@@ -251,7 +263,7 @@ jobs:
   required:
     name: required
     if: ${{ always() }}
-    needs: [hygiene, contracts, web, integration, storage, release-smoke, sdk-live, resource, security]
+    needs: [hygiene, contracts, web, integration, storage, release-smoke, sdk-live, resource, benchmark, security]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -265,4 +277,5 @@ jobs:
           test "${{ needs.release-smoke.result }}" = success
           test "${{ needs.sdk-live.result }}" = success
           test "${{ needs.resource.result }}" = success
+          test "${{ needs.benchmark.result }}" = success
           test "${{ needs.security.result }}" = success
