@@ -1,0 +1,259 @@
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { ApiError, describeApiError } from "../../api/client";
+import type { SearchRow } from "../../api/types";
+import { Button } from "../../components/Button";
+import { Notice } from "../../components/Notice";
+import { RecordDetailPanel } from "../../components/RecordDetailPanel";
+import { Spinner } from "../../components/Spinner";
+import { useSession } from "../auth";
+import { projectsQuery } from "../projects";
+import { LogFilters } from "./LogFilters";
+import { logsQuery, recordDetailQuery } from "./queries";
+import {
+  defaultBounds,
+  isValidLogSearch,
+  readLogSearch,
+  writeLogSearch,
+} from "./state";
+
+const resettableCodes = new Set([
+  "invalid_search_token",
+  "search_token_expired",
+  "storage_generation_changed",
+  "search_authorization_changed",
+]);
+
+function projectName(row: SearchRow, names: Map<string, string>): string {
+  return names.get(row.project_id) ?? `프로젝트 ${row.project_id}`;
+}
+
+export function LogsPage() {
+  const session = useSession();
+  const user = session.data;
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [initialBounds] = useState(defaultBounds);
+  const [selected, setSelected] = useState<SearchRow>();
+  const selectedTrigger = useRef<HTMLButtonElement>(null);
+  const state = useMemo(() => readLogSearch(searchParams), [searchParams]);
+  const criteriaKey = writeLogSearch(state).toString();
+  const [paging, setPaging] = useState<{
+    criteriaKey: string;
+    cursor?: string;
+    readToken?: string;
+  }>({ criteriaKey });
+  const currentPaging: { cursor?: string; readToken?: string } =
+    paging.criteriaKey === criteriaKey ? paging : {};
+  const requestState = {
+    ...state,
+    cursor: currentPaging.cursor,
+    readToken: currentPaging.readToken,
+  };
+  const bothBoundsMissing = !state.start && !state.end;
+  const valid = isValidLogSearch(state);
+  const projects = useQuery({
+    ...projectsQuery(user?.id ?? "unknown"),
+    enabled: Boolean(user),
+  });
+  const logs = useQuery({
+    ...logsQuery(user?.id ?? "unknown", requestState),
+    enabled: Boolean(user) && valid && !bothBoundsMissing,
+    retry: false,
+  });
+  const detail = useQuery({
+    ...recordDetailQuery(
+      user?.id ?? "unknown",
+      selected?.project_id ?? "unknown",
+      logs.data?.read_token ?? currentPaging.readToken ?? "unknown",
+      selected?.detail_token ?? "unknown",
+    ),
+    enabled: Boolean(user && selected),
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (!bothBoundsMissing) return;
+    const next = new URLSearchParams(searchParams);
+    next.set("start", initialBounds.start);
+    next.set("end", initialBounds.end);
+    setSearchParams(next, { replace: true });
+  }, [bothBoundsMissing, initialBounds, searchParams, setSearchParams]);
+
+  const names = useMemo(
+    () => new Map(projects.data?.map((project) => [project.id, project.name])),
+    [projects.data],
+  );
+  const error = logs.error;
+  const canReset = error instanceof ApiError && resettableCodes.has(error.code);
+
+  function freshSnapshot() {
+    if (!currentPaging.cursor && !currentPaging.readToken) {
+      void logs.refetch();
+      return;
+    }
+    setSelected(undefined);
+    setPaging({ criteriaKey });
+  }
+
+  function nextPage() {
+    if (!logs.data?.next_cursor) return;
+    setSelected(undefined);
+    setPaging({
+      criteriaKey,
+      cursor: logs.data.next_cursor,
+      readToken: logs.data.read_token,
+    });
+  }
+
+  function closeDetail() {
+    setSelected(undefined);
+    selectedTrigger.current?.focus();
+  }
+
+  return (
+    <div className="page-stack logs-page">
+      <header className="page-heading">
+        <div>
+          <p className="eyebrow">검색</p>
+          <h1>Logs</h1>
+          <p>활성 프로젝트의 로그와 오류를 같은 스냅샷에서 검색합니다.</p>
+        </div>
+        {logs.data ? (
+          <span className="count-badge">{logs.data.rows.length}개 표시</span>
+        ) : null}
+      </header>
+
+      <LogFilters
+        committed={state}
+        key={writeLogSearch(state).toString()}
+        onApply={(next) => {
+          setSelected(undefined);
+          setPaging({ criteriaKey: writeLogSearch(next).toString() });
+          setSearchParams(writeLogSearch(next));
+        }}
+        projects={projects.data ?? []}
+      />
+
+      {!bothBoundsMissing && !valid ? (
+        <Notice tone="error">
+          시작과 종료를 올바른 RFC3339 절대 시각으로 입력하고 프로젝트와 종류
+          필터를 확인해 주세요.
+        </Notice>
+      ) : null}
+      {projects.isError ? (
+        <Notice tone="error">{describeApiError(projects.error)}</Notice>
+      ) : null}
+      {logs.isPending && valid ? <Spinner label="로그 검색 중" /> : null}
+      {logs.isError ? (
+        <Notice tone="error">
+          <span>{describeApiError(error)}</span>
+          {canReset ? (
+            <Button onClick={freshSnapshot} type="button" variant="quiet">
+              새 스냅샷
+            </Button>
+          ) : (
+            <Button
+              onClick={() => void logs.refetch()}
+              type="button"
+              variant="quiet"
+            >
+              다시 시도
+            </Button>
+          )}
+        </Notice>
+      ) : null}
+      {logs.data?.rows.length === 0 ? (
+        <div className="empty-state">
+          <span className="empty-state__mark" aria-hidden="true">
+            00
+          </span>
+          <h2>조건에 맞는 로그가 없습니다.</h2>
+          <p>시간 범위, 프로젝트, 검색어 또는 메타데이터 필터를 바꿔 보세요.</p>
+        </div>
+      ) : null}
+      {logs.data && logs.data.rows.length > 0 ? (
+        <div className="log-table-wrap">
+          <table className="log-table">
+            <thead>
+              <tr>
+                <th scope="col">시각</th>
+                <th scope="col">메시지</th>
+                <th scope="col">메타데이터</th>
+                <th scope="col">원문</th>
+              </tr>
+            </thead>
+            <tbody>
+              {logs.data.rows.map((row) => (
+                <tr key={row.record_id}>
+                  <td className="log-time">
+                    <strong>
+                      {new Date(row.timestamp).toLocaleString("ko-KR")}
+                    </strong>
+                    <span>seq {row.ingest_seq}</span>
+                  </td>
+                  <th scope="row">
+                    <span className={`log-kind log-kind--${row.kind}`}>
+                      {row.kind}
+                    </span>
+                    <strong className="log-message">
+                      {row.message || "(빈 메시지)"}
+                    </strong>
+                    <span className="log-service">
+                      {row.service} · {row.level}
+                    </span>
+                  </th>
+                  <td className="log-metadata">
+                    <strong>{projectName(row, names)}</strong>
+                    <span>
+                      {[row.environment, row.release, row.logger]
+                        .filter(Boolean)
+                        .join(" · ") || "추가 메타데이터 없음"}
+                    </span>
+                  </td>
+                  <td>
+                    <Button
+                      onClick={(event) => {
+                        selectedTrigger.current = event.currentTarget;
+                        setSelected(row);
+                      }}
+                      type="button"
+                      variant="quiet"
+                    >
+                      상세 보기
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : null}
+      {logs.data ? (
+        <nav className="page-controls" aria-label="로그 페이지 이동">
+          <Button onClick={freshSnapshot} type="button" variant="quiet">
+            새 스냅샷
+          </Button>
+          <Button
+            disabled={!logs.data.next_cursor}
+            onClick={nextPage}
+            type="button"
+          >
+            다음 페이지
+          </Button>
+        </nav>
+      ) : null}
+      {selected ? (
+        <RecordDetailPanel
+          error={detail.isError ? describeApiError(detail.error) : undefined}
+          heading="로그 상세"
+          onClose={closeDetail}
+          onRetry={() => void detail.refetch()}
+          pending={detail.isPending}
+          raw={detail.data?.raw}
+          recordId={selected.record_id}
+        />
+      ) : null}
+    </div>
+  );
+}

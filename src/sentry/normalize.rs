@@ -1,0 +1,867 @@
+use std::collections::BTreeMap;
+
+use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde_json::{Map, Value};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use uuid::Uuid;
+
+use crate::{
+    config::Limits,
+    model::{Record, RecordKind},
+};
+
+use super::{EnvelopeAuth, NormalizedRequest, ProjectContext, SentryError, identity, scrub};
+
+const MAX_JSON_DEPTH: usize = 64;
+const MAX_JSON_NODES: usize = 20_000;
+const MAX_SEARCH_DEPTH: usize = 16;
+const MAX_SEARCH_SCALARS: usize = 1_000;
+const MAX_SEARCH_BYTES: usize = 64 * 1024;
+const NORMALIZER_VERSION: u32 = 1;
+const FINGERPRINT_VERSION: u32 = 1;
+
+pub(super) struct RequestNormalizer<'a> {
+    project: &'a ProjectContext,
+    acceptance_id: Uuid,
+    received_at_us: i64,
+    limits: &'a Limits,
+    records: Vec<Record>,
+    normalized_bytes: usize,
+    unsupported_items: usize,
+}
+
+impl<'a> RequestNormalizer<'a> {
+    pub(super) fn new(
+        project: &'a ProjectContext,
+        acceptance_id: Uuid,
+        received_at_us: i64,
+        limits: &'a Limits,
+    ) -> Self {
+        Self {
+            project,
+            acceptance_id,
+            received_at_us,
+            limits,
+            records: Vec::new(),
+            normalized_bytes: 2,
+            unsupported_items: 0,
+        }
+    }
+
+    pub(super) fn event(
+        &mut self,
+        payload: &[u8],
+        item_ordinal: usize,
+        record_ordinal: usize,
+    ) -> Result<(), SentryError> {
+        let mut raw: Value = serde_json::from_slice(payload)
+            .map_err(|_| SentryError::Malformed("invalid event payload"))?;
+        if !raw.is_object() {
+            return Err(SentryError::Malformed("event payload must be an object"));
+        }
+        validate_json_shape(&raw)?;
+        scrub::scrub(&mut raw, &self.project.scrub_keys);
+        let record = normalize_event(
+            raw,
+            self.project,
+            self.acceptance_id,
+            self.received_at_us,
+            item_ordinal,
+            record_ordinal,
+        )?;
+        self.push(record)
+    }
+
+    pub(super) fn logs(&mut self, payload: &[u8], item_ordinal: usize) -> Result<(), SentryError> {
+        let mut deserializer = serde_json::Deserializer::from_slice(payload);
+        let mut captured_error = None;
+        let result = LogBatchSeed {
+            normalizer: self,
+            item_ordinal,
+            captured_error: &mut captured_error,
+        }
+        .deserialize(&mut deserializer);
+        if let Some(error) = captured_error {
+            return Err(error);
+        }
+        result.map_err(|_| SentryError::Malformed("invalid structured log payload"))?;
+        deserializer
+            .end()
+            .map_err(|_| SentryError::Malformed("invalid structured log payload"))?;
+        Ok(())
+    }
+
+    pub(super) fn unsupported_item(&mut self) -> Result<(), SentryError> {
+        self.unsupported_items = self
+            .unsupported_items
+            .checked_add(1)
+            .ok_or(SentryError::TooLarge("unsupported item count overflow"))?;
+        Ok(())
+    }
+
+    pub(super) fn finish(
+        self,
+        envelope_auth: Option<EnvelopeAuth>,
+    ) -> Result<NormalizedRequest, SentryError> {
+        Ok(NormalizedRequest {
+            records: self.records,
+            unsupported_items: self.unsupported_items,
+            envelope_auth,
+        })
+    }
+
+    fn log(
+        &mut self,
+        mut raw: Value,
+        item_ordinal: usize,
+        record_ordinal: usize,
+    ) -> Result<(), SentryError> {
+        if !raw.is_object() {
+            return Err(SentryError::Malformed(
+                "structured log record must be an object",
+            ));
+        }
+        validate_json_shape(&raw)?;
+        scrub::scrub(&mut raw, &self.project.scrub_keys);
+        let record = normalize_log(
+            raw,
+            self.project,
+            self.acceptance_id,
+            self.received_at_us,
+            item_ordinal,
+            record_ordinal,
+        )?;
+        self.push(record)
+    }
+
+    fn push(&mut self, record: Record) -> Result<(), SentryError> {
+        if self.records.len() >= self.limits.request_records {
+            return Err(SentryError::TooLarge("record count exceeds limit"));
+        }
+        let bytes = serde_json::to_vec(&record)
+            .map_err(|_| SentryError::Malformed("normalized record serialization failed"))?
+            .len();
+        if bytes > self.limits.record_bytes {
+            return Err(SentryError::TooLarge("normalized record exceeds limit"));
+        }
+        let separator = usize::from(!self.records.is_empty());
+        self.normalized_bytes = self
+            .normalized_bytes
+            .checked_add(separator)
+            .and_then(|value| value.checked_add(bytes))
+            .ok_or(SentryError::TooLarge("normalized request size overflow"))?;
+        if self.normalized_bytes > self.limits.decoded_bytes {
+            return Err(SentryError::TooLarge("normalized request exceeds limit"));
+        }
+        self.records.push(record);
+        Ok(())
+    }
+}
+
+struct LogBatchSeed<'a, 'project> {
+    normalizer: &'a mut RequestNormalizer<'project>,
+    item_ordinal: usize,
+    captured_error: &'a mut Option<SentryError>,
+}
+
+impl<'de> DeserializeSeed<'de> for LogBatchSeed<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(LogBatchVisitor {
+            normalizer: self.normalizer,
+            item_ordinal: self.item_ordinal,
+            captured_error: self.captured_error,
+        })
+    }
+}
+
+struct LogBatchVisitor<'a, 'project> {
+    normalizer: &'a mut RequestNormalizer<'project>,
+    item_ordinal: usize,
+    captured_error: &'a mut Option<SentryError>,
+}
+
+impl<'de> Visitor<'de> for LogBatchVisitor<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a Sentry structured log batch object")
+    }
+
+    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+    where
+        M: MapAccess<'de>,
+    {
+        let mut version = None;
+        let mut saw_items = false;
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "version" => {
+                    if version.is_some() {
+                        return Err(de::Error::duplicate_field("version"));
+                    }
+                    version = Some(map.next_value::<u64>()?);
+                }
+                "items" => {
+                    if saw_items {
+                        return Err(de::Error::duplicate_field("items"));
+                    }
+                    saw_items = true;
+                    map.next_value_seed(LogItemsSeed {
+                        normalizer: self.normalizer,
+                        item_ordinal: self.item_ordinal,
+                        captured_error: self.captured_error,
+                    })?;
+                }
+                _ => {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+        }
+        if version != Some(2) {
+            return Err(de::Error::custom(
+                "unsupported structured log payload version",
+            ));
+        }
+        if !saw_items {
+            return Err(de::Error::missing_field("items"));
+        }
+        Ok(())
+    }
+}
+
+struct LogItemsSeed<'a, 'project> {
+    normalizer: &'a mut RequestNormalizer<'project>,
+    item_ordinal: usize,
+    captured_error: &'a mut Option<SentryError>,
+}
+
+impl<'de> DeserializeSeed<'de> for LogItemsSeed<'_, '_> {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(LogItemsVisitor {
+            normalizer: self.normalizer,
+            item_ordinal: self.item_ordinal,
+            captured_error: self.captured_error,
+        })
+    }
+}
+
+struct LogItemsVisitor<'a, 'project> {
+    normalizer: &'a mut RequestNormalizer<'project>,
+    item_ordinal: usize,
+    captured_error: &'a mut Option<SentryError>,
+}
+
+impl<'de> Visitor<'de> for LogItemsVisitor<'_, '_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("an array of Sentry structured log records")
+    }
+
+    fn visit_seq<S>(self, mut sequence: S) -> Result<Self::Value, S::Error>
+    where
+        S: SeqAccess<'de>,
+    {
+        let mut ordinal = 0;
+        while let Some(value) = sequence.next_element::<Value>()? {
+            if let Err(error) = self.normalizer.log(value, self.item_ordinal, ordinal) {
+                *self.captured_error = Some(error);
+                return Err(de::Error::custom("structured log normalization failed"));
+            }
+            ordinal += 1;
+        }
+        Ok(())
+    }
+}
+
+fn normalize_event(
+    raw: Value,
+    project: &ProjectContext,
+    acceptance_id: Uuid,
+    received_at_us: i64,
+    item_ordinal: usize,
+    record_ordinal: usize,
+) -> Result<Record, SentryError> {
+    let source_event_id = canonical_event_id(raw.get("event_id"))?;
+    let record_id = source_event_id.as_deref().map_or_else(
+        || {
+            identity::accepted_record_id(
+                project.project_id,
+                acceptance_id,
+                item_ordinal,
+                record_ordinal,
+            )
+        },
+        |event_id| identity::error_record_id(project.project_id, event_id),
+    );
+    let mut indexing_warnings = Vec::new();
+    let timestamp_us = timestamp_us(raw.get("timestamp"), received_at_us, &mut indexing_warnings)?;
+    let message = event_message(&raw);
+    let level = canonical_level(raw.get("level").and_then(Value::as_str).unwrap_or("error"))?;
+    let logger = string_at(&raw, &["logger"]);
+    let environment = string_at(&raw, &["environment"]);
+    let release = string_at(&raw, &["release"]);
+    let service = string_at(&raw, &["service"])
+        .or_else(|| string_at(&raw, &["tags", "service.name"]))
+        .unwrap_or_else(|| project.slug.clone());
+    let trace_id = string_at(&raw, &["contexts", "trace", "trace_id"]);
+    let span_id = string_at(&raw, &["contexts", "trace", "span_id"]);
+    let request_id = first_string(
+        &raw,
+        &[
+            &["request_id"],
+            &["tags", "request_id"],
+            &["tags", "request.id"],
+            &["contexts", "request", "id"],
+        ],
+    );
+    let user_id = string_at(&raw, &["user", "id"]);
+    let user_email = string_at(&raw, &["user", "email"]);
+    let attributes = event_attributes(&raw);
+    let default_parts = default_fingerprint_parts(&raw, &message, logger.as_deref());
+    let fingerprint_parts = explicit_fingerprint_parts(raw.get("fingerprint"), &default_parts)?;
+    let fingerprint = identity::fingerprint(&fingerprint_parts);
+    let issue_id = identity::issue_id(project.project_id, FINGERPRINT_VERSION, &fingerprint);
+    let search_text = event_search_projection(&message, &raw, &mut indexing_warnings);
+
+    Ok(Record {
+        record_id,
+        kind: RecordKind::Error,
+        project_id: project.project_id,
+        source_event_id,
+        ingest_seq: 0,
+        received_at_us,
+        timestamp_us,
+        service,
+        environment,
+        release,
+        level,
+        logger,
+        message,
+        trace_id,
+        span_id,
+        request_id,
+        user_id,
+        user_email,
+        issue_id: Some(issue_id),
+        fingerprint_version: Some(FINGERPRINT_VERSION),
+        fingerprint: Some(fingerprint),
+        attributes,
+        search_text,
+        raw_json: raw,
+        normalizer_version: NORMALIZER_VERSION,
+        indexing_warnings,
+    })
+}
+
+fn normalize_log(
+    raw: Value,
+    project: &ProjectContext,
+    acceptance_id: Uuid,
+    received_at_us: i64,
+    item_ordinal: usize,
+    record_ordinal: usize,
+) -> Result<Record, SentryError> {
+    let mut indexing_warnings = Vec::new();
+    let timestamp_us = timestamp_us(raw.get("timestamp"), received_at_us, &mut indexing_warnings)?;
+    let message = raw
+        .get("body")
+        .and_then(Value::as_str)
+        .ok_or(SentryError::Malformed(
+            "structured log body must be a string",
+        ))?
+        .to_owned();
+    let level = canonical_level(raw.get("level").and_then(Value::as_str).ok_or(
+        SentryError::Malformed("structured log level must be a string"),
+    )?)?;
+    let attributes = flattened_log_attributes(&raw)?;
+    let service = string_at(&attributes, &["service.name"]).unwrap_or_else(|| project.slug.clone());
+    let environment = string_at(&attributes, &["sentry.environment"]);
+    let release = string_at(&attributes, &["sentry.release"]);
+    let logger = string_at(&attributes, &["logger.name"]);
+    let trace_id = string_at(&raw, &["trace_id"]);
+    let span_id = first_string(
+        &raw,
+        &[&["span_id"], &["attributes", "sentry.span_id", "value"]],
+    );
+    let request_id = first_string(
+        &attributes,
+        &[&["request_id"], &["request.id"], &["http.request.id"]],
+    );
+    let user_id = string_at(&attributes, &["user.id"]);
+    let user_email = string_at(&attributes, &["user.email"]);
+    let search_text = log_search_projection(&message, &attributes, &mut indexing_warnings);
+
+    Ok(Record {
+        record_id: identity::accepted_record_id(
+            project.project_id,
+            acceptance_id,
+            item_ordinal,
+            record_ordinal,
+        ),
+        kind: RecordKind::Log,
+        project_id: project.project_id,
+        source_event_id: None,
+        ingest_seq: 0,
+        received_at_us,
+        timestamp_us,
+        service,
+        environment,
+        release,
+        level,
+        logger,
+        message,
+        trace_id,
+        span_id,
+        request_id,
+        user_id,
+        user_email,
+        issue_id: None,
+        fingerprint_version: None,
+        fingerprint: None,
+        attributes,
+        search_text,
+        raw_json: raw,
+        normalizer_version: NORMALIZER_VERSION,
+        indexing_warnings,
+    })
+}
+
+pub(super) fn validate_json_shape(value: &Value) -> Result<(), SentryError> {
+    let mut nodes = 0usize;
+    let mut stack = vec![(value, 1usize)];
+    while let Some((node, depth)) = stack.pop() {
+        nodes = nodes
+            .checked_add(1)
+            .ok_or(SentryError::TooLarge("JSON node count overflow"))?;
+        if nodes > MAX_JSON_NODES {
+            return Err(SentryError::TooLarge(
+                "record JSON node count exceeds limit",
+            ));
+        }
+        if depth > MAX_JSON_DEPTH {
+            return Err(SentryError::TooLarge("record JSON depth exceeds limit"));
+        }
+        match node {
+            Value::Array(values) => stack.extend(values.iter().map(|child| (child, depth + 1))),
+            Value::Object(object) => stack.extend(object.values().map(|child| (child, depth + 1))),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn canonical_event_id(value: Option<&Value>) -> Result<Option<String>, SentryError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let event_id = value
+        .as_str()
+        .ok_or(SentryError::Malformed("event_id must be a string"))?;
+    if event_id.len() != 32 || !event_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(SentryError::Malformed(
+            "event_id must be 32 hexadecimal characters",
+        ));
+    }
+    Ok(Some(event_id.to_ascii_lowercase()))
+}
+
+fn canonical_level(level: &str) -> Result<String, SentryError> {
+    match level.to_ascii_lowercase().as_str() {
+        "trace" => Ok("trace".to_owned()),
+        "debug" => Ok("debug".to_owned()),
+        "info" | "log" => Ok("info".to_owned()),
+        "warn" | "warning" => Ok("warning".to_owned()),
+        "error" => Ok("error".to_owned()),
+        "fatal" | "critical" => Ok("fatal".to_owned()),
+        _ => Err(SentryError::Malformed("unsupported event or log level")),
+    }
+}
+
+fn timestamp_us(
+    value: Option<&Value>,
+    received_at_us: i64,
+    warnings: &mut Vec<String>,
+) -> Result<i64, SentryError> {
+    if received_at_us.checked_mul(1_000).is_none() {
+        return Err(SentryError::Malformed(
+            "received timestamp is outside native index range",
+        ));
+    }
+    let parsed = value
+        .and_then(parse_timestamp_us)
+        .filter(|timestamp| timestamp.checked_mul(1_000).is_some());
+    match parsed {
+        Some(timestamp) => Ok(timestamp),
+        None => {
+            warnings.push("timestamp_fallback".to_owned());
+            Ok(received_at_us)
+        }
+    }
+}
+
+fn parse_timestamp_us(value: &Value) -> Option<i64> {
+    if let Some(seconds) = value.as_f64() {
+        let micros = seconds * 1_000_000.0;
+        if micros.is_finite() && micros >= i64::MIN as f64 && micros <= i64::MAX as f64 {
+            return Some(micros.round() as i64);
+        }
+        return None;
+    }
+    let text = value.as_str()?;
+    if let Ok(seconds) = text.parse::<f64>() {
+        let micros = seconds * 1_000_000.0;
+        if micros.is_finite() && micros >= i64::MIN as f64 && micros <= i64::MAX as f64 {
+            return Some(micros.round() as i64);
+        }
+    }
+    let timestamp = OffsetDateTime::parse(text, &Rfc3339).ok()?;
+    let nanos = timestamp.unix_timestamp_nanos();
+    i64::try_from(nanos.div_euclid(1_000)).ok()
+}
+
+fn event_message(raw: &Value) -> String {
+    if let Some(message) = string_at(raw, &["message"]) {
+        return message;
+    }
+    if let Some(message) = string_at(raw, &["logentry", "formatted"])
+        .or_else(|| string_at(raw, &["logentry", "message"]))
+    {
+        return message;
+    }
+    raw.get("exception")
+        .and_then(|value| value.get("values"))
+        .and_then(Value::as_array)
+        .and_then(|values| values.last())
+        .and_then(|exception| exception.get("value"))
+        .and_then(Value::as_str)
+        .unwrap_or("event")
+        .to_owned()
+}
+
+fn event_attributes(raw: &Value) -> Value {
+    let mut attributes = Map::new();
+    for key in ["extra", "tags", "contexts", "request", "user"] {
+        if let Some(value) = raw.get(key) {
+            attributes.insert(key.to_owned(), value.clone());
+        }
+    }
+    Value::Object(attributes)
+}
+
+fn flattened_log_attributes(raw: &Value) -> Result<Value, SentryError> {
+    let Some(attributes) = raw.get("attributes") else {
+        return Ok(Value::Object(Map::new()));
+    };
+    let object = attributes.as_object().ok_or(SentryError::Malformed(
+        "structured log attributes must be an object",
+    ))?;
+    let mut flattened = Map::new();
+    for (key, wrapper) in object {
+        let value = wrapper
+            .as_object()
+            .and_then(|wrapper| wrapper.get("value"))
+            .ok_or(SentryError::Malformed(
+                "structured log attribute must contain value",
+            ))?;
+        flattened.insert(key.clone(), value.clone());
+    }
+    Ok(Value::Object(flattened))
+}
+
+fn default_fingerprint_parts(raw: &Value, message: &str, logger: Option<&str>) -> Vec<String> {
+    let mut parts = Vec::new();
+    let exception = raw
+        .get("exception")
+        .and_then(|value| value.get("values"))
+        .and_then(Value::as_array)
+        .and_then(|values| values.last());
+    if let Some(exception) = exception {
+        if let Some(kind) = exception.get("type").and_then(Value::as_str) {
+            parts.push(format!("type:{}", normalize_fingerprint_text(kind)));
+        }
+        parts.push(format!("message:{}", normalize_fingerprint_text(message)));
+        let frames = exception
+            .get("stacktrace")
+            .and_then(|value| value.get("frames"))
+            .or_else(|| raw.get("stacktrace").and_then(|value| value.get("frames")))
+            .and_then(Value::as_array);
+        if let Some(frames) = frames {
+            let in_app: Vec<&Value> = frames
+                .iter()
+                .filter(|frame| frame.get("in_app").and_then(Value::as_bool) == Some(true))
+                .collect();
+            let selected: Vec<&Value> = if in_app.is_empty() {
+                frames.iter().collect()
+            } else {
+                in_app
+            };
+            let start = selected.len().saturating_sub(5);
+            for frame in &selected[start..] {
+                for key in ["module", "function", "filename"] {
+                    let value = frame.get(key).and_then(Value::as_str).unwrap_or("");
+                    parts.push(format!("frame.{key}:{}", normalize_fingerprint_text(value)));
+                }
+            }
+        }
+    } else {
+        parts.push(format!(
+            "logger:{}",
+            normalize_fingerprint_text(logger.unwrap_or(""))
+        ));
+        parts.push(format!("message:{}", normalize_fingerprint_text(message)));
+    }
+    parts
+}
+
+fn explicit_fingerprint_parts(
+    fingerprint: Option<&Value>,
+    default: &[String],
+) -> Result<Vec<String>, SentryError> {
+    let Some(fingerprint) = fingerprint else {
+        return Ok(default.to_vec());
+    };
+    let values = fingerprint.as_array().ok_or(SentryError::Malformed(
+        "fingerprint must be an array of strings",
+    ))?;
+    if values.is_empty() {
+        return Ok(default.to_vec());
+    }
+    let mut parts = Vec::new();
+    for value in values {
+        let value = value.as_str().ok_or(SentryError::Malformed(
+            "fingerprint must be an array of strings",
+        ))?;
+        if value == "{{ default }}" {
+            parts.extend_from_slice(default);
+        } else {
+            parts.push(normalize_fingerprint_text(value));
+        }
+    }
+    Ok(parts)
+}
+
+fn normalize_fingerprint_text(input: &str) -> String {
+    input
+        .split_whitespace()
+        .map(normalize_fingerprint_token)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_fingerprint_token(token: &str) -> String {
+    let token =
+        if (token.starts_with("http://") || token.starts_with("https://")) && token.contains('?') {
+            format!(
+                "{}?<query>",
+                token.split_once('?').expect("checked above").0
+            )
+        } else {
+            token.to_owned()
+        };
+    let chars: Vec<char> = token.chars().collect();
+    let mut output = String::new();
+    let mut index = 0;
+    while index < chars.len() {
+        if is_uuid_at(&chars, index) {
+            output.push_str("<uuid>");
+            index += 36;
+            continue;
+        }
+        if chars[index] == '0'
+            && chars
+                .get(index + 1)
+                .is_some_and(|character| *character == 'x' || *character == 'X')
+        {
+            let end = ascii_run_end(&chars, index + 2, |character| character.is_ascii_hexdigit());
+            if end.saturating_sub(index + 2) >= 8 {
+                output.push_str("<addr>");
+                index = end;
+                continue;
+            }
+        }
+        if chars[index].is_ascii_hexdigit() {
+            let end = ascii_run_end(&chars, index, |character| character.is_ascii_hexdigit());
+            if end - index >= 16 {
+                output.push_str("<hex>");
+                index = end;
+                continue;
+            }
+        }
+        if chars[index].is_ascii_digit() {
+            let end = ascii_run_end(&chars, index, |character| character.is_ascii_digit());
+            if end - index >= 6 {
+                output.push_str("<id>");
+                index = end;
+                continue;
+            }
+        }
+        output.push(chars[index]);
+        index += 1;
+    }
+    output
+}
+
+fn ascii_run_end(chars: &[char], start: usize, predicate: impl Fn(char) -> bool) -> usize {
+    let mut end = start;
+    while chars.get(end).copied().is_some_and(&predicate) {
+        end += 1;
+    }
+    end
+}
+
+fn is_uuid_at(chars: &[char], start: usize) -> bool {
+    if start + 36 > chars.len() {
+        return false;
+    }
+    (0..36).all(|offset| match offset {
+        8 | 13 | 18 | 23 => chars[start + offset] == '-',
+        _ => chars[start + offset].is_ascii_hexdigit(),
+    })
+}
+
+fn event_search_projection(message: &str, raw: &Value, warnings: &mut Vec<String>) -> String {
+    let mut projection = Projection::default();
+    projection.push_text(message);
+    if let Some(exception) = raw.get("exception") {
+        projection.walk(exception, 1);
+    }
+    if let Some(values) = raw
+        .get("breadcrumbs")
+        .and_then(|breadcrumbs| breadcrumbs.get("values"))
+        .and_then(Value::as_array)
+    {
+        for breadcrumb in values {
+            if let Some(message) = breadcrumb.get("message") {
+                projection.walk(message, 1);
+            }
+        }
+    }
+    for key in ["extra", "contexts", "tags", "user"] {
+        if let Some(value) = raw.get(key) {
+            projection.walk(value, 1);
+        }
+    }
+    if let Some(url) = raw.get("request").and_then(|request| request.get("url")) {
+        projection.walk(url, 1);
+    }
+    warnings.extend(projection.warnings());
+    projection.text
+}
+
+fn log_search_projection(message: &str, attributes: &Value, warnings: &mut Vec<String>) -> String {
+    let mut projection = Projection::default();
+    projection.push_text(message);
+    projection.walk(attributes, 1);
+    warnings.extend(projection.warnings());
+    projection.text
+}
+
+#[derive(Default)]
+struct Projection {
+    text: String,
+    scalars: usize,
+    depth_truncated: bool,
+    scalar_truncated: bool,
+    text_truncated: bool,
+}
+
+impl Projection {
+    fn walk(&mut self, value: &Value, depth: usize) {
+        if self.scalar_truncated || self.text_truncated {
+            return;
+        }
+        if depth > MAX_SEARCH_DEPTH {
+            self.depth_truncated = true;
+            return;
+        }
+        match value {
+            Value::Array(values) => {
+                for value in values {
+                    self.walk(value, depth + 1);
+                }
+            }
+            Value::Object(object) => {
+                for value in object.values() {
+                    self.walk(value, depth + 1);
+                }
+            }
+            Value::String(value) => self.push_scalar(value),
+            Value::Number(value) => self.push_scalar(&value.to_string()),
+            Value::Bool(value) => self.push_scalar(if *value { "true" } else { "false" }),
+            Value::Null => {}
+        }
+    }
+
+    fn push_scalar(&mut self, value: &str) {
+        if self.scalars >= MAX_SEARCH_SCALARS {
+            self.scalar_truncated = true;
+            return;
+        }
+        self.scalars += 1;
+        self.push_text(value);
+    }
+
+    fn push_text(&mut self, value: &str) {
+        if self.text_truncated || value.is_empty() {
+            return;
+        }
+        let separator = usize::from(!self.text.is_empty());
+        let available = MAX_SEARCH_BYTES.saturating_sub(self.text.len() + separator);
+        if available == 0 {
+            self.text_truncated = true;
+            return;
+        }
+        if separator == 1 {
+            self.text.push(' ');
+        }
+        if value.len() <= available {
+            self.text.push_str(value);
+            return;
+        }
+        let mut boundary = available;
+        while boundary > 0 && !value.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        self.text.push_str(&value[..boundary]);
+        self.text_truncated = true;
+    }
+
+    fn warnings(&self) -> Vec<String> {
+        let flags = BTreeMap::from([
+            ("search_depth_truncated", self.depth_truncated),
+            ("search_scalar_truncated", self.scalar_truncated),
+            ("search_text_truncated", self.text_truncated),
+        ]);
+        flags
+            .into_iter()
+            .filter(|(_, present)| *present)
+            .map(|(warning, _)| warning.to_owned())
+            .collect()
+    }
+}
+
+fn first_string(value: &Value, paths: &[&[&str]]) -> Option<String> {
+    paths.iter().find_map(|path| string_at(value, path))
+}
+
+fn string_at(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_str().map(ToOwned::to_owned)
+}

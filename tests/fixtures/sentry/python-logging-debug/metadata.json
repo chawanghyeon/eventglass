@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "case": "python-logging-debug",
+  "capture": "real_sdk_to_localhost_http",
+  "sdk": {
+    "package": "sentry-sdk",
+    "version": "2.69.0"
+  },
+  "runtime": "Python 3.12.10",
+  "dsn": "http://fixturePublicKey@127.0.0.1:PORT/1",
+  "response": {
+    "status": 202,
+    "content_type": "application/json",
+    "body": "{}"
+  },
+  "integration_options": {
+    "enable_logs": true,
+    "logging_level": "INFO",
+    "event_level": "ERROR",
+    "sentry_logs_level": "DEBUG"
+  },
+  "expected_kinds": [
+    "log"
+  ],
+  "requests": [
+    {
+      "file": "envelopes/001.envelope",
+      "content_encoding": "gzip",
+      "original_transfer_encoding": "content-length",
+      "wire_bytes": 534,
+      "decompressed_bytes": 1401,
+      "sha256": "eba2597c7025102ba13eee9161eeb2f3ad33f61e2d0609238adb853eddc11894",
+      "item_types": [
+        "log"
+      ]
+    }
+  ],
+  "sanitization": [
+    "dynamic event/trace/span IDs replaced by stable ordinal IDs",
+    "timestamps fixed to 2026-01-02T03:04:05Z",
+    "repository path replaced by <REPO>",
+    "localhost ephemeral port replaced by PORT",
+    "inner item byte lengths and outer HTTP content-length recomputed"
+  ]
+}

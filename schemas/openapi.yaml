@@ -1,0 +1,1510 @@
+openapi: 3.1.0
+info:
+  title: Eventglass API
+  version: 0.1.0
+  description: Eventglass setup, session, project, Issue, log search, record detail, and system contracts.
+servers:
+  - url: /
+paths:
+  /api/setup:
+    post:
+      operationId: setup
+      summary: Create the first administrator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetupRequest"
+      responses:
+        "201":
+          description: Administrator created
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/auth/login:
+    post:
+      operationId: login
+      summary: Start an administrator session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Credentials"
+      responses:
+        "200":
+          description: Session started
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/auth/me:
+    get:
+      operationId: getSession
+      summary: Read the active session
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Active principal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "401":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/auth/logout:
+    post:
+      operationId: logout
+      summary: End the active session
+      security:
+        - cookieAuth: []
+      responses:
+        "204":
+          description: Session ended
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/users:
+    get:
+      operationId: listUsers
+      summary: List users as an administrator
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Users
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserList"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createUser
+      summary: Create a user as an administrator
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateUserInput"
+      responses:
+        "201":
+          description: User created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/users/{id}:
+    patch:
+      operationId: updateUser
+      summary: Change a user's role or active state
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserInput"
+      responses:
+        "204":
+          description: User updated
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects:
+    get:
+      operationId: listProjects
+      summary: List projects visible to the active principal
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Visible projects
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectList"
+        "401":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createProject
+      summary: Create a project
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectInput"
+      responses:
+        "201":
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{id}:
+    patch:
+      operationId: updateProject
+      summary: Activate or deactivate a project
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectUpdate"
+      responses:
+        "204":
+          description: Project updated
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{id}/keys:
+    post:
+      operationId: createProjectKey
+      summary: Issue a project DSN key
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "201":
+          description: One-time key and DSN
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectKey"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/projects/{id}/keys/{key_id}:
+    delete:
+      operationId: revokeProjectKey
+      summary: Revoke a project key
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+        - $ref: "#/components/parameters/KeyId"
+      responses:
+        "204":
+          description: Key revoked
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/issues:
+    get:
+      operationId: listIssues
+      summary: List Issues for an active project
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: project_id
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/PositiveDecimalString"
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/IssueStatus"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor_last_seen_us
+          in: query
+          description: Must be paired with cursor_id.
+          schema:
+            $ref: "#/components/schemas/Int64String"
+        - name: cursor_id
+          in: query
+          description: Must be paired with cursor_last_seen_us.
+          schema:
+            $ref: "#/components/schemas/IssueId"
+      responses:
+        "200":
+          description: Stable page ordered by last seen descending and Issue ID ascending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssuePage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}:
+    get:
+      operationId: getIssue
+      summary: Read scrubbed mutable Issue metadata
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IssueId"
+      responses:
+        "200":
+          description: Issue metadata without raw occurrence payloads
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Issue"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateIssue
+      summary: Change Issue status with revision compare-and-swap
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IssueId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/IssueUpdate"
+      responses:
+        "200":
+          description: Updated Issue metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Issue"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/events:
+    get:
+      operationId: listIssueOccurrences
+      summary: List occurrence identities without raw payload hydration
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IssueId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor_occurred_at_us
+          in: query
+          description: Must be paired with cursor_ingest_seq.
+          schema:
+            $ref: "#/components/schemas/Int64String"
+        - name: cursor_ingest_seq
+          in: query
+          description: Must be paired with cursor_occurred_at_us.
+          schema:
+            $ref: "#/components/schemas/PositiveDecimalString"
+      responses:
+        "200":
+          description: Stable page ordered by occurrence time and ingest sequence descending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OccurrencePage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/issues/{id}/events/{record_id}:
+    get:
+      operationId: getIssueOccurrence
+      summary: Hydrate the scrubbed payload for one Issue occurrence
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/IssueId"
+        - name: record_id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+      responses:
+        "200":
+          description: Normalized and scrubbed stored occurrence payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordDetail"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
+  /api/logs:
+    get:
+      operationId: listLogs
+      summary: Search projected log and error rows in a stable read snapshot
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: projects
+          in: query
+          description: Comma-separated positive decimal project IDs. Omitted means all active projects visible to the principal.
+          schema:
+            type: string
+        - name: start
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: query
+          in: query
+          schema:
+            type: string
+            maxLength: 8192
+        - name: filters
+          in: query
+          description: JSON-encoded SearchFilters object.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: read_token
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Rows ordered by timestamp and ingest sequence descending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
+  /api/explore/search:
+    post:
+      operationId: searchLogs
+      summary: Search projected log and error rows with a JSON request
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Rows ordered by timestamp and ingest sequence descending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
+  /api/records/{detail_token}:
+    get:
+      operationId: getRecord
+      summary: Hydrate one scrubbed stored payload using its opaque detail token
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: detail_token
+          in: path
+          required: true
+          schema:
+            type: string
+            maxLength: 12288
+      responses:
+        "200":
+          description: Normalized and scrubbed stored payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordDetail"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "410":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
+  /api/system/status:
+    get:
+      operationId: getSystemStatus
+      summary: Read implementation and readiness status
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: System status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemStatus"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/explore/aggregate:
+    post:
+      operationId: aggregate
+      summary: Aggregate an authorized read snapshot
+      security:
+      - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AggregateRequest'
+      responses:
+        '200':
+          description: Exact native aggregation for the shared read snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AggregateResponse'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+        '410':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+        '504':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: eventglass_session
+  parameters:
+    ProjectId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[0-9]+$"
+    KeyId:
+      name: key_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[0-9]+$"
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[0-9]+$"
+    IssueId:
+      name: id
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/IssueId"
+  responses:
+    Error:
+      description: Request failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorEnvelope"
+  schemas:
+    SetupRequest:
+      type: object
+      additionalProperties: false
+      required: [token, email, password]
+      properties:
+        token:
+          type: string
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+    Credentials:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          maxLength: 254
+        password:
+          type: string
+          maxLength: 128
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required: [csrf_token]
+      properties:
+        csrf_token:
+          type: string
+    Session:
+      type: object
+      additionalProperties: false
+      required: [id, email, role, csrf_token]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [admin, member]
+        csrf_token:
+          type: string
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, email, role, is_active]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        role:
+          type: string
+          enum: [admin, member]
+        is_active:
+          type: boolean
+    UserList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+    CreateUserInput:
+      type: object
+      additionalProperties: false
+      required: [email, password, role]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 12
+          maxLength: 128
+        role:
+          type: string
+          enum: [admin, member]
+    UpdateUserInput:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        role:
+          type: string
+          enum: [admin, member]
+        is_active:
+          type: boolean
+    Project:
+      type: object
+      additionalProperties: false
+      required: [id, slug, name, is_active]
+      properties:
+        id:
+          type: string
+        slug:
+          type: string
+        name:
+          type: string
+        is_active:
+          type: boolean
+    ProjectList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Project"
+    ProjectInput:
+      type: object
+      additionalProperties: false
+      required: [slug, name]
+      properties:
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[a-z0-9-]+$"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+    ProjectUpdate:
+      type: object
+      additionalProperties: false
+      required: [is_active]
+      properties:
+        is_active:
+          type: boolean
+    IdResponse:
+      type: object
+      additionalProperties: false
+      required: [id]
+      properties:
+        id:
+          type: string
+    ProjectKey:
+      type: object
+      additionalProperties: false
+      required: [id, public_key, dsn]
+      properties:
+        id:
+          type: string
+        public_key:
+          type: string
+        dsn:
+          type: string
+          format: uri
+    Int64String:
+      type: string
+      pattern: "^-?[0-9]+$"
+      description: Signed 64-bit integer encoded as a decimal string.
+    PositiveDecimalString:
+      type: string
+      pattern: "^[1-9][0-9]*$"
+      description: Positive 64-bit integer encoded as a decimal string.
+    NonNegativeDecimalString:
+      type: string
+      pattern: "^[0-9]+$"
+      description: Non-negative 64-bit integer encoded as a decimal string.
+    IssueId:
+      type: string
+      pattern: "^[0-9a-f]{64}$"
+    IssueStatus:
+      type: string
+      enum: [unresolved, resolved, ignored]
+    Issue:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - project_id
+        - fingerprint
+        - fingerprint_version
+        - title
+        - culprit
+        - level
+        - status
+        - first_seen_us
+        - last_seen_us
+        - occurrence_count
+        - first_release
+        - last_release
+        - resolved_at_us
+        - resolved_through_ingest_seq
+        - revision
+        - created_at_us
+        - updated_at_us
+      properties:
+        id:
+          $ref: "#/components/schemas/IssueId"
+        project_id:
+          $ref: "#/components/schemas/PositiveDecimalString"
+        fingerprint:
+          type: string
+        fingerprint_version:
+          $ref: "#/components/schemas/PositiveDecimalString"
+        title:
+          type: string
+        culprit:
+          type: [string, "null"]
+        level:
+          type: string
+        status:
+          $ref: "#/components/schemas/IssueStatus"
+        first_seen_us:
+          $ref: "#/components/schemas/Int64String"
+        last_seen_us:
+          $ref: "#/components/schemas/Int64String"
+        occurrence_count:
+          $ref: "#/components/schemas/PositiveDecimalString"
+        first_release:
+          type: [string, "null"]
+        last_release:
+          type: [string, "null"]
+        resolved_at_us:
+          oneOf:
+            - $ref: "#/components/schemas/Int64String"
+            - type: "null"
+        resolved_through_ingest_seq:
+          oneOf:
+            - $ref: "#/components/schemas/NonNegativeDecimalString"
+            - type: "null"
+        revision:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        created_at_us:
+          $ref: "#/components/schemas/Int64String"
+        updated_at_us:
+          $ref: "#/components/schemas/Int64String"
+    IssueCursor:
+      type: object
+      additionalProperties: false
+      required: [last_seen_us, id]
+      properties:
+        last_seen_us:
+          $ref: "#/components/schemas/Int64String"
+        id:
+          $ref: "#/components/schemas/IssueId"
+    IssuePage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Issue"
+        next_cursor:
+          oneOf:
+            - $ref: "#/components/schemas/IssueCursor"
+            - type: "null"
+    IssueUpdate:
+      type: object
+      additionalProperties: false
+      required: [status, expected_revision]
+      properties:
+        status:
+          $ref: "#/components/schemas/IssueStatus"
+        expected_revision:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+    Occurrence:
+      type: object
+      additionalProperties: false
+      required: [record_id, source_event_id, ingest_seq, occurred_at_us]
+      properties:
+        record_id:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        source_event_id:
+          type: [string, "null"]
+        ingest_seq:
+          $ref: "#/components/schemas/PositiveDecimalString"
+        occurred_at_us:
+          $ref: "#/components/schemas/Int64String"
+    OccurrenceCursor:
+      type: object
+      additionalProperties: false
+      required: [occurred_at_us, ingest_seq]
+      properties:
+        occurred_at_us:
+          $ref: "#/components/schemas/Int64String"
+        ingest_seq:
+          $ref: "#/components/schemas/PositiveDecimalString"
+    OccurrencePage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Occurrence"
+        next_cursor:
+          oneOf:
+            - $ref: "#/components/schemas/OccurrenceCursor"
+            - type: "null"
+    SearchProjectId:
+      oneOf:
+        - $ref: "#/components/schemas/PositiveDecimalString"
+        - type: integer
+          format: int64
+          minimum: 1
+      description: A positive project ID accepted as a decimal string or JSON integer.
+    SearchFilters:
+      type: object
+      additionalProperties: false
+      properties:
+        kinds:
+          type: array
+          maxItems: 64
+          items:
+            type: string
+            enum: [log, error]
+        services:
+          $ref: "#/components/schemas/SearchFilterValues"
+        levels:
+          $ref: "#/components/schemas/SearchFilterValues"
+        environments:
+          $ref: "#/components/schemas/SearchFilterValues"
+        releases:
+          $ref: "#/components/schemas/SearchFilterValues"
+        loggers:
+          $ref: "#/components/schemas/SearchFilterValues"
+    SearchFilterValues:
+      type: array
+      maxItems: 64
+      items:
+        type: string
+        maxLength: 8192
+    SearchRequest:
+      type: object
+      additionalProperties: false
+      required: [start, end]
+      properties:
+        projects:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/SearchProjectId"
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        query:
+          type: string
+          maxLength: 8192
+        filters:
+          $ref: "#/components/schemas/SearchFilters"
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: Defaults to 100 when omitted.
+        cursor:
+          type: string
+        read_token:
+          type: string
+    SearchRow:
+      type: object
+      additionalProperties: false
+      required:
+        - record_id
+        - kind
+        - project_id
+        - ingest_seq
+        - timestamp
+        - received_at
+        - service
+        - level
+        - message
+        - environment
+        - release
+        - logger
+        - trace_id
+        - span_id
+        - request_id
+        - issue_id
+        - fingerprint
+        - user_id
+        - user_email
+        - detail_token
+      properties:
+        record_id:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        kind:
+          type: string
+          enum: [log, error]
+        project_id:
+          $ref: "#/components/schemas/PositiveDecimalString"
+        ingest_seq:
+          $ref: "#/components/schemas/PositiveDecimalString"
+        timestamp:
+          type: string
+          format: date-time
+        received_at:
+          type: string
+          format: date-time
+        service:
+          type: string
+        level:
+          type: string
+        message:
+          type: string
+        environment:
+          type: [string, "null"]
+        release:
+          type: [string, "null"]
+        logger:
+          type: [string, "null"]
+        trace_id:
+          type: [string, "null"]
+        span_id:
+          type: [string, "null"]
+        request_id:
+          type: [string, "null"]
+        issue_id:
+          type: [string, "null"]
+        fingerprint:
+          type: [string, "null"]
+        user_id:
+          type: [string, "null"]
+        user_email:
+          type: [string, "null"]
+        detail_token:
+          type: string
+    SearchPage:
+      type: object
+      additionalProperties: false
+      required:
+        - rows
+        - next_cursor
+        - read_token
+        - watermark
+        - complete
+        - took_ms
+        - searched_shards
+        - hydrated_shards
+      properties:
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchRow"
+        next_cursor:
+          type: [string, "null"]
+        read_token:
+          type: string
+        watermark:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        complete:
+          type: boolean
+          const: true
+        took_ms:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        searched_shards:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+        hydrated_shards:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+    RecordDetail:
+      type: object
+      additionalProperties: false
+      required: [record_id, raw]
+      properties:
+        record_id:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        raw: {}
+    SystemStatus:
+      type: object
+      additionalProperties: false
+      required: [version, ready, implemented, pending]
+      properties:
+        version:
+          type: string
+        ready:
+          type: boolean
+        implemented:
+          type: array
+          items:
+            type: string
+        pending:
+          type: array
+          items:
+            type: string
+    ErrorEnvelope:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, request_id, retryable]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            request_id:
+              type: string
+            retryable:
+              type: boolean
+
+    AggregateMetricInput:
+      oneOf:
+      - type: object
+        additionalProperties: false
+        required:
+        - op
+        properties:
+          op:
+            type: string
+            enum:
+            - count
+          name: &id001
+            type: string
+            minLength: 1
+            maxLength: 128
+      - type: object
+        additionalProperties: false
+        required:
+        - op
+        - field
+        properties:
+          op:
+            type: string
+            enum:
+            - sum
+            - min
+            - max
+            - avg
+          name: *id001
+          field:
+            type: string
+            pattern: ^attributes\..+
+            maxLength: 523
+    AggregateRequest:
+      type: object
+      additionalProperties: false
+      required:
+      - start
+      - end
+      properties:
+        projects:
+          type: array
+          items:
+            $ref: '#/components/schemas/SearchProjectId'
+          maxItems: 1000
+        start:
+          type: string
+          format: date-time
+        end:
+          type: string
+          format: date-time
+        query:
+          type: string
+          maxLength: 8192
+        filters:
+          $ref: '#/components/schemas/SearchFilters'
+        read_token:
+          type: string
+          maxLength: 12288
+        metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/AggregateMetricInput'
+          maxItems: 8
+        group_by:
+          type: array
+          items: &id002
+            type: string
+            enum:
+            - service
+            - level
+            - environment
+            - release
+          maxItems: 2
+          uniqueItems: true
+        group_limit:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 10
+        histogram:
+          type: object
+          additionalProperties: false
+          required:
+          - field
+          - interval
+          properties:
+            field:
+              type: string
+              enum:
+              - timestamp
+            interval:
+              type: string
+              enum:
+              - auto
+              - 10s
+              - 1m
+              - 5m
+              - 1h
+              - 6h
+              - 1d
+    AggregateMetric:
+      oneOf:
+      - type: object
+        additionalProperties: false
+        required:
+        - name
+        - op
+        - value
+        - numeric_value_count
+        properties:
+          name: *id001
+          op:
+            type: string
+            enum:
+            - count
+          value:
+            $ref: '#/components/schemas/NonNegativeDecimalString'
+          numeric_value_count:
+            type: 'null'
+      - type: object
+        additionalProperties: false
+        required:
+        - name
+        - op
+        - value
+        - numeric_value_count
+        properties:
+          name: *id001
+          op:
+            type: string
+            enum:
+            - sum
+            - min
+            - max
+            - avg
+          value:
+            type:
+            - number
+            - 'null'
+          numeric_value_count:
+            oneOf:
+            - $ref: '#/components/schemas/NonNegativeDecimalString'
+            - type: 'null'
+    AggregateBucketKey:
+      oneOf:
+      - type: object
+        additionalProperties: false
+        required:
+        - type
+        - timestamp_us
+        properties:
+          type:
+            type: string
+            enum:
+            - timestamp
+          timestamp_us:
+            $ref: '#/components/schemas/Int64String'
+      - type: object
+        additionalProperties: false
+        required:
+        - type
+        - value
+        properties:
+          type:
+            type: string
+            enum:
+            - string
+          value:
+            type: string
+    AggregateBucket:
+      type: object
+      additionalProperties: false
+      required:
+      - key
+      - doc_count
+      - metrics
+      - children
+      properties:
+        key:
+          $ref: '#/components/schemas/AggregateBucketKey'
+        doc_count:
+          $ref: '#/components/schemas/NonNegativeDecimalString'
+        metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/AggregateMetric'
+        children:
+          oneOf:
+          - $ref: '#/components/schemas/AggregateBucketSet'
+          - type: 'null'
+    AggregateBucketSet:
+      type: object
+      additionalProperties: false
+      required:
+      - dimension
+      - buckets
+      - has_more
+      properties:
+        dimension:
+          oneOf:
+          - type: object
+            additionalProperties: false
+            required:
+            - histogram
+            properties:
+              histogram:
+                type: object
+                additionalProperties: false
+                required:
+                - interval_ms
+                properties:
+                  interval_ms:
+                    type: integer
+                    minimum: 1
+          - type: object
+            additionalProperties: false
+            required:
+            - group
+            properties:
+              group:
+                type: object
+                additionalProperties: false
+                required:
+                - field
+                properties:
+                  field: *id002
+        buckets:
+          type: array
+          items:
+            $ref: '#/components/schemas/AggregateBucket'
+        has_more:
+          type: boolean
+    AggregateWarning:
+      type: object
+      additionalProperties: false
+      required:
+      - numeric_exclusion_count_unavailable
+      properties:
+        numeric_exclusion_count_unavailable:
+          type: object
+          additionalProperties: false
+          required:
+          - metric
+          - field
+          properties:
+            metric: *id001
+            field:
+              type: object
+              additionalProperties: false
+              required:
+              - json
+              properties:
+                json:
+                  type: string
+    AggregateResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - record_count
+      - metrics
+      - buckets
+      - warnings
+      - read_token
+      - watermark
+      - complete
+      - took_ms
+      - searched_shards
+      - hydrated_shards
+      properties:
+        record_count:
+          $ref: '#/components/schemas/NonNegativeDecimalString'
+        metrics:
+          type: array
+          items:
+            $ref: '#/components/schemas/AggregateMetric'
+        buckets:
+          oneOf:
+          - $ref: '#/components/schemas/AggregateBucketSet'
+          - type: 'null'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/AggregateWarning'
+        read_token:
+          type: string
+        watermark:
+          $ref: '#/components/schemas/NonNegativeDecimalString'
+        complete:
+          type: boolean
+          const: true
+        took_ms:
+          $ref: '#/components/schemas/NonNegativeDecimalString'
+        searched_shards:
+          $ref: '#/components/schemas/NonNegativeDecimalString'
+        hydrated_shards:
+          $ref: '#/components/schemas/NonNegativeDecimalString'

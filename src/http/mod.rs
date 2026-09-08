@@ -1,0 +1,157 @@
+//! Same-origin administration API. Public ingestion authentication is separate.
+
+mod aggregate;
+#[cfg(feature = "embed-ui")]
+mod assets;
+mod auth;
+mod ingest;
+mod issue_detail;
+mod issues;
+mod projects;
+mod records;
+mod search;
+
+use std::sync::Arc;
+
+use auth::{create_user, list_users, login, logout, me, setup, status, update_user};
+use axum::{
+    Json, Router,
+    http::{HeaderValue, StatusCode, header},
+    response::{IntoResponse, Response},
+    routing::{delete, get, patch, post},
+};
+use issues::{get_issue, list_issues, list_occurrences, update_issue};
+use projects::{create_key, create_project, projects, revoke_key, update_project};
+use serde_json::json;
+
+use crate::app::AppState;
+
+pub use crate::auth::issue_setup_token;
+
+#[derive(Clone)]
+pub(super) struct HttpState {
+    pub(super) app: AppState,
+    pub(super) auth_attempts: Arc<crate::auth::AttemptLimiter>,
+}
+
+#[derive(Debug)]
+pub struct ApiError(pub StatusCode, pub &'static str);
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let mut response = (
+            self.0,
+            Json(json!({"error": {
+                "code": self.1,
+                "message": self.1,
+                "request_id": uuid::Uuid::new_v4().to_string(),
+                "retryable": self.0.is_server_error() || self.0 == StatusCode::TOO_MANY_REQUESTS
+            }})),
+        )
+            .into_response();
+        if self.0 == StatusCode::TOO_MANY_REQUESTS {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from_static("60"));
+        }
+        response
+    }
+}
+
+impl From<anyhow::Error> for ApiError {
+    fn from(error: anyhow::Error) -> Self {
+        if let Some(error) = error.downcast_ref::<crate::db::auth::AuthDbError>() {
+            use crate::db::auth::AuthDbError;
+            return match error {
+                AuthDbError::Forbidden => Self(StatusCode::FORBIDDEN, "admin_required"),
+                AuthDbError::SetupCompleted => Self(StatusCode::CONFLICT, "setup_completed"),
+                AuthDbError::SetupUnauthorized => {
+                    Self(StatusCode::FORBIDDEN, "setup_not_authorized")
+                }
+                AuthDbError::Conflict => Self(StatusCode::CONFLICT, "user_exists"),
+                AuthDbError::NotFound => Self(StatusCode::NOT_FOUND, "user_not_found"),
+                AuthDbError::LastAdmin => Self(StatusCode::CONFLICT, "last_admin_required"),
+                AuthDbError::InvalidRole => Self(StatusCode::BAD_REQUEST, "invalid_role"),
+            };
+        }
+        if let Some(error) = error.downcast_ref::<crate::db::projects::ManagementError>() {
+            use crate::db::projects::ManagementError;
+            return match error {
+                ManagementError::Forbidden => Self(StatusCode::FORBIDDEN, "admin_required"),
+                ManagementError::Conflict => Self(StatusCode::CONFLICT, "project_exists"),
+                ManagementError::NotFound => {
+                    Self(StatusCode::NOT_FOUND, "project_or_key_not_found")
+                }
+            };
+        }
+        // Database/native error strings can contain sensitive input or paths.
+        Self(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable")
+    }
+}
+
+pub(super) type ApiResult<T> = Result<T, ApiError>;
+
+async fn no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+pub fn router(app: AppState) -> Router {
+    let ingest = ingest::router(app.clone());
+    let router = Router::new()
+        .route("/healthz", get(|| async { StatusCode::OK }))
+        .route(
+            "/readyz",
+            get(
+                |axum::extract::State(state): axum::extract::State<HttpState>| async move {
+                    let ready = state
+                        .app
+                        .indexer
+                        .as_ref()
+                        .is_some_and(|indexer| indexer.ready());
+                    (
+                        if ready {
+                            StatusCode::OK
+                        } else {
+                            StatusCode::SERVICE_UNAVAILABLE
+                        },
+                        Json(json!({"ready":ready})),
+                    )
+                },
+            ),
+        )
+        .route("/api/setup", post(setup))
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/me", get(me))
+        .route("/api/auth/logout", post(logout))
+        .route("/api/users", get(list_users).post(create_user))
+        .route("/api/users/{id}", patch(update_user))
+        .route("/api/explore/search", post(search::post_search))
+        .route("/api/explore/aggregate", post(aggregate::post_aggregate))
+        .route("/api/logs", get(search::get_logs))
+        .route("/api/records/{detail_token}", get(records::get_record))
+        .route("/api/issues", get(list_issues))
+        .route("/api/issues/{id}", get(get_issue).patch(update_issue))
+        .route("/api/issues/{id}/events", get(list_occurrences))
+        .route(
+            "/api/issues/{id}/events/{record_id}",
+            get(issue_detail::get_occurrence_detail),
+        )
+        .route("/api/projects", get(projects).post(create_project))
+        .route("/api/projects/{id}", patch(update_project))
+        .route("/api/projects/{id}/keys", post(create_key))
+        .route("/api/projects/{id}/keys/{key_id}", delete(revoke_key))
+        .route("/api/system/status", get(status))
+        .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
+        .layer(axum::middleware::map_response(no_store))
+        .with_state(HttpState {
+            app,
+            auth_attempts: Arc::new(crate::auth::AttemptLimiter::default()),
+        })
+        .merge(ingest);
+    #[cfg(feature = "embed-ui")]
+    let router = router.fallback(assets::serve);
+    router
+}

@@ -1,0 +1,41 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+# The resolved repository path is intentionally dynamic.
+# shellcheck disable=SC1091
+. "$REPO_ROOT/tools/versions.env"
+
+[ "$(uname -s)" = Linux ] || { printf 'install-ci-tools: Linux is required\n' >&2; exit 1; }
+[ "$(uname -m)" = x86_64 ] || { printf 'install-ci-tools: x86_64 is required\n' >&2; exit 1; }
+
+for command_name in curl sha256sum tar; do
+    command -v "$command_name" >/dev/null 2>&1 || {
+        printf 'install-ci-tools: missing %s\n' "$command_name" >&2
+        exit 1
+    }
+done
+
+TOOLS_BIN="$REPO_ROOT/.tools/bin"
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/eventglass-ci-tools.XXXXXX")
+trap 'rm -rf "$WORK_DIR"' EXIT HUP INT TERM
+mkdir -p "$TOOLS_BIN" "$WORK_DIR/actionlint" "$WORK_DIR/shellcheck"
+
+actionlint_asset="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+curl --fail --location --silent --show-error \
+    --output "$WORK_DIR/$actionlint_asset" \
+    "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/$actionlint_asset"
+printf '%s  %s\n' "$ACTIONLINT_LINUX_AMD64_SHA256" "$WORK_DIR/$actionlint_asset" | sha256sum --check --status
+tar -xzf "$WORK_DIR/$actionlint_asset" -C "$WORK_DIR/actionlint"
+install -m 0755 "$WORK_DIR/actionlint/actionlint" "$TOOLS_BIN/actionlint"
+
+shellcheck_asset="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+curl --fail --location --silent --show-error \
+    --output "$WORK_DIR/$shellcheck_asset" \
+    "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/$shellcheck_asset"
+printf '%s  %s\n' "$SHELLCHECK_LINUX_X86_64_SHA256" "$WORK_DIR/$shellcheck_asset" | sha256sum --check --status
+tar -xJf "$WORK_DIR/$shellcheck_asset" -C "$WORK_DIR/shellcheck" --strip-components=1
+install -m 0755 "$WORK_DIR/shellcheck/shellcheck" "$TOOLS_BIN/shellcheck"
+
+printf 'install-ci-tools: installed actionlint %s and ShellCheck %s\n' "$ACTIONLINT_VERSION" "$SHELLCHECK_VERSION"

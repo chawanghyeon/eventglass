@@ -1,0 +1,80 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+# The resolved repository path is intentionally dynamic.
+# shellcheck disable=SC1091
+. "$REPO_ROOT/tools/versions.env"
+
+PATH="$REPO_ROOT/.tools/bin:$PATH"
+export PATH
+QUALITY_ENV="$REPO_ROOT/.tools/quality"
+: "${PRE_COMMIT_HOME:=$REPO_ROOT/.tools/pre-commit-cache}"
+export PRE_COMMIT_HOME
+
+fail() {
+    printf 'bootstrap: %s\n' "$*" >&2
+    exit 1
+}
+
+need_command() {
+    command -v "$1" >/dev/null 2>&1 || fail "missing $1; $2"
+}
+
+need_version() {
+    actual=$1
+    [ "$actual" = "$2" ] || fail "$3 version is '$actual', expected '$2'; $4"
+}
+
+need_command git "install Git, then rerun ./scripts/bootstrap"
+need_command rustc "install Rust $RUST_VERSION with rustup"
+need_command cargo "install Rust $RUST_VERSION with rustup"
+need_command rustfmt "run: rustup component add rustfmt --toolchain $RUST_VERSION"
+need_command cargo-clippy "run: rustup component add clippy --toolchain $RUST_VERSION"
+need_command node "install Node.js $NODE_VERSION"
+need_command npm "install npm $NPM_VERSION with Node.js $NODE_VERSION"
+need_command python3 "install Python $PYTHON_VERSION"
+need_command actionlint "install actionlint $ACTIONLINT_VERSION (macOS: brew install actionlint)"
+need_command shellcheck "install ShellCheck $SHELLCHECK_VERSION (macOS: brew install shellcheck)"
+
+need_version "$(rustc --version | awk '{print $2}')" "$RUST_VERSION" rustc "run: rustup toolchain install $RUST_VERSION --profile minimal --component rustfmt,clippy"
+need_version "$(cargo --version | awk '{print $2}')" "$RUST_VERSION" cargo "run: rustup toolchain install $RUST_VERSION --profile minimal --component rustfmt,clippy"
+need_version "$(node --version | sed 's/^v//')" "$NODE_VERSION" node "install Node.js $NODE_VERSION"
+need_version "$(npm --version)" "$NPM_VERSION" npm "run: npm install --global npm@$NPM_VERSION"
+need_version "$(actionlint -version | awk 'NR == 1 {sub(/^v/, "", $1); print $1}')" "$ACTIONLINT_VERSION" actionlint "install the release at https://github.com/rhysd/actionlint/releases/tag/v$ACTIONLINT_VERSION"
+need_version "$(shellcheck --version | awk '/^version:/ {print $2}')" "$SHELLCHECK_VERSION" shellcheck "install the release at https://github.com/koalaman/shellcheck/releases/tag/v$SHELLCHECK_VERSION"
+
+python_minor=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+[ "$python_minor" = "$PYTHON_VERSION" ] || fail "python3 version is '$python_minor', expected '$PYTHON_VERSION'"
+
+if [ ! -x "$QUALITY_ENV/bin/python" ]; then
+    python3 -m venv "$QUALITY_ENV"
+fi
+"$QUALITY_ENV/bin/python" -m pip install --disable-pip-version-check --requirement "$REPO_ROOT/requirements/quality.txt"
+"$QUALITY_ENV/bin/python" "$SCRIPT_DIR/hooks/check-tool-versions.py"
+
+cd "$REPO_ROOT"
+cargo fetch --locked
+npm --prefix "$REPO_ROOT/web" ci
+"$QUALITY_ENV/bin/pre-commit" install-hooks
+
+hooks_path=$(git config --get core.hooksPath || true)
+if [ -n "$hooks_path" ]; then
+    case "$hooks_path" in
+        /*) hooks_dir=$hooks_path ;;
+        *) hooks_dir=$REPO_ROOT/$hooks_path ;;
+    esac
+else
+    hooks_dir=$(git rev-parse --git-path hooks)
+fi
+
+for hook in pre-commit pre-push; do
+    if [ -x "$hooks_dir/$hook" ]; then
+        printf 'bootstrap: %s hook installed at %s\n' "$hook" "$hooks_dir/$hook"
+    else
+        printf 'bootstrap: %s hook is not installed; run: .tools/quality/bin/pre-commit install --hook-type pre-commit --hook-type pre-push\n' "$hook"
+    fi
+done
+
+printf 'bootstrap: toolchain and locked dependencies are ready\n'

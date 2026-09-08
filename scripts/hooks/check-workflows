@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+HOOK_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH='' cd -- "$HOOK_DIR/../.." && pwd)
+PATH="$REPO_ROOT/.tools/bin:$PATH"
+export PATH
+exec actionlint -shellcheck shellcheck "$@"

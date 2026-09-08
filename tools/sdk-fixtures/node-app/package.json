@@ -1,0 +1,13 @@
+{
+  "name": "eventglass-sentry-node-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@sentry/node": "10.73.0"
+  }
+}
+

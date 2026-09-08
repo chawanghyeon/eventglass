@@ -1,0 +1,67 @@
+minimum_pre_commit_version: 4.6.2
+default_install_hook_types: [pre-commit, pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      - id: text-hygiene
+        name: merge markers, EOF, and trailing whitespace
+        entry: .tools/quality/bin/python scripts/hooks/check-text.py
+        language: system
+        types: [text]
+        exclude: '^(vendor/|web/generated/)'
+        stages: [pre-commit]
+      - id: structured-syntax
+        name: YAML, TOML, and JSON syntax
+        entry: .tools/quality/bin/python scripts/hooks/check-syntax.py
+        language: system
+        types_or: [json, toml, yaml]
+        exclude: '^(vendor/|web/generated/)'
+        stages: [pre-commit]
+      - id: secrets
+        name: detect secrets
+        entry: .tools/quality/bin/python scripts/hooks/check-secrets.py
+        language: system
+        types: [text]
+        exclude: '^(vendor/|web/generated/|web/package-lock\.json$|web/src/api/generated\.ts$)'
+        stages: [pre-commit]
+      - id: rustfmt
+        name: rustfmt check
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+        require_serial: true
+        stages: [pre-commit]
+      - id: workflow-lint
+        name: GitHub workflow lint
+        entry: scripts/hooks/check-workflows
+        language: system
+        files: '^\.github/workflows/.*\.ya?ml$'
+        pass_filenames: false
+        require_serial: true
+        stages: [pre-commit]
+      - id: web-format
+        name: frontend format check
+        entry: npm --prefix web run format:check
+        language: system
+        files: '^web/(?!src/api/generated\.ts$).+\.(css|html|js|json|mjs|ts|tsx)$'
+        pass_filenames: false
+        require_serial: true
+        stages: [pre-commit]
+      - id: pre-push-rust
+        name: Rust pre-push checks
+        entry: ./scripts/check rust
+        language: system
+        files: '^(Cargo\.(toml|lock)|rust-toolchain\.toml|src/|tests/|migrations/)'
+        pass_filenames: false
+        require_serial: true
+        stages: [pre-push]
+      - id: pre-push-web
+        name: frontend pre-push checks
+        entry: ./scripts/check web
+        language: system
+        files: '^(web/|schemas/openapi\.yaml$)'
+        pass_filenames: false
+        require_serial: true
+        stages: [pre-push]

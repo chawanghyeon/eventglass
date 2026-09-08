@@ -1,0 +1,124 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+# The resolved repository path is intentionally dynamic.
+# shellcheck disable=SC1091
+. "$REPO_ROOT/tools/versions.env"
+
+PATH="$REPO_ROOT/.tools/bin:$PATH"
+export PATH
+QUALITY_ENV="$REPO_ROOT/.tools/quality"
+: "${PRE_COMMIT_HOME:=$REPO_ROOT/.tools/pre-commit-cache}"
+export PRE_COMMIT_HOME
+
+fail() {
+    printf 'check: %s\n' "$*" >&2
+    exit 1
+}
+
+need_command() {
+    command -v "$1" >/dev/null 2>&1 || fail "missing required tool '$1'; run ./scripts/bootstrap"
+}
+
+run_nonempty_test_target() {
+    label=$1
+    shift
+    list_output=$(cargo test --locked "$@" -- --list --format terse)
+    test_count=$(printf '%s\n' "$list_output" | awk '/: test$/ {count++} END {print count+0}')
+    [ "$test_count" -gt 0 ] || fail "$label selected zero tests"
+    printf 'check: %s selected %s test(s)\n' "$label" "$test_count"
+    cargo test --locked "$@"
+}
+
+run_quick() {
+    [ -x "$QUALITY_ENV/bin/pre-commit" ] || fail "quality environment is missing; run ./scripts/bootstrap"
+    "$QUALITY_ENV/bin/python" "$SCRIPT_DIR/hooks/check-tool-versions.py"
+    need_command actionlint
+    need_command shellcheck
+    "$QUALITY_ENV/bin/pre-commit" run --all-files --hook-stage pre-commit
+}
+
+run_rust() {
+    need_command cargo
+    need_command rustfmt
+    need_command cargo-clippy
+    cargo fmt --all -- --check
+    cargo check --locked --all-targets
+    cargo clippy --locked --all-targets -- -D warnings
+    run_nonempty_test_target "Rust library tests" --lib
+    run_nonempty_test_target "Rust documentation tests" --doc
+    version_output=$(cargo run --quiet --locked --bin eventglass -- --version)
+    case "$version_output" in
+        "eventglass "?*) ;;
+        *) fail "eventglass --version returned unexpected output: $version_output" ;;
+    esac
+    printf 'check: %s\n' "$version_output"
+}
+
+run_contracts() {
+    need_command cargo
+    [ -f "$REPO_ROOT/tests/contracts.rs" ] || fail "missing required Cargo test target tests/contracts.rs"
+    run_nonempty_test_target "contracts" --test contracts
+}
+
+run_web() {
+    need_command node
+    need_command npm
+    [ -f "$REPO_ROOT/web/package-lock.json" ] || fail "missing required web/package-lock.json"
+    npm --prefix "$REPO_ROOT/web" run generated:check
+    npm --prefix "$REPO_ROOT/web" run typecheck
+    npm --prefix "$REPO_ROOT/web" run lint
+    npm --prefix "$REPO_ROOT/web" test
+    npm --prefix "$REPO_ROOT/web" run build
+}
+
+run_integration() {
+    need_command cargo
+    run_nonempty_test_target "management integration" --test integration
+    run_nonempty_test_target "durable Inbox" --test ingest
+    run_nonempty_test_target "authentication" --test auth
+    run_nonempty_test_target "HTTP ingestion" --test ingest_http
+    run_nonempty_test_target "SDK replay" --test sdk
+    run_nonempty_test_target "native indexer" --test indexer_native
+    run_nonempty_test_target "Indexer coordinator" --test indexer
+    run_nonempty_test_target "Indexer SQLite finalization" --test indexer_db
+    run_nonempty_test_target "Issue API" --test issues
+    run_nonempty_test_target "signed search tokens" --test tokens
+    run_nonempty_test_target "query authorization scope" --test query_scope
+    run_nonempty_test_target "native search" --test search
+    run_nonempty_test_target "HTTP search" --test search_http
+    run_nonempty_test_target "stored record detail" --test records_http
+    run_nonempty_test_target "native immutable seal" --test seal
+}
+
+run_crash_smoke() {
+    need_command cargo
+    cargo clippy --locked --features failpoints --test crash -- -D warnings
+    run_nonempty_test_target "process crash and recovery" --features failpoints --test crash
+}
+
+run_embed_smoke() {
+    need_command cargo
+    need_command node
+    need_command npm
+    [ -f "$REPO_ROOT/tests/assets.rs" ] || fail "missing required Cargo test target tests/assets.rs"
+    npm --prefix "$REPO_ROOT/web" run build
+    run_nonempty_test_target "embedded UI assets" --features embed-ui --test assets
+    cargo build --locked --features embed-ui --bin eventglass
+}
+
+cd "$REPO_ROOT"
+case "${1:-}" in
+    quick) run_quick ;;
+    rust) run_rust ;;
+    contracts) run_contracts ;;
+    web) run_web ;;
+    integration) run_integration ;;
+    crash-smoke) run_crash_smoke ;;
+    embed-smoke) run_embed_smoke ;;
+    sdk-live) "$REPO_ROOT/tools/sdk-fixtures/run-live.sh" ;;
+    resource) "$REPO_ROOT/scripts/check-resource" ;;
+    *) fail "usage: ./scripts/check {quick|rust|contracts|web|integration|crash-smoke|embed-smoke|sdk-live|resource}" ;;
+esac

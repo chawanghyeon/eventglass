@@ -1,0 +1,5 @@
+.venv/
+.npm-cache/
+.pip-cache/
+__pycache__/
+node-app/node_modules/

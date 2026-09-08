@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "case": "python-events",
+  "capture": "real_sdk_to_localhost_http",
+  "sdk": {
+    "package": "sentry-sdk",
+    "version": "2.69.0"
+  },
+  "runtime": "Python 3.12.10",
+  "dsn": "http://fixturePublicKey@127.0.0.1:PORT/1",
+  "response": {
+    "status": 202,
+    "content_type": "application/json",
+    "body": "{}"
+  },
+  "integration_options": {
+    "enable_logs": true,
+    "logging_level": "INFO",
+    "event_level": "ERROR",
+    "sentry_logs_level": "default(INFO)"
+  },
+  "expected_kinds": [
+    "error"
+  ],
+  "requests": [
+    {
+      "file": "envelopes/001.envelope",
+      "content_encoding": "gzip",
+      "original_transfer_encoding": "content-length",
+      "wire_bytes": 831,
+      "decompressed_bytes": 1904,
+      "sha256": "a03eb9e6969780c643be0f519c4847dbfeaa0cf75bf09ee95dae2e7d75ce5959",
+      "item_types": [
+        "event"
+      ]
+    },
+    {
+      "file": "envelopes/002.envelope",
+      "content_encoding": "gzip",
+      "original_transfer_encoding": "content-length",
+      "wire_bytes": 506,
+      "decompressed_bytes": 1125,
+      "sha256": "3734dda1e4a043ab41f9321dd52651ff6edfc8d7161bcf698dc3505aa22f7c28",
+      "item_types": [
+        "event"
+      ]
+    }
+  ],
+  "sanitization": [
+    "dynamic event/trace/span IDs replaced by stable ordinal IDs",
+    "timestamps fixed to 2026-01-02T03:04:05Z",
+    "repository path replaced by <REPO>",
+    "localhost ephemeral port replaced by PORT",
+    "inner item byte lengths and outer HTTP content-length recomputed"
+  ]
+}
