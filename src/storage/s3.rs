@@ -370,7 +370,7 @@ impl ObjectStore for AwsObjectStore {
             }
         };
         Ok(ObjectMetadata {
-            key,
+            key: relative.to_owned(),
             size: copied,
             etag,
         })

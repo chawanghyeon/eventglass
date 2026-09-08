@@ -3,7 +3,13 @@
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use super::{
     checkpoint::CheckpointCut,
@@ -12,6 +18,31 @@ use super::{
 
 const MAX_CONTROL_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_LISTED_OBJECTS: usize = 100_000;
+
+#[derive(Debug, Clone, Copy)]
+pub struct RestoreLimits {
+    pub snapshot_bytes: u64,
+    pub shard_archive_bytes: u64,
+    pub shard_expanded_bytes: u64,
+    pub total_download_bytes: u64,
+}
+
+impl Default for RestoreLimits {
+    fn default() -> Self {
+        Self {
+            snapshot_bytes: 16 * 1024 * 1024 * 1024,
+            shard_archive_bytes: 2 * 1024 * 1024 * 1024,
+            shard_expanded_bytes: 4 * 1024 * 1024 * 1024,
+            total_download_bytes: 64 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedRestore {
+    pub document: CheckpointDocument,
+    pub directory: PathBuf,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -190,6 +221,286 @@ pub async fn list_all(store: &dyn ObjectStore) -> Result<Vec<ObjectMetadata>> {
     Ok(objects)
 }
 
+pub async fn prepare_restore(
+    store: &dyn ObjectStore,
+    installation_id: &str,
+    destination: &Path,
+    limits: RestoreLimits,
+    cancelled: impl Fn() -> bool + Send + Sync + 'static,
+) -> Result<PreparedRestore> {
+    uuid::Uuid::parse_str(installation_id)?;
+    ensure!(!destination.exists(), "restore destination already exists");
+    ensure!(
+        limits.snapshot_bytes > 0
+            && limits.shard_archive_bytes > 0
+            && limits.shard_expanded_bytes > 0
+            && limits.total_download_bytes >= limits.snapshot_bytes,
+        "invalid restore limits"
+    );
+    let candidates = checkpoint_candidates(store, installation_id).await?;
+    ensure!(
+        !candidates.is_empty(),
+        "no checkpoint exists for installation"
+    );
+    let parent = destination.parent().context("restore destination parent")?;
+    std::fs::create_dir_all(parent)?;
+
+    let cancelled: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(cancelled);
+    for document in candidates {
+        ensure!(!cancelled(), "checkpoint restore cancelled");
+        let attempt = parent.join(format!(".restore-{}.tmp", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&attempt)?;
+        let guard = RemoveDirectory(attempt.clone());
+        if restore_candidate(store, &document, &attempt, limits, &cancelled)
+            .await
+            .is_err()
+        {
+            continue;
+        }
+        std::fs::rename(&attempt, destination)?;
+        File::open(parent)?.sync_all()?;
+        std::mem::forget(guard);
+        return Ok(PreparedRestore {
+            document,
+            directory: destination.to_owned(),
+        });
+    }
+    anyhow::bail!("no complete checkpoint could be restored")
+}
+
+async fn checkpoint_candidates(
+    store: &dyn ObjectStore,
+    installation_id: &str,
+) -> Result<Vec<CheckpointDocument>> {
+    let objects = list_all(store).await?;
+    ensure!(
+        objects
+            .iter()
+            .any(|object| object.key == "installation.json"),
+        "S3 prefix has no installation identity"
+    );
+    let installation: InstallationDocument = serde_json::from_slice(
+        &store
+            .get_small("installation.json", MAX_CONTROL_BYTES)
+            .await?,
+    )?;
+    validate_installation(&installation)?;
+    ensure!(
+        installation.installation_id == installation_id,
+        "S3 installation identity mismatch"
+    );
+
+    let mut candidates = BTreeMap::<String, CheckpointDocument>::new();
+    if objects.iter().any(|object| object.key == "latest.json")
+        && let Ok(bytes) = store.get_small("latest.json", MAX_CONTROL_BYTES).await
+        && let Ok(latest) = serde_json::from_slice::<LatestDocument>(&bytes)
+        && latest.format_version == 1
+        && latest.installation_id == installation_id
+        && is_sha256(&latest.checkpoint_sha256)
+    {
+        let key = checkpoint_key(&latest.checkpoint_id);
+        if let Ok(bytes) = store.get_small(&key, MAX_CONTROL_BYTES).await
+            && sha256(&bytes) == latest.checkpoint_sha256
+            && let Ok(document) = serde_json::from_slice::<CheckpointDocument>(&bytes)
+            && validate_checkpoint(&document).is_ok()
+            && document.cut.installation_id == installation_id
+            && document.sequence == latest.sequence
+        {
+            candidates.insert(document.checkpoint_id.clone(), document);
+        }
+    }
+    for key in objects.iter().filter_map(|object| {
+        object
+            .key
+            .strip_prefix("checkpoints/")
+            .and_then(|name| name.strip_suffix(".json"))
+            .map(|_| object.key.as_str())
+    }) {
+        let Ok(bytes) = store.get_small(key, MAX_CONTROL_BYTES).await else {
+            continue;
+        };
+        let Ok(document) = serde_json::from_slice::<CheckpointDocument>(&bytes) else {
+            continue;
+        };
+        if validate_checkpoint(&document).is_ok()
+            && document.cut.installation_id == installation_id
+            && key == checkpoint_key(&document.checkpoint_id)
+        {
+            candidates.insert(document.checkpoint_id.clone(), document);
+        }
+    }
+    let mut candidates = candidates.into_values().collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        (right.sequence, right.created_at_us, &right.checkpoint_id).cmp(&(
+            left.sequence,
+            left.created_at_us,
+            &left.checkpoint_id,
+        ))
+    });
+    Ok(candidates)
+}
+
+async fn restore_candidate(
+    store: &dyn ObjectStore,
+    document: &CheckpointDocument,
+    attempt: &Path,
+    limits: RestoreLimits,
+    cancelled: &Arc<dyn Fn() -> bool + Send + Sync>,
+) -> Result<()> {
+    ensure!(
+        document.snapshot.size <= limits.snapshot_bytes,
+        "checkpoint snapshot exceeds restore limit"
+    );
+    let total =
+        document
+            .shards
+            .iter()
+            .try_fold(document.snapshot.size, |sum, shard| -> Result<u64> {
+                ensure!(
+                    shard.object.size <= limits.shard_archive_bytes,
+                    "shard archive exceeds restore limit"
+                );
+                sum.checked_add(shard.object.size)
+                    .context("restore download size overflow")
+            })?;
+    ensure!(
+        total <= limits.total_download_bytes,
+        "checkpoint exceeds total restore limit"
+    );
+    let snapshot = attempt.join("meta.db");
+    let downloaded = store
+        .download(&document.snapshot.key, &snapshot, limits.snapshot_bytes)
+        .await?;
+    verify_download(&snapshot, &document.snapshot, &downloaded).await?;
+    let snapshot_path = snapshot.clone();
+    let cut = document.cut.clone();
+    tokio::task::spawn_blocking(move || validate_snapshot(&snapshot_path, &cut)).await??;
+
+    let shard_root = attempt.join("shards");
+    std::fs::create_dir(&shard_root)?;
+    for shard in &document.shards {
+        ensure!(!cancelled(), "checkpoint restore cancelled");
+        let compressed = attempt.join(format!("{}.tar.gz", shard.id));
+        let downloaded = store
+            .download(&shard.object.key, &compressed, limits.shard_archive_bytes)
+            .await?;
+        verify_download(&compressed, &shard.object, &downloaded).await?;
+        let archive_path = compressed.clone();
+        let destination = shard_root.join(&shard.id);
+        let installation = document.cut.installation_id.clone();
+        let shard_id = shard.id.clone();
+        let expanded = limits.shard_expanded_bytes;
+        let cancelled = Arc::clone(cancelled);
+        tokio::task::spawn_blocking(move || {
+            super::archive::hydrate(
+                &archive_path,
+                &destination,
+                &installation,
+                &shard_id,
+                expanded,
+                || cancelled(),
+            )
+        })
+        .await??;
+        std::fs::remove_file(compressed)?;
+    }
+    File::open(&shard_root)?.sync_all()?;
+    File::open(attempt)?.sync_all()?;
+    Ok(())
+}
+
+async fn verify_download(
+    path: &Path,
+    expected: &ObjectReference,
+    downloaded: &ObjectMetadata,
+) -> Result<()> {
+    ensure!(
+        downloaded.key == expected.key && downloaded.size == expected.size,
+        "downloaded object metadata mismatch"
+    );
+    let path = path.to_owned();
+    let expected = expected.clone();
+    tokio::task::spawn_blocking(move || -> Result<()> {
+        ensure!(
+            std::fs::metadata(&path)?.len() == expected.size,
+            "downloaded object size mismatch"
+        );
+        ensure!(
+            sha256_file(&path)? == expected.sha256,
+            "downloaded object checksum mismatch"
+        );
+        Ok(())
+    })
+    .await??;
+    Ok(())
+}
+
+fn validate_snapshot(path: &Path, cut: &CheckpointCut) -> Result<()> {
+    let connection = crate::db::open_reader(path)?;
+    let integrity: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
+    ensure!(
+        integrity == "ok",
+        "restored SQLite snapshot failed integrity check"
+    );
+    let actual: (String, String, i64, i64, Option<String>) = connection.query_row(
+        "SELECT installation_id,storage_generation,last_applied_inbox_id,
+                last_applied_ingest_seq,active_shard_id
+         FROM runtime_state WHERE singleton=1",
+        [],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )?;
+    ensure!(
+        actual
+            == (
+                cut.installation_id.clone(),
+                cut.storage_generation.clone(),
+                cut.boundary.inbox_id,
+                cut.boundary.ingest_seq,
+                None,
+            ),
+        "restored SQLite snapshot cut mismatch"
+    );
+    let mut statement = connection.prepare(
+        "SELECT id,state,remote_archive_key,archive_sha256,last_applied_inbox_id
+         FROM shards ORDER BY id",
+    )?;
+    let actual = statement
+        .query_map([], |row| {
+            Ok(super::checkpoint::CheckpointShard {
+                id: row.get(0)?,
+                state: row.get(1)?,
+                remote_archive_key: row.get(2)?,
+                archive_sha256: row.get(3)?,
+                last_applied_inbox_id: row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    ensure!(actual == cut.shards, "restored SQLite catalog mismatch");
+    Ok(())
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0u8; 32 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        digest.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
 pub fn checkpoint_key(id: &str) -> String {
     format!("checkpoints/{id}.json")
 }
@@ -277,13 +588,32 @@ fn validate_object(object: &ObjectReference) -> Result<()> {
     Ok(())
 }
 
+fn is_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+struct RemoveDirectory(PathBuf);
+
+impl Drop for RemoveDirectory {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
+        db,
         model::Boundary,
+        search::active::ActiveShard,
         storage::{
-            checkpoint::CheckpointShard,
+            archive,
+            checkpoint::{CheckpointShard, PinnedSnapshot, SnapshotLimits},
+            manifest::ShardStats,
             s3::{ObjectPage, ObjectStore},
         },
     };
@@ -451,6 +781,99 @@ mod tests {
         })
     }
 
+    fn restorable_candidate(
+        root: &Path,
+        installation_id: &str,
+        sequence: u64,
+    ) -> Result<LocalCheckpoint> {
+        std::fs::create_dir_all(root)?;
+        let shard_id = uuid::Uuid::new_v4().to_string();
+        let shard_source = root.join("sealed");
+        std::fs::create_dir(&shard_source)?;
+        let mut active = ActiveShard::create(
+            &shard_source,
+            installation_id,
+            &shard_id,
+            Boundary::default(),
+        )?;
+        active.publish(Boundary::default())?;
+        active.seal(
+            &shard_source,
+            ShardStats {
+                record_count: 0,
+                min_timestamp_us: None,
+                max_timestamp_us: None,
+                min_received_at_us: None,
+                max_received_at_us: None,
+                min_ingest_seq: None,
+                max_ingest_seq: None,
+            },
+            1,
+        )?;
+        let archive_path = root.join("shard.tar.gz");
+        let archive = archive::create(
+            &shard_source,
+            &archive_path,
+            installation_id,
+            &shard_id,
+            || false,
+        )?;
+
+        let database_path = root.join("source.db");
+        let database = db::open(&database_path)?;
+        let generation = uuid::Uuid::new_v4().to_string();
+        database.execute(
+            "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+             VALUES(1,?1,?2,1)",
+            rusqlite::params![installation_id, generation],
+        )?;
+        database.execute(
+            "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                last_applied_inbox_id,record_count,size_bytes,created_at_us,sealed_at_us)
+             VALUES(?1,1,?2,1,'local',0,0,?3,1,1)",
+            rusqlite::params![
+                shard_id,
+                crate::db::shards::FORMAT_VERSION,
+                i64::try_from(crate::storage::manifest::local_size(
+                    &shard_source,
+                    &crate::storage::manifest::verify(&shard_source, installation_id, &shard_id,)?,
+                )?)?
+            ],
+        )?;
+        drop(database);
+        let checkpoint_id = uuid::Uuid::new_v4().to_string();
+        let snapshot_path = root.join("snapshot.db");
+        let snapshot = PinnedSnapshot::open(&database_path)?.backup_to(
+            &snapshot_path,
+            SnapshotLimits::default(),
+            || false,
+        )?;
+        Ok(LocalCheckpoint {
+            document: CheckpointDocument {
+                format_version: 1,
+                checkpoint_id: checkpoint_id.clone(),
+                sequence,
+                created_at_us: i64::try_from(sequence)?,
+                cut: snapshot.cut,
+                snapshot: ObjectReference {
+                    key: format!("snapshots/{checkpoint_id}.db"),
+                    size: snapshot.size,
+                    sha256: snapshot.sha256,
+                },
+                shards: vec![ShardReference {
+                    id: shard_id.clone(),
+                    object: ObjectReference {
+                        key: format!("shards/{shard_id}.tar.gz"),
+                        size: archive.size,
+                        sha256: archive.sha256,
+                    },
+                }],
+            },
+            snapshot_path,
+            shard_archives: vec![(shard_id, archive_path)],
+        })
+    }
+
     #[tokio::test]
     async fn empty_prefix_requires_explicit_installation_and_preserves_identity() -> Result<()> {
         let store = MemoryStore::default();
@@ -500,6 +923,61 @@ mod tests {
         assert!(publish(&failed, &candidate).await.is_err());
         assert!(!failed.keys().contains(&checkpoint));
         assert!(!failed.keys().contains(&"latest.json".to_owned()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn restore_falls_back_without_mixing_incomplete_candidates() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let installation_id = uuid::Uuid::new_v4().to_string();
+        let store = MemoryStore::default();
+        ensure_installation(&store, &installation(&installation_id), true).await?;
+        let older = restorable_candidate(&root.path().join("older"), &installation_id, 1)?;
+        publish(&store, &older).await?;
+        let newer = restorable_candidate(&root.path().join("newer"), &installation_id, 2)?;
+        publish(&store, &newer).await?;
+        store.objects.lock().unwrap().insert(
+            newer.document.snapshot.key.clone(),
+            b"corrupt snapshot".to_vec(),
+        );
+
+        let destination = root.path().join("prepared");
+        let restored = prepare_restore(
+            &store,
+            &installation_id,
+            &destination,
+            RestoreLimits::default(),
+            || false,
+        )
+        .await?;
+        assert_eq!(restored.document.sequence, 1);
+        assert!(destination.join("meta.db").is_file());
+        assert!(
+            destination
+                .join("shards")
+                .join(&older.document.shards[0].id)
+                .is_dir()
+        );
+        assert!(
+            !destination
+                .join("shards")
+                .join(&newer.document.shards[0].id)
+                .exists()
+        );
+
+        let cancelled = root.path().join("cancelled");
+        assert!(
+            prepare_restore(
+                &store,
+                &installation_id,
+                &cancelled,
+                RestoreLimits::default(),
+                || true,
+            )
+            .await
+            .is_err()
+        );
+        assert!(!cancelled.exists());
         Ok(())
     }
 }
