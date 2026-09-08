@@ -88,9 +88,66 @@ impl AppState {
     /// starts and reconciles the core before binding its HTTP listener.
     pub async fn start_core(mut self) -> Result<Self> {
         anyhow::ensure!(self.indexer.is_none(), "core is already running");
-        self.indexer =
-            Some(crate::indexer::Indexer::start(self.db.clone(), &self.config.data_dir).await?);
+        #[cfg(feature = "s3")]
+        let backup = build_backup_coordinator(&self.config, &self.db).await;
+        #[cfg(not(feature = "s3"))]
+        let backup = None;
+        self.indexer = Some(
+            crate::indexer::Indexer::start_with_backup(
+                self.db.clone(),
+                &self.config.data_dir,
+                backup,
+            )
+            .await?,
+        );
         Ok(self)
+    }
+}
+
+#[cfg(feature = "s3")]
+async fn build_backup_coordinator(
+    config: &Config,
+    db: &DbWorker,
+) -> Option<crate::storage::backup::BackupCoordinator> {
+    let result: Result<Option<crate::storage::backup::BackupCoordinator>> = async {
+        let Some(value) = &config.s3_url else {
+            return Ok(None);
+        };
+        let location = crate::storage::s3::S3Location::parse(value)?;
+        let store = Arc::new(
+            crate::storage::s3::AwsObjectStore::load(location, config.s3_endpoint.as_ref()).await?,
+        );
+        let local_installation = db
+            .call(|connection| {
+                connection
+                    .query_row(
+                        "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                        [],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .map_err(Into::into)
+            })
+            .await?;
+        let remote = crate::storage::remote::read_installation(store.as_ref())
+            .await?
+            .context("S3 installation identity is missing")?;
+        anyhow::ensure!(
+            remote.installation_id == local_installation,
+            "S3 installation identity differs from the local database"
+        );
+        Ok(Some(crate::storage::backup::BackupCoordinator::new(
+            db.clone(),
+            &config.data_dir,
+            store,
+        )))
+    }
+    .await;
+    match result {
+        Ok(coordinator) => coordinator,
+        Err(error) => {
+            tracing::warn!(reason = %error, "S3 backup is unavailable; local service continues");
+            None
+        }
     }
 }
 

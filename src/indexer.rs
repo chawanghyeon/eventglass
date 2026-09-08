@@ -40,6 +40,7 @@ struct Control {
     stop: watch::Sender<bool>,
     wake: Arc<Notify>,
     join: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    backup: Option<crate::storage::backup::BackupCoordinator>,
 }
 
 impl Drop for Control {
@@ -59,11 +60,27 @@ struct RunContext {
     wake: Arc<Notify>,
     data_dir: std::path::PathBuf,
     installation: String,
+    backup: Option<crate::storage::backup::BackupCoordinator>,
+}
+
+struct RotateContext<'a> {
+    db: &'a DbWorker,
+    data_dir: &'a Path,
+    installation: &'a str,
+    backup: Option<&'a crate::storage::backup::BackupCoordinator>,
 }
 
 impl Indexer {
     /// Startup completes recovery before exposing a ready Indexer handle.
     pub async fn start(db: DbWorker, data_dir: &Path) -> Result<Self> {
+        Self::start_with_backup(db, data_dir, None).await
+    }
+
+    pub async fn start_with_backup(
+        db: DbWorker,
+        data_dir: &Path,
+        backup: Option<crate::storage::backup::BackupCoordinator>,
+    ) -> Result<Self> {
         let mut catalog = db.call(|db| shards::startup(db)).await?;
         let directory = data_dir.to_owned();
         if let Some(active_id) = catalog.active_id.clone() {
@@ -178,6 +195,7 @@ impl Indexer {
         let wake = Arc::new(Notify::new());
         let worker_view = view.clone();
         let worker_wake = wake.clone();
+        let worker_backup = backup.clone();
         let join = tokio::spawn(async move {
             if let Err(error) = run(
                 RunContext {
@@ -186,6 +204,7 @@ impl Indexer {
                     wake: worker_wake,
                     data_dir: worker_directory,
                     installation: worker_installation,
+                    backup: worker_backup,
                 },
                 active,
                 shard_id,
@@ -205,6 +224,7 @@ impl Indexer {
                 stop,
                 wake,
                 join: Mutex::new(Some(join)),
+                backup,
             }),
             view,
             registry,
@@ -251,6 +271,9 @@ impl Indexer {
             .take();
         if let Some(join) = join {
             join.await.context("indexer task panicked")?;
+        }
+        if let Some(backup) = &self.control.backup {
+            backup.shutdown().await;
         }
         ensure!(self.ready(), "indexer stopped with a failure");
         Ok(())
@@ -310,6 +333,7 @@ async fn run(
         wake,
         data_dir,
         installation,
+        backup,
     } = context;
     loop {
         if *stop.borrow() {
@@ -322,13 +346,16 @@ async fn run(
             .await?
         {
             let rotated = rotate(
-                db.clone(),
                 active,
                 shard_id,
                 plan,
-                &data_dir,
-                &installation,
                 now,
+                RotateContext {
+                    db: &db,
+                    data_dir: &data_dir,
+                    installation: &installation,
+                    backup: backup.as_ref(),
+                },
             )
             .await?;
             active = rotated.0;
@@ -396,13 +423,16 @@ async fn run(
             .await?
         {
             let rotated = rotate(
-                db.clone(),
                 active,
                 shard_id,
                 plan,
-                &data_dir,
-                &installation,
                 now,
+                RotateContext {
+                    db: &db,
+                    data_dir: &data_dir,
+                    installation: &installation,
+                    backup: backup.as_ref(),
+                },
             )
             .await?;
             active = rotated.0;
@@ -415,14 +445,18 @@ async fn run(
 }
 
 async fn rotate(
-    db: DbWorker,
     active: ActiveShard,
     shard_id: String,
     stats: crate::storage::manifest::ShardStats,
-    data_dir: &Path,
-    installation: &str,
     now_us: i64,
+    context: RotateContext<'_>,
 ) -> Result<(ActiveShard, String, Published)> {
+    let RotateContext {
+        db,
+        data_dir,
+        installation,
+        backup,
+    } = context;
     let path = data_dir.join("shards").join(&shard_id);
     let (manifest, size) = tokio::task::spawn_blocking(move || -> Result<_> {
         let manifest = active.seal(&path, stats, now_us)?;
@@ -435,6 +469,17 @@ async fn rotate(
     db.call(move |db| shards::finalize_seal(db, &manifest, size))
         .await?;
     crash_point("after_seal_catalog");
+    let backup_job = if let Some(backup) = backup {
+        match backup.begin_cut().await {
+            Ok(job) => job,
+            Err(error) => {
+                tracing::warn!(reason = %error, "checkpoint cut failed; indexing continues");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let next_id = uuid::Uuid::new_v4().to_string();
     let native_id = next_id.clone();
@@ -459,6 +504,9 @@ async fn rotate(
         Ok((next, published))
     })
     .await??;
+    if let Some(job) = backup_job {
+        job.launch();
+    }
     Ok((published.0, next_id, published.1))
 }
 
