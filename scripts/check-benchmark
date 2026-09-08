@@ -201,7 +201,9 @@ def main():
                 "selected_tests": selected,
             }
         )
-        report.write_text(json.dumps(evidence, indent=2) + "\n")
+        replacement = report.with_suffix(report.suffix + ".tmp")
+        replacement.write_text(json.dumps(evidence, indent=2) + "\n")
+        replacement.replace(report)
         print(f"Benchmark evidence: {report}", flush=True)
         print(
             f"Passed: {records} records; peak: {cgroup['memory.peak']} bytes; "
