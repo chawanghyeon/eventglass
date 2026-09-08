@@ -1,6 +1,7 @@
 //! One sequential native commit → SQLite finalize → reader publication coordinator.
 
 use std::{
+    collections::HashSet,
     path::Path,
     sync::{Arc, Mutex, RwLock},
 };
@@ -98,20 +99,36 @@ impl Indexer {
             Ok(())
         })
         .await??;
+        let registered = db.call(|db| shards::catalog_ids(db)).await?;
+        let orphan_directory = directory.clone();
+        let orphan_installation = catalog.installation_id.clone();
+        let orphan_applied = catalog.applied;
+        let may_adopt = catalog.active_id.is_none();
+        let orphan = tokio::task::spawn_blocking(move || {
+            reconcile_empty_orphans(
+                &orphan_directory,
+                &orphan_installation,
+                orphan_applied,
+                &registered,
+                may_adopt,
+            )
+        })
+        .await??;
         let registry =
             crate::storage::registry::Registry::new(&directory, catalog.installation_id.clone());
         let installation = catalog.installation_id;
         let worker_installation = installation.clone();
         let applied = catalog.applied;
-        let existing = catalog.active_id;
-        let is_new = existing.is_none();
+        let needs_adoption = catalog.active_id.is_none();
+        let existing = catalog.active_id.or(orphan);
+        let needs_creation = existing.is_none();
         let shard_id = existing.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let native_id = shard_id.clone();
         let worker_directory = directory.clone();
         let mut active = tokio::task::spawn_blocking(move || -> Result<_> {
             let root = directory.join("shards");
             let path = root.join(&native_id);
-            if is_new {
+            if needs_creation {
                 std::fs::create_dir_all(&root)?;
                 std::fs::File::open(&directory)?.sync_all()?;
                 // Never reuse an orphan candidate: a new UUID makes adoption explicit.
@@ -124,7 +141,7 @@ impl Indexer {
             }
         })
         .await??;
-        if is_new {
+        if needs_adoption {
             let id = shard_id.clone();
             let created = crate::model::now_us()?;
             db.call(move |db| shards::adopt_initial(db, &id, applied, created))
@@ -238,6 +255,47 @@ impl Indexer {
         ensure!(self.ready(), "indexer stopped with a failure");
         Ok(())
     }
+}
+
+fn reconcile_empty_orphans(
+    data_dir: &Path,
+    installation: &str,
+    applied: crate::model::Boundary,
+    registered: &HashSet<String>,
+    may_adopt: bool,
+) -> Result<Option<String>> {
+    let root = data_dir.join("shards");
+    if !root.exists() {
+        return Ok(None);
+    }
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(&root)? {
+        let entry = entry?;
+        let id = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| anyhow::anyhow!("shard directory name is not UTF-8"))?;
+        if registered.contains(&id) {
+            continue;
+        }
+        ensure!(
+            entry.file_type()?.is_dir(),
+            "unregistered shard entry is not a directory"
+        );
+        crate::search::active::verify_empty_orphan(&entry.path(), installation, &id, applied)?;
+        candidates.push((id, entry.path()));
+    }
+    candidates.sort_by(|left, right| left.0.cmp(&right.0));
+    let adopted = may_adopt
+        .then(|| candidates.first().map(|candidate| candidate.0.clone()))
+        .flatten();
+    for (id, path) in candidates {
+        if adopted.as_deref() != Some(&id) {
+            std::fs::remove_dir_all(path)?;
+        }
+    }
+    std::fs::File::open(root)?.sync_all()?;
+    Ok(adopted)
 }
 
 async fn run(

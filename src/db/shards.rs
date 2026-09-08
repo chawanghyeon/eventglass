@@ -74,6 +74,13 @@ pub fn local_catalog(db: &Connection) -> Result<Vec<LocalCatalogShard>> {
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+pub fn catalog_ids(db: &Connection) -> Result<std::collections::HashSet<String>> {
+    let mut statement = db.prepare("SELECT id FROM shards")?;
+    Ok(statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<_>>()?)
+}
+
 const ROLLOVER_BYTES: u64 = 256 * 1024 * 1024;
 const ROLLOVER_AGE_US: i64 = 60 * 60 * 1_000_000;
 

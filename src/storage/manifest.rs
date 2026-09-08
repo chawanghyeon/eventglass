@@ -236,8 +236,10 @@ pub(crate) fn write(
     output.write_all(&bytes)?;
     output.sync_all()?;
     drop(output);
+    crash_point("before_seal_manifest_rename");
     fs::rename(temporary, root.join(NAME))?;
     File::open(root)?.sync_all()?;
+    crash_point("after_seal_manifest_rename");
     Ok(manifest)
 }
 
@@ -311,4 +313,14 @@ pub fn active_size(root: &Path) -> Result<u64> {
         sum.checked_add(metadata.len())
             .context("active shard size overflow")
     })
+}
+
+#[inline]
+fn crash_point(name: &str) {
+    #[cfg(feature = "failpoints")]
+    if std::env::var("EVENTGLASS_FAILPOINT").as_deref() == Ok(name) {
+        std::process::exit(86);
+    }
+    #[cfg(not(feature = "failpoints"))]
+    let _ = name;
 }

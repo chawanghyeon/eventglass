@@ -265,3 +265,55 @@ async fn startup_finishes_manifested_seal_before_creating_the_next_active() -> R
     app.indexer.as_ref().unwrap().shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn startup_preserves_an_unregistered_nonempty_native_index_and_fails() -> Result<()> {
+    let (dir, app) = app().await?;
+    let installation = app
+        .db
+        .call(|db| {
+            Ok(db.query_row(
+                "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                [],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .await?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let path = dir.path().join("shards").join(&id);
+    std::fs::create_dir_all(&path)?;
+    let mut native = ActiveShard::create(&path, &installation, &id, Boundary::default())?;
+    native.publish(Boundary::default())?;
+    let mut records = sentry::normalize_store(
+        b"{\"event_id\":\"22222222222222222222222222222222\",\"message\":\"unregistered\"}",
+        &ProjectContext {
+            project_id: 1,
+            slug: "test".into(),
+            public_key: "public".into(),
+            scrub_keys: vec![],
+        },
+        uuid::Uuid::new_v4(),
+        eventglass::model::now_us()?,
+        &Default::default(),
+    )?
+    .records;
+    records[0].ingest_seq = 1;
+    let boundary = Boundary {
+        inbox_id: 1,
+        ingest_seq: 1,
+    };
+    native.commit(&records, boundary)?;
+    native.publish(boundary)?;
+    drop(native);
+
+    assert!(app.start_core().await.is_err());
+    assert!(path.is_dir());
+    assert_eq!(
+        tantivy::Index::open_in_dir(path)?
+            .reader()?
+            .searcher()
+            .num_docs(),
+        1
+    );
+    Ok(())
+}

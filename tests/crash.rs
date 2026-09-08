@@ -85,7 +85,7 @@ fn process_crash_at_each_commit_phase_recovers_acknowledged_records_once() -> Re
             b"{\"event_id\":\"0123456789abcdef0123456789abcdef\",\"message\":\"crash ledger\"}",
             &context,
             uuid::Uuid::new_v4(),
-            1788860000000000,
+            eventglass::model::now_us()?,
             &Default::default(),
         )?
         .records
@@ -169,6 +169,141 @@ fn process_crash_at_each_commit_phase_recovers_acknowledged_records_once() -> Re
             db.query_row("SELECT count(*) FROM inbox", [], |r| r.get::<_, i64>(0))?,
             0,
             "{point}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn process_crash_at_each_seal_phase_keeps_one_cataloged_record_and_one_active() -> Result<()> {
+    let binaries = tempfile::tempdir()?;
+    let binary = binaries.path().join("eventglass-seal-failpoints");
+    std::fs::copy(env!("CARGO_BIN_EXE_eventglass"), &binary)?;
+    for point in [
+        "before_seal_manifest_rename",
+        "after_seal_manifest_rename",
+        "after_seal_manifest",
+        "after_seal_catalog",
+        "after_new_active_create",
+        "after_new_active_adopt",
+    ] {
+        let dir = tempfile::tempdir()?;
+        let mut database = db::open(&dir.path().join("meta.db"))?;
+        database.execute(
+            "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+             VALUES(1,?1,'generation',1)",
+            [uuid::Uuid::new_v4().to_string()],
+        )?;
+        database.execute_batch(
+            "INSERT INTO projects(id,slug,name,created_at_us,updated_at_us)
+             VALUES(1,'test','Test',0,0);
+             INSERT INTO project_keys(id,project_id,public_key,created_at_us)
+             VALUES(1,1,'public',0)",
+        )?;
+        let record = sentry::normalize_store(
+            b"{\"event_id\":\"11111111111111111111111111111111\",\"message\":\"seal crash ledger\"}",
+            &ProjectContext {
+                project_id: 1,
+                slug: "test".into(),
+                public_key: "public".into(),
+                scrub_keys: vec![],
+            },
+            uuid::Uuid::new_v4(),
+            eventglass::model::now_us()? - 2 * 60 * 60 * 1_000_000,
+            &Default::default(),
+        )?
+        .records;
+        assert_eq!(
+            ingest::accept(
+                &mut database,
+                IngestProject {
+                    id: 1,
+                    slug: "test".into(),
+                    public_key: "public".into(),
+                },
+                "seal-crash-acceptance",
+                record,
+                &Default::default(),
+            )?
+            .accepted,
+            1
+        );
+        drop(database);
+
+        let mut first = start(&binary, dir.path(), Some(point))?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = first.0.try_wait()? {
+                assert_eq!(status.code(), Some(86), "{point}");
+                break;
+            }
+            if Instant::now() > deadline {
+                bail!("seal failpoint child did not exit: {point}");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(first);
+
+        let mut recovered = start(&binary, dir.path(), None)?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if let Some(status) = recovered.0.try_wait()? {
+                bail!("seal recovery child exited early at {point}: {status}");
+            }
+            let database = db::open_reader(&dir.path().join("meta.db"))?;
+            let state: (i64, i64, i64) = database.query_row(
+                "SELECT last_applied_ingest_seq,
+                    (SELECT count(*) FROM shards WHERE state='local'),
+                    (SELECT count(*) FROM shards WHERE state='active')
+                 FROM runtime_state WHERE singleton=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            if state == (1, 1, 1) && ready(recovered.1) {
+                break;
+            }
+            if Instant::now() > deadline {
+                bail!("seal recovery never became ready: {point}, state={state:?}");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        drop(recovered);
+
+        let database = db::open_reader(&dir.path().join("meta.db"))?;
+        let mut statement = database.prepare(
+            "SELECT id,state FROM shards WHERE state IN ('active','local') ORDER BY state,id",
+        )?;
+        let catalog = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut documents = 0u64;
+        for (id, state) in &catalog {
+            let path = dir.path().join("shards").join(id);
+            let index = tantivy::Index::open_in_dir(&path)?;
+            documents += index.reader()?.searcher().num_docs();
+            assert_eq!(
+                path.join(eventglass::storage::manifest::NAME).is_file(),
+                state == "local"
+            );
+        }
+        assert_eq!(documents, 1, "{point}");
+        assert_eq!(
+            database.query_row("SELECT count(*) FROM inbox", [], |row| row.get::<_, i64>(0))?,
+            0,
+            "{point}"
+        );
+        assert_eq!(
+            database.query_row("SELECT count(*) FROM issue_occurrences", [], |row| row
+                .get::<_, i64>(0))?,
+            1,
+            "{point}"
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path().join("shards"))?.count(),
+            catalog.len(),
+            "{point}: verified empty orphan was not adopted or removed"
         );
     }
     Ok(())

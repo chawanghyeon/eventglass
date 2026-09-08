@@ -243,3 +243,36 @@ pub fn open_sealed(
         searcher,
     })
 }
+
+pub fn verify_empty_orphan(
+    path: &Path,
+    installation: &str,
+    shard: &str,
+    inherited: Boundary,
+) -> Result<()> {
+    ensure!(
+        !path.join(crate::storage::manifest::NAME).exists(),
+        "orphan candidate is sealed"
+    );
+    uuid::Uuid::parse_str(shard)?;
+    let index = Index::open_in_dir(path)?;
+    ensure!(
+        index.schema() == super::schema::build(),
+        "orphan candidate schema mismatch"
+    );
+    let committed: CommitPayload = serde_json::from_str(
+        &index
+            .load_metas()?
+            .payload
+            .context("missing orphan commit boundary")?,
+    )?;
+    ensure!(
+        committed.version == 1
+            && committed.installation_id == installation
+            && committed.shard_id == shard
+            && committed.boundary == inherited
+            && index.reader()?.searcher().num_docs() == 0,
+        "unregistered native index is not a safe empty active candidate"
+    );
+    Ok(())
+}
