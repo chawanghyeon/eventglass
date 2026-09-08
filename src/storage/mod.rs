@@ -4,4 +4,5 @@ pub mod budget;
 pub mod checkpoint;
 pub mod manifest;
 pub mod registry;
+pub mod remote;
 pub mod s3;

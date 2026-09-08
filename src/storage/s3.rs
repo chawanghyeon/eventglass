@@ -1,7 +1,6 @@
 //! Validated S3 namespace and the narrow object operations used by archive recovery.
 
 use anyhow::{Context, Result, ensure};
-#[cfg(feature = "s3")]
 use async_trait::async_trait;
 #[cfg(feature = "s3")]
 use aws_sdk_s3::{Client, primitives::ByteStream};
@@ -71,9 +70,19 @@ impl S3Location {
             format!("{}/{relative}", self.prefix)
         })
     }
+
+    pub fn relative_key(&self, key: &str) -> Result<String> {
+        let relative = if self.prefix.is_empty() {
+            key
+        } else {
+            key.strip_prefix(&format!("{}/", self.prefix))
+                .context("S3 listed an object outside the configured prefix")?
+        };
+        ensure!(self.key(relative)? == key, "invalid listed S3 object key");
+        Ok(relative.to_owned())
+    }
 }
 
-#[cfg(feature = "s3")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectMetadata {
     pub key: String,
@@ -81,19 +90,19 @@ pub struct ObjectMetadata {
     pub etag: Option<String>,
 }
 
-#[cfg(feature = "s3")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectPage {
     pub objects: Vec<ObjectMetadata>,
     pub continuation: Option<String>,
 }
 
-#[cfg(feature = "s3")]
 #[async_trait]
 pub trait ObjectStore: Send + Sync {
     async fn list(&self, continuation: Option<String>) -> Result<ObjectPage>;
+    async fn get_small(&self, relative: &str, max_bytes: u64) -> Result<Vec<u8>>;
     async fn put_if_absent(&self, relative: &str, bytes: Vec<u8>) -> Result<()>;
-    async fn put_file(&self, relative: &str, path: &Path, checksum_sha256: &str) -> Result<()>;
+    async fn put_bytes(&self, relative: &str, bytes: Vec<u8>) -> Result<()>;
+    async fn put_file(&self, relative: &str, path: &Path, checksum_sha256_hex: &str) -> Result<()>;
     async fn download(
         &self,
         relative: &str,
@@ -244,10 +253,9 @@ impl ObjectStore for AwsObjectStore {
             .iter()
             .map(|object| {
                 Ok(ObjectMetadata {
-                    key: object
-                        .key()
-                        .context("S3 list object missing key")?
-                        .to_owned(),
+                    key: self
+                        .location
+                        .relative_key(object.key().context("S3 list object missing key")?)?,
                     size: u64::try_from(object.size().unwrap_or_default())?,
                     etag: object.e_tag().map(ToOwned::to_owned),
                 })
@@ -257,6 +265,26 @@ impl ObjectStore for AwsObjectStore {
             objects,
             continuation: output.next_continuation_token().map(ToOwned::to_owned),
         })
+    }
+
+    async fn get_small(&self, relative: &str, max_bytes: u64) -> Result<Vec<u8>> {
+        let output = self
+            .client
+            .get_object()
+            .bucket(self.location.bucket())
+            .key(self.location.key(relative)?)
+            .send()
+            .await?;
+        let declared = u64::try_from(output.content_length().unwrap_or_default())?;
+        ensure!(declared <= max_bytes, "S3 object exceeds read limit");
+        let mut input = output.body.into_async_read().take(max_bytes + 1);
+        let mut bytes = Vec::with_capacity(usize::try_from(declared)?);
+        input.read_to_end(&mut bytes).await?;
+        ensure!(
+            bytes.len() as u64 <= max_bytes,
+            "S3 object exceeds read limit"
+        );
+        Ok(bytes)
     }
 
     async fn put_if_absent(&self, relative: &str, bytes: Vec<u8>) -> Result<()> {
@@ -271,15 +299,24 @@ impl ObjectStore for AwsObjectStore {
         Ok(())
     }
 
-    async fn put_file(&self, relative: &str, path: &Path, checksum_sha256: &str) -> Result<()> {
-        let checksum = base64::engine::general_purpose::STANDARD
-            .decode(checksum_sha256)
-            .context("S3 checksum must be base64 SHA-256")?;
-        ensure!(checksum.len() == 32, "S3 checksum must be base64 SHA-256");
+    async fn put_bytes(&self, relative: &str, bytes: Vec<u8>) -> Result<()> {
+        self.client
+            .put_object()
+            .bucket(self.location.bucket())
+            .key(self.location.key(relative)?)
+            .body(ByteStream::from(bytes))
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    async fn put_file(&self, relative: &str, path: &Path, checksum_sha256_hex: &str) -> Result<()> {
+        let checksum = decode_sha256(checksum_sha256_hex)?;
+        let checksum_sha256 = base64::engine::general_purpose::STANDARD.encode(checksum);
         let key = self.location.key(relative)?;
         if tokio::fs::metadata(path).await?.len() >= 16 * 1024 * 1024 {
             return self
-                .put_multipart(key, path, &checksum, checksum_sha256)
+                .put_multipart(key, path, &checksum, &checksum_sha256)
                 .await;
         }
         self.client
@@ -340,6 +377,22 @@ impl ObjectStore for AwsObjectStore {
     }
 }
 
+#[cfg(feature = "s3")]
+fn decode_sha256(value: &str) -> Result<[u8; 32]> {
+    ensure!(value.len() == 64, "S3 checksum must be hex SHA-256");
+    let mut decoded = [0u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let high = (pair[0] as char)
+            .to_digit(16)
+            .context("S3 checksum must be hex SHA-256")?;
+        let low = (pair[1] as char)
+            .to_digit(16)
+            .context("S3 checksum must be hex SHA-256")?;
+        decoded[index] = ((high << 4) | low) as u8;
+    }
+    Ok(decoded)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,6 +405,11 @@ mod tests {
             location.key("checkpoints/1.json")?,
             "tenant/primary/checkpoints/1.json"
         );
+        assert_eq!(
+            location.relative_key("tenant/primary/checkpoints/1.json")?,
+            "checkpoints/1.json"
+        );
+        assert!(location.relative_key("other/checkpoints/1.json").is_err());
         for invalid in [
             "../escape",
             "/absolute",
