@@ -76,11 +76,18 @@ export async function apiRequest<T>(
 }
 
 const errorMessages: Record<string, string> = {
+  aggregation_memory_limit:
+    "집계 메모리 한도를 넘었습니다. 시간 범위나 그룹 수를 줄여 주세요.",
+  aggregate_unavailable:
+    "집계 인덱스를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.",
   admin_required: "관리자 권한이 필요합니다.",
   auth_rate_limited: "로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+  bucket_limit_exceeded:
+    "집계 구간이 너무 많습니다. 시간 범위나 그룹 수를 줄여 주세요.",
   authentication_required: "세션이 만료되었습니다. 다시 로그인해 주세요.",
   invalid_credentials: "이메일 또는 비밀번호가 올바르지 않습니다.",
   invalid_credentials_format: "이메일과 비밀번호 형식을 확인해 주세요.",
+  invalid_aggregate_request: "집계 조건을 확인해 주세요.",
   invalid_csrf: "요청 보호 토큰이 만료되었습니다. 다시 로그인해 주세요.",
   invalid_issue_id: "Issue 식별자가 올바르지 않습니다.",
   invalid_issue_query: "Issue 조회 조건을 확인해 주세요.",
@@ -90,6 +97,7 @@ const errorMessages: Record<string, string> = {
   invalid_project: "프로젝트 이름과 slug를 확인해 주세요.",
   invalid_record_id: "발생 기록 식별자가 올바르지 않습니다.",
   invalid_role: "사용자 역할을 확인해 주세요.",
+  numeric_overflow: "숫자 집계 범위를 초과했습니다.",
   empty_user_update: "변경할 사용자 설정을 선택해 주세요.",
   issue_access_denied: "이 프로젝트의 Issue를 볼 권한이 없습니다.",
   issue_not_found: "Issue를 찾을 수 없거나 프로젝트가 중지되었습니다.",

@@ -1,5 +1,7 @@
 import { apiRequest } from "./client";
 import type {
+  AggregateRequest,
+  AggregateResponse,
   Credentials,
   Issue,
   IssuePage,
@@ -175,6 +177,12 @@ export const endpoints = {
     if (input.readToken) query.set("read_token", input.readToken);
     return apiRequest<SearchPage>(`/api/logs?${query}`, { signal });
   },
+  aggregate: (input: AggregateRequest, signal?: AbortSignal) =>
+    apiRequest<AggregateResponse>("/api/explore/aggregate", {
+      method: "POST",
+      body: input,
+      signal,
+    }),
   recordDetail: (detailToken: string, signal?: AbortSignal) =>
     apiRequest<RecordDetail>(
       `/api/records/${encodeURIComponent(detailToken)}`,

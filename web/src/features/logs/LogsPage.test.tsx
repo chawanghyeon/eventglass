@@ -3,10 +3,16 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PropsWithChildren } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../api/client";
 import { endpoints } from "../../api/endpoints";
-import type { Project, SearchPage, SearchRow, Session } from "../../api/types";
+import type {
+  AggregateResponse,
+  Project,
+  SearchPage,
+  SearchRow,
+  Session,
+} from "../../api/types";
 import { sessionQueryKey } from "../auth";
 import { LogsPage } from "./LogsPage";
 
@@ -63,6 +69,34 @@ function page(overrides: Partial<SearchPage> = {}): SearchPage {
   };
 }
 
+function aggregate(): AggregateResponse {
+  return {
+    record_count: "7",
+    metrics: [
+      { name: "records", op: "count", value: "7", numeric_value_count: null },
+    ],
+    buckets: {
+      dimension: { histogram: { interval_ms: 3_600_000 } },
+      buckets: [
+        {
+          key: { type: "timestamp", timestamp_us: "1788825600000000" },
+          doc_count: "7",
+          metrics: [],
+          children: null,
+        },
+      ],
+      has_more: false,
+    },
+    warnings: [],
+    read_token: "read-token",
+    watermark: "9007199254740999",
+    complete: true,
+    took_ms: "3",
+    searched_shards: "1",
+    hydrated_shards: "0",
+  };
+}
+
 function LocationProbe() {
   const location = useLocation();
   return <output data-testid="location">{location.search}</output>;
@@ -97,8 +131,34 @@ function renderPage(path = basePath) {
 }
 
 afterEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.spyOn(endpoints, "aggregate").mockResolvedValue(aggregate());
+});
 
 describe("LogsPage", () => {
+  it("uses the rows read token and exact URL scope for its histogram", async () => {
+    vi.spyOn(endpoints, "logs").mockResolvedValue(page());
+    const aggregation = vi.mocked(endpoints.aggregate);
+    const path = `${basePath}&project=${projects[0].id}&query=timeout&levels=error`;
+    renderPage(path);
+
+    await waitFor(() =>
+      expect(aggregation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projects: [projects[0].id],
+          start: "2026-09-07T00:00:00Z",
+          end: "2026-09-09T00:00:00Z",
+          query: "timeout",
+          filters: expect.objectContaining({ levels: ["error"] }),
+          read_token: "read-token",
+          histogram: { field: "timestamp", interval: "auto" },
+        }),
+        expect.anything(),
+      ),
+    );
+    expect(await screen.findByLabelText(/7건/)).toBeInTheDocument();
+  });
+
   it("uses URL filters and keeps cursor pages in the same read snapshot and user cache", async () => {
     const user = userEvent.setup();
     const search = vi

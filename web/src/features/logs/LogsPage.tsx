@@ -4,10 +4,12 @@ import { useSearchParams } from "react-router-dom";
 import { ApiError, describeApiError } from "../../api/client";
 import type { SearchRow } from "../../api/types";
 import { Button } from "../../components/Button";
+import { Histogram } from "../../components/Histogram";
 import { Notice } from "../../components/Notice";
 import { RecordDetailPanel } from "../../components/RecordDetailPanel";
 import { Spinner } from "../../components/Spinner";
 import { useSession } from "../auth";
+import { aggregateQuery } from "../explore";
 import { projectsQuery } from "../projects";
 import { LogFilters } from "./LogFilters";
 import { logsQuery, recordDetailQuery } from "./queries";
@@ -59,6 +61,23 @@ export function LogsPage() {
   const logs = useQuery({
     ...logsQuery(user?.id ?? "unknown", requestState),
     enabled: Boolean(user) && valid && !bothBoundsMissing,
+    retry: false,
+  });
+  const histogramRequest = {
+    projects: state.projects,
+    start: state.start,
+    end: state.end,
+    query: state.query || undefined,
+    filters: state.filters,
+    read_token: logs.data?.read_token,
+    metrics: [{ op: "count" as const, name: "records" }],
+    group_by: [],
+    group_limit: 10,
+    histogram: { field: "timestamp" as const, interval: "auto" as const },
+  };
+  const histogram = useQuery({
+    ...aggregateQuery(user?.id ?? "unknown", histogramRequest),
+    enabled: Boolean(user && logs.data?.read_token && valid),
     retry: false,
   });
   const detail = useQuery({
@@ -162,6 +181,39 @@ export function LogsPage() {
             </Button>
           )}
         </Notice>
+      ) : null}
+      {logs.data ? (
+        <section
+          className="snapshot-panel"
+          aria-labelledby="logs-volume-heading"
+        >
+          <header>
+            <div>
+              <p className="eyebrow">동일 스냅샷</p>
+              <h2 id="logs-volume-heading">시간별 로그</h2>
+            </div>
+            <span>{logs.data.watermark} W</span>
+          </header>
+          {histogram.isPending ? <Spinner label="히스토그램 집계 중" /> : null}
+          {histogram.isError ? (
+            <Notice tone="error">
+              <span>{describeApiError(histogram.error)}</span>
+              <Button
+                onClick={() => void histogram.refetch()}
+                type="button"
+                variant="quiet"
+              >
+                집계 다시 시도
+              </Button>
+            </Notice>
+          ) : null}
+          {histogram.data?.buckets ? (
+            <Histogram
+              buckets={histogram.data.buckets}
+              label="시간별 로그 건수"
+            />
+          ) : null}
+        </section>
       ) : null}
       {logs.data?.rows.length === 0 ? (
         <div className="empty-state">
