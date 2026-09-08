@@ -40,8 +40,30 @@ struct View {
 impl Indexer {
     /// Startup completes recovery before exposing a ready Indexer handle.
     pub async fn start(db: DbWorker, data_dir: &Path) -> Result<Self> {
-        let catalog = db.call(|db| shards::startup(db)).await?;
+        let mut catalog = db.call(|db| shards::startup(db)).await?;
         let directory = data_dir.to_owned();
+        if let Some(active_id) = catalog.active_id.clone() {
+            let path = directory.join("shards").join(&active_id);
+            if path.join(crate::storage::manifest::NAME).exists() {
+                let installation = catalog.installation_id.clone();
+                let verified = tokio::task::spawn_blocking(move || -> Result<_> {
+                    let manifest =
+                        crate::storage::manifest::verify(&path, &installation, &active_id)?;
+                    let size = manifest.files.iter().try_fold(
+                        std::fs::metadata(path.join(crate::storage::manifest::NAME))?.len(),
+                        |sum, file| {
+                            sum.checked_add(file.size)
+                                .context("sealed shard size overflow")
+                        },
+                    )?;
+                    Ok((manifest, size))
+                })
+                .await??;
+                db.call(move |db| shards::finalize_seal(db, &verified.0, verified.1))
+                    .await?;
+                catalog = db.call(|db| shards::startup(db)).await?;
+            }
+        }
         let installation = catalog.installation_id;
         let applied = catalog.applied;
         let existing = catalog.active_id;

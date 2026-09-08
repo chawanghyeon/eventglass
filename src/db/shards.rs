@@ -3,7 +3,7 @@
 use anyhow::{Result, ensure};
 use rusqlite::{Connection, params};
 
-use crate::model::Boundary;
+use crate::{model::Boundary, storage::manifest::Manifest};
 
 pub const FORMAT_VERSION: &str = "tantivy-0.26.1/format-7";
 
@@ -11,6 +11,24 @@ pub struct StartupCatalog {
     pub installation_id: String,
     pub applied: Boundary,
     pub active_id: Option<String>,
+}
+
+struct SealRow {
+    state: String,
+    last_applied_inbox_id: i64,
+    record_count: i64,
+    min_timestamp_us: Option<i64>,
+    max_timestamp_us: Option<i64>,
+    min_received_at_us: Option<i64>,
+    max_received_at_us: Option<i64>,
+    min_ingest_seq: Option<i64>,
+    max_ingest_seq: Option<i64>,
+}
+
+fn supported(schema: u32, format: &str, tokenizer: u32) -> bool {
+    schema == crate::search::schema::APPLICATION_SCHEMA_VERSION
+        && format == FORMAT_VERSION
+        && tokenizer == crate::search::schema::TOKENIZER_VERSION
 }
 
 pub fn startup(db: &Connection) -> Result<StartupCatalog> {
@@ -33,20 +51,111 @@ pub fn startup(db: &Connection) -> Result<StartupCatalog> {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?;
         ensure!(
-            state == "active"
-                && schema == crate::search::schema::APPLICATION_SCHEMA_VERSION
-                && format == FORMAT_VERSION
-                && tokenizer == crate::search::schema::TOKENIZER_VERSION,
+            state == "active" && supported(schema, &format, tokenizer),
             "unsupported active shard catalog metadata"
         );
     } else {
-        let count: i64 = db.query_row("SELECT count(*) FROM shards", [], |r| r.get(0))?;
+        let invalid: i64 = db.query_row(
+            "SELECT count(*) FROM shards
+             WHERE state='active' OR schema_version!=?1 OR format_version!=?2
+                OR tokenizer_version!=?3",
+            params![
+                crate::search::schema::APPLICATION_SCHEMA_VERSION,
+                FORMAT_VERSION,
+                crate::search::schema::TOKENIZER_VERSION
+            ],
+            |r| r.get(0),
+        )?;
+        ensure!(invalid == 0, "unsupported sealed shard catalog metadata");
+        let last_boundary: Option<i64> =
+            db.query_row("SELECT max(last_applied_inbox_id) FROM shards", [], |r| {
+                r.get(0)
+            })?;
         ensure!(
-            count == 0 && catalog.applied == Boundary::default(),
-            "missing active shard requires explicit rotation/restore recovery"
+            match last_boundary {
+                None => catalog.applied == Boundary::default(),
+                Some(inbox_id) => inbox_id == catalog.applied.inbox_id,
+            },
+            "missing active shard has no sealed boundary at SQLite A"
         );
     }
     Ok(catalog)
+}
+
+/// Completes the SQLite half of a seal after the durable manifest exists.
+/// Repeating the transition after a crash is an idempotent no-op.
+pub fn finalize_seal(db: &mut Connection, manifest: &Manifest, size_bytes: u64) -> Result<()> {
+    let size_bytes = i64::try_from(size_bytes)?;
+    let tx = db.transaction()?;
+    let state = startup(&tx)?;
+    ensure!(
+        state.installation_id == manifest.installation_id && state.applied == manifest.boundary,
+        "sealed manifest does not match SQLite boundary"
+    );
+    let row = tx.query_row(
+        "SELECT state,last_applied_inbox_id,record_count,min_timestamp_us,max_timestamp_us,
+                min_received_at_us,max_received_at_us,min_ingest_seq,max_ingest_seq
+         FROM shards WHERE id=?1",
+        [&manifest.shard_id],
+        |r| {
+            Ok(SealRow {
+                state: r.get(0)?,
+                last_applied_inbox_id: r.get(1)?,
+                record_count: r.get(2)?,
+                min_timestamp_us: r.get(3)?,
+                max_timestamp_us: r.get(4)?,
+                min_received_at_us: r.get(5)?,
+                max_received_at_us: r.get(6)?,
+                min_ingest_seq: r.get(7)?,
+                max_ingest_seq: r.get(8)?,
+            })
+        },
+    )?;
+    ensure!(
+        row.last_applied_inbox_id == manifest.boundary.inbox_id
+            && u64::try_from(row.record_count)? == manifest.stats.record_count
+            && row.min_timestamp_us == manifest.stats.min_timestamp_us
+            && row.max_timestamp_us == manifest.stats.max_timestamp_us
+            && row.min_received_at_us == manifest.stats.min_received_at_us
+            && row.max_received_at_us == manifest.stats.max_received_at_us
+            && row.min_ingest_seq == manifest.stats.min_ingest_seq
+            && row.max_ingest_seq == manifest.stats.max_ingest_seq,
+        "sealed manifest statistics do not match catalog"
+    );
+    match row.state.as_str() {
+        "active" => {
+            ensure!(
+                state.active_id.as_deref() == Some(manifest.shard_id.as_str()),
+                "sealed shard is not the catalog active"
+            );
+            ensure!(
+                tx.execute(
+                    "UPDATE shards SET state='local',size_bytes=?1,sealed_at_us=?2
+                     WHERE id=?3 AND state='active'",
+                    params![size_bytes, manifest.sealed_at_us, manifest.shard_id],
+                )? == 1,
+                "active shard seal CAS failed"
+            );
+            ensure!(
+                tx.execute(
+                    "UPDATE runtime_state SET active_shard_id=NULL
+                     WHERE singleton=1 AND active_shard_id=?1",
+                    [&manifest.shard_id],
+                )? == 1,
+                "runtime active seal CAS failed"
+            );
+        }
+        "local" => {
+            ensure!(
+                state.active_id.as_deref() != Some(manifest.shard_id.as_str())
+                    && row.last_applied_inbox_id == manifest.boundary.inbox_id,
+                "inconsistent completed seal"
+            );
+        }
+        _ => anyhow::bail!("seal can only finalize an active or local shard"),
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 pub fn adopt_initial(

@@ -1,10 +1,12 @@
 use anyhow::Result;
 use eventglass::{
+    db,
     model::Boundary,
     search::active::ActiveShard,
     sentry::{self, ProjectContext},
     storage::manifest::{self, ShardStats},
 };
+use rusqlite::params;
 use serde_json::json;
 
 #[test]
@@ -115,5 +117,78 @@ fn seal_rejects_unpublished_boundary_and_manifest_path_escape() -> Result<()> {
         serde_json::to_vec(&sealed)?,
     )?;
     assert!(manifest::verify(directory.path(), &installation, &id).is_err());
+    Ok(())
+}
+
+#[test]
+fn durable_manifest_drives_idempotent_sqlite_seal_and_next_active_adoption() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let shard_root = directory.path().join("shard");
+    std::fs::create_dir(&shard_root)?;
+    let installation = uuid::Uuid::new_v4().to_string();
+    let shard_id = uuid::Uuid::new_v4().to_string();
+    let boundary = Boundary {
+        inbox_id: 4,
+        ingest_seq: 7,
+    };
+    let mut active =
+        ActiveShard::create(&shard_root, &installation, &shard_id, Boundary::default())?;
+    active.publish(Boundary::default())?;
+    // A boundary-only commit is valid and proves that an empty native shard does not
+    // invent a Record merely to make the catalog transition possible.
+    active.commit(&[], boundary)?;
+    active.publish(boundary)?;
+    let stats = ShardStats {
+        record_count: 0,
+        min_timestamp_us: None,
+        max_timestamp_us: None,
+        min_received_at_us: None,
+        max_received_at_us: None,
+        min_ingest_seq: None,
+        max_ingest_seq: None,
+    };
+    let manifest = active.seal(&shard_root, stats, 99)?;
+
+    let mut database = db::open(&directory.path().join("meta.db"))?;
+    database.execute(
+        "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq,
+            last_applied_inbox_id,last_applied_ingest_seq)
+         VALUES(1,?1,'generation',8,?2,?3)",
+        params![installation, boundary.inbox_id, boundary.ingest_seq],
+    )?;
+    database.execute(
+        "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+            last_applied_inbox_id,record_count,created_at_us)
+         VALUES(?1,1,?2,1,'active',?3,0,1)",
+        params![
+            shard_id,
+            eventglass::db::shards::FORMAT_VERSION,
+            boundary.inbox_id
+        ],
+    )?;
+    database.execute(
+        "UPDATE runtime_state SET active_shard_id=?1 WHERE singleton=1",
+        [&shard_id],
+    )?;
+
+    eventglass::db::shards::finalize_seal(&mut database, &manifest, 1234)?;
+    eventglass::db::shards::finalize_seal(&mut database, &manifest, 1234)?;
+    let sealed: (String, i64, i64, Option<String>) = database.query_row(
+        "SELECT s.state,s.size_bytes,s.sealed_at_us,r.active_shard_id
+         FROM shards s CROSS JOIN runtime_state r WHERE s.id=?1",
+        [&shard_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(sealed, ("local".into(), 1234, 99, None));
+
+    let next = uuid::Uuid::new_v4().to_string();
+    eventglass::db::shards::adopt_initial(&mut database, &next, boundary, 100)?;
+    let states = database
+        .prepare("SELECT state,count(*) FROM shards GROUP BY state ORDER BY state")?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    assert_eq!(states, vec![("active".into(), 1), ("local".into(), 1)]);
     Ok(())
 }

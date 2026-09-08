@@ -4,7 +4,9 @@ use eventglass::{
     config::Config,
     db::ingest::{self, IngestProject},
     model::{Boundary, RecordKind},
+    search::active::ActiveShard,
     sentry::{self, ProjectContext},
+    storage::manifest::ShardStats,
 };
 
 async fn app() -> Result<(tempfile::TempDir, AppState)> {
@@ -114,5 +116,70 @@ async fn cataloged_missing_native_directory_never_reinitializes() -> Result<()> 
         .call(move |db| eventglass::db::shards::adopt_initial(db, &id, Boundary::default(), 0))
         .await?;
     assert!(app.start_core().await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_finishes_manifested_seal_before_creating_the_next_active() -> Result<()> {
+    let (dir, app) = app().await?;
+    let installation = app
+        .db
+        .call(|db| {
+            Ok(db.query_row(
+                "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                [],
+                |row| row.get::<_, String>(0),
+            )?)
+        })
+        .await?;
+    let sealed_id = uuid::Uuid::new_v4().to_string();
+    let catalog_id = sealed_id.clone();
+    app.db
+        .call(move |db| {
+            eventglass::db::shards::adopt_initial(db, &catalog_id, Boundary::default(), 1)
+        })
+        .await?;
+    let path = dir.path().join("shards").join(&sealed_id);
+    std::fs::create_dir_all(&path)?;
+    let mut active = ActiveShard::create(&path, &installation, &sealed_id, Boundary::default())?;
+    active.publish(Boundary::default())?;
+    active.seal(
+        &path,
+        ShardStats {
+            record_count: 0,
+            min_timestamp_us: None,
+            max_timestamp_us: None,
+            min_received_at_us: None,
+            max_received_at_us: None,
+            min_ingest_seq: None,
+            max_ingest_seq: None,
+        },
+        2,
+    )?;
+
+    let app = app.start_core().await?;
+    let next = app.indexer.as_ref().unwrap().snapshot()?;
+    assert_ne!(next.shard_id, sealed_id);
+    assert_eq!(next.boundary, Boundary::default());
+    let sealed_id_for_db = sealed_id.clone();
+    let states = app
+        .db
+        .call(move |db| {
+            Ok((
+                db.query_row(
+                    "SELECT state FROM shards WHERE id=?1",
+                    [&sealed_id_for_db],
+                    |row| row.get::<_, String>(0),
+                )?,
+                db.query_row(
+                    "SELECT count(*) FROM shards WHERE state='active'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+            ))
+        })
+        .await?;
+    assert_eq!(states, ("local".into(), 1));
+    app.indexer.as_ref().unwrap().shutdown().await?;
     Ok(())
 }
