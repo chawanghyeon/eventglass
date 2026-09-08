@@ -14,13 +14,14 @@ path = "src/main.rs"
 default = []
 failpoints = []
 embed-ui = []
+s3 = ["dep:async-trait", "dep:aws-config", "dep:aws-sdk-s3"]
 
 [dependencies]
 anyhow = "1"
-async-trait = "0.1"
+async-trait = { version = "0.1", optional = true }
 argon2 = "0.5"
-aws-config = { version = "=1.11.0", default-features = false, features = ["behavior-version-latest", "credentials-process", "default-https-client", "rt-tokio"] }
-aws-sdk-s3 = { version = "=1.145.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "http-1x", "rt-tokio", "rustls"] }
+aws-config = { version = "=1.11.0", default-features = false, features = ["behavior-version-latest", "credentials-process", "default-https-client", "rt-tokio"], optional = true }
+aws-sdk-s3 = { version = "=1.145.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "http-1x", "rt-tokio", "rustls"], optional = true }
 axum = "0.8"
 base64 = "0.22"
 fs4 = "0.13"

@@ -59,10 +59,17 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+      - name: Restore Rust dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          cache-bin: 'false'
       - name: Fetch locked Rust dependencies
         run: cargo fetch --locked
       - name: Run Rust lint, unit, and documentation checks
         run: ./scripts/check rust
+      - name: Compile and test the optional S3 client
+        run: ./scripts/check s3-smoke
       - name: Run native and SQLite contracts
         run: ./scripts/check contracts
 
@@ -97,6 +104,11 @@ jobs:
           persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+      - name: Restore Rust dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          cache-bin: 'false'
       - name: Fetch locked Rust dependencies
         run: cargo fetch --locked
       - name: Run implemented integration suites
@@ -121,6 +133,11 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+      - name: Restore Rust dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          cache-bin: 'false'
       - name: Install locked frontend dependencies
         run: npm --prefix web ci
       - name: Fetch locked Rust dependencies
@@ -149,6 +166,11 @@ jobs:
           cache-dependency-path: tools/sdk-fixtures/node-app/package-lock.json
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Restore Rust dependency cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          cache-bin: 'false'
       - name: Bootstrap pinned SDK applications
         run: ./tools/sdk-fixtures/bootstrap-live.sh
       - name: Verify actual SDK ingestion and native persistence

@@ -1,11 +1,16 @@
 //! Validated S3 namespace and the narrow object operations used by archive recovery.
 
 use anyhow::{Context, Result, ensure};
+#[cfg(feature = "s3")]
 use async_trait::async_trait;
+#[cfg(feature = "s3")]
 use aws_sdk_s3::{Client, primitives::ByteStream};
+#[cfg(feature = "s3")]
 use base64::Engine;
+#[cfg(feature = "s3")]
 use sha2::{Digest, Sha256};
 use std::path::{Component, Path};
+#[cfg(feature = "s3")]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use url::Url;
 
@@ -68,6 +73,7 @@ impl S3Location {
     }
 }
 
+#[cfg(feature = "s3")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectMetadata {
     pub key: String,
@@ -75,12 +81,14 @@ pub struct ObjectMetadata {
     pub etag: Option<String>,
 }
 
+#[cfg(feature = "s3")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectPage {
     pub objects: Vec<ObjectMetadata>,
     pub continuation: Option<String>,
 }
 
+#[cfg(feature = "s3")]
 #[async_trait]
 pub trait ObjectStore: Send + Sync {
     async fn list(&self, continuation: Option<String>) -> Result<ObjectPage>;
@@ -94,11 +102,13 @@ pub trait ObjectStore: Send + Sync {
     ) -> Result<ObjectMetadata>;
 }
 
+#[cfg(feature = "s3")]
 pub struct AwsObjectStore {
     client: Client,
     location: S3Location,
 }
 
+#[cfg(feature = "s3")]
 impl AwsObjectStore {
     pub async fn load(location: S3Location, endpoint: Option<&Url>) -> Result<Self> {
         let shared = aws_config::defaults(aws_config::BehaviorVersion::v2026_01_12())
@@ -212,6 +222,7 @@ impl AwsObjectStore {
     }
 }
 
+#[cfg(feature = "s3")]
 #[async_trait]
 impl ObjectStore for AwsObjectStore {
     async fn list(&self, continuation: Option<String>) -> Result<ObjectPage> {

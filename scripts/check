@@ -45,7 +45,6 @@ run_rust() {
     need_command rustfmt
     need_command cargo-clippy
     cargo fmt --all -- --check
-    cargo check --locked --all-targets
     cargo clippy --locked --all-targets -- -D warnings
     run_nonempty_test_target "Rust library tests" --lib
     run_nonempty_test_target "Rust documentation tests" --doc
@@ -55,6 +54,13 @@ run_rust() {
         *) fail "eventglass --version returned unexpected output: $version_output" ;;
     esac
     printf 'check: %s\n' "$version_output"
+}
+
+run_s3_smoke() {
+    need_command cargo
+    need_command cargo-clippy
+    cargo clippy --locked --all-targets --features s3 -- -D warnings
+    run_nonempty_test_target "S3 namespace and client build" --lib --features s3 storage::s3::tests::
 }
 
 run_contracts() {
@@ -106,13 +112,14 @@ run_embed_smoke() {
     [ -f "$REPO_ROOT/tests/assets.rs" ] || fail "missing required Cargo test target tests/assets.rs"
     npm --prefix "$REPO_ROOT/web" run build
     run_nonempty_test_target "embedded UI assets" --features embed-ui --test assets
-    cargo build --locked --features embed-ui --bin eventglass
+    cargo build --locked --release --features embed-ui,s3 --bin eventglass
 }
 
 cd "$REPO_ROOT"
 case "${1:-}" in
     quick) run_quick ;;
     rust) run_rust ;;
+    s3-smoke) run_s3_smoke ;;
     contracts) run_contracts ;;
     web) run_web ;;
     integration) run_integration ;;
@@ -120,5 +127,5 @@ case "${1:-}" in
     embed-smoke) run_embed_smoke ;;
     sdk-live) "$REPO_ROOT/tools/sdk-fixtures/run-live.sh" ;;
     resource) "$REPO_ROOT/scripts/check-resource" ;;
-    *) fail "usage: ./scripts/check {quick|rust|contracts|web|integration|crash-smoke|embed-smoke|sdk-live|resource}" ;;
+    *) fail "usage: ./scripts/check {quick|rust|s3-smoke|contracts|web|integration|crash-smoke|embed-smoke|sdk-live|resource}" ;;
 esac
