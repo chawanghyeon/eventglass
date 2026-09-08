@@ -20,6 +20,7 @@ pub struct AppState {
     pub indexer: Option<crate::indexer::Indexer>,
     pub query_permit: Arc<Semaphore>,
     pub live_permit: Arc<Semaphore>,
+    pub alerts: Option<crate::alerts::AlertCoordinator>,
     pub tokens: Arc<crate::search::tokens::TokenCodec>,
     pub disk_budget: crate::storage::budget::DiskBudget,
     _directory_lock: Arc<File>,
@@ -80,6 +81,7 @@ impl AppState {
             indexer: None,
             query_permit: Arc::new(Semaphore::new(1)),
             live_permit: Arc::new(Semaphore::new(32)),
+            alerts: None,
             tokens: Arc::new(crate::search::tokens::TokenCodec::new(token_key)),
             disk_budget,
             _directory_lock: lock,
@@ -94,14 +96,18 @@ impl AppState {
         let backup = build_backup_coordinator(&self.config, &self.db).await;
         #[cfg(not(feature = "s3"))]
         let backup = None;
-        self.indexer = Some(
-            crate::indexer::Indexer::start_with_backup(
-                self.db.clone(),
-                &self.config.data_dir,
-                backup,
-            )
-            .await?,
-        );
+        let indexer = crate::indexer::Indexer::start_with_backup(
+            self.db.clone(),
+            &self.config.data_dir,
+            backup,
+        )
+        .await?;
+        self.alerts = Some(crate::alerts::AlertCoordinator::start(
+            self.db.clone(),
+            indexer.clone(),
+            self.query_permit.clone(),
+        )?);
+        self.indexer = Some(indexer);
         Ok(self)
     }
 }

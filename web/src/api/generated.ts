@@ -318,6 +318,76 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List active alert configurations */
+        get: operations["listAlerts"];
+        put?: never;
+        /** Create an alert configuration */
+        post: operations["createAlert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alerts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Soft-delete an alert and cancel pending deliveries */
+        delete: operations["deleteAlert"];
+        options?: never;
+        head?: never;
+        /** Replace an alert configuration using revision compare-and-swap */
+        patch: operations["updateAlert"];
+        trace?: never;
+    };
+    "/api/alert-deliveries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Inspect recent alert delivery outcomes */
+        get: operations["listAlertDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alert-deliveries/{id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry one failed delivery with its stable identity */
+        post: operations["retryAlertDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/status": {
         parameters: {
             query?: never;
@@ -541,6 +611,75 @@ export interface components {
         RecordDetail: {
             record_id: string;
             raw: unknown;
+        };
+        /** @enum {string} */
+        AlertTimeBasis: "received_at" | "timestamp";
+        AlertCondition: {
+            /** @constant */
+            type: "new_issue";
+        } | {
+            /** @constant */
+            type: "regression";
+        } | {
+            /** @enum {string} */
+            type: "error_count" | "log_count";
+            query: string;
+            window_seconds: number;
+            /** Format: uint64 */
+            threshold: number;
+            cooldown_seconds: number;
+            time_basis: components["schemas"]["AlertTimeBasis"];
+        };
+        AlertDestination: {
+            /** @constant */
+            type: "webhook";
+            /** Format: uri */
+            url: string;
+        };
+        AlertInput: {
+            name: string;
+            project_id: components["schemas"]["PositiveDecimalString"] | null;
+            condition: components["schemas"]["AlertCondition"];
+            destination: components["schemas"]["AlertDestination"];
+            enabled: boolean;
+        };
+        AlertUpdate: components["schemas"]["AlertInput"] & {
+            /** Format: int64 */
+            revision: number;
+        };
+        Alert: components["schemas"]["AlertInput"] & {
+            id: components["schemas"]["PositiveDecimalString"];
+            /** Format: int64 */
+            revision: number;
+            last_evaluation_error: string | null;
+            last_evaluation_watermark: components["schemas"]["NonNegativeDecimalString"] | null;
+            pending_evaluation_end_us: components["schemas"]["Int64String"] | null;
+            pending_cut_seq: components["schemas"]["NonNegativeDecimalString"] | null;
+            last_evaluated_at_us: components["schemas"]["Int64String"] | null;
+            last_triggered_at_us: components["schemas"]["Int64String"] | null;
+            created_at_us: components["schemas"]["Int64String"];
+            updated_at_us: components["schemas"]["Int64String"];
+        };
+        AlertList: {
+            items: components["schemas"]["Alert"][];
+        };
+        AlertDelivery: {
+            id: string;
+            alert_id: components["schemas"]["PositiveDecimalString"];
+            payload: {
+                [key: string]: unknown;
+            };
+            /** @enum {string} */
+            state: "pending" | "sent" | "failed" | "cancelled";
+            sent_at_us: components["schemas"]["Int64String"] | null;
+            last_status_code: number | null;
+            attempts: number;
+            next_retry_at_us: components["schemas"]["Int64String"];
+            created_at_us: components["schemas"]["Int64String"];
+            last_error: string | null;
+        };
+        AlertDeliveryList: {
+            items: components["schemas"]["AlertDelivery"][];
         };
         SystemStatus: {
             version: string;
@@ -1272,6 +1411,166 @@ export interface operations {
             429: components["responses"]["Error"];
             503: components["responses"]["Error"];
             504: components["responses"]["Error"];
+        };
+    };
+    listAlerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alert configurations visible to an administrator */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertList"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    createAlert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertInput"];
+            };
+        };
+        responses: {
+            /** @description Alert created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IdResponse"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    deleteAlert: {
+        parameters: {
+            query: {
+                revision: number;
+            };
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Alert deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    updateAlert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AlertUpdate"];
+            };
+        };
+        responses: {
+            /** @description Updated alert */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Alert"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            409: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listAlertDeliveries: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recent deliveries */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlertDeliveryList"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    retryAlertDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Delivery queued with the same ID */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
     getSystemStatus: {

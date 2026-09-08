@@ -503,17 +503,39 @@ fn validate_request(request: &SearchRequest) -> Result<()> {
         }
     }
 
-    if !request.query.trim().is_empty() {
-        let ast = tantivy::query_grammar::parse_query(&request.query)
-            .map_err(|_| SearchError::InvalidQuery)?;
-        let (clauses, depth) = ast_cost(&ast, 1);
-        if clauses > MAX_QUERY_CLAUSES {
-            return Err(SearchError::InvalidRequest("too_many_query_clauses"));
-        }
-        if depth > MAX_QUERY_DEPTH {
-            return Err(SearchError::InvalidRequest("query_too_deep"));
-        }
+    validate_query_text(&request.query)?;
+    Ok(())
+}
+
+pub fn validate_query_text(query: &str) -> Result<()> {
+    if query.len() > MAX_QUERY_BYTES {
+        return Err(SearchError::InvalidRequest("query_too_long"));
     }
+    if query.trim().is_empty() {
+        return Ok(());
+    }
+    let ast = tantivy::query_grammar::parse_query(query).map_err(|_| SearchError::InvalidQuery)?;
+    let (clauses, depth) = ast_cost(&ast, 1);
+    if clauses > MAX_QUERY_CLAUSES {
+        return Err(SearchError::InvalidRequest("too_many_query_clauses"));
+    }
+    if depth > MAX_QUERY_DEPTH {
+        return Err(SearchError::InvalidRequest("query_too_deep"));
+    }
+    let schema = schema::build();
+    let message = schema.get_field("message").map_err(SearchError::Native)?;
+    let search_text = schema
+        .get_field("search_text")
+        .map_err(SearchError::Native)?;
+    let mut parser = QueryParser::new(
+        schema,
+        vec![message, search_text],
+        TokenizerManager::default(),
+    );
+    parser.set_conjunction_by_default();
+    parser
+        .parse_query(query)
+        .map_err(|_| SearchError::InvalidQuery)?;
     Ok(())
 }
 

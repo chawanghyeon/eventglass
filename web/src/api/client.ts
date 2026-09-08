@@ -76,6 +76,8 @@ export async function apiRequest<T>(
 }
 
 const errorMessages: Record<string, string> = {
+  alert_not_found: "경보 또는 전송 기록을 찾을 수 없습니다.",
+  alert_revision_conflict: "경보가 다른 요청에서 먼저 변경되었습니다.",
   aggregation_memory_limit:
     "집계 메모리 한도를 넘었습니다. 시간 범위나 그룹 수를 줄여 주세요.",
   aggregate_unavailable:
@@ -88,6 +90,7 @@ const errorMessages: Record<string, string> = {
   invalid_credentials: "이메일 또는 비밀번호가 올바르지 않습니다.",
   invalid_credentials_format: "이메일과 비밀번호 형식을 확인해 주세요.",
   invalid_aggregate_request: "집계 조건을 확인해 주세요.",
+  invalid_alert: "경보 이름, 조건, 프로젝트와 HTTPS webhook을 확인해 주세요.",
   invalid_csrf: "요청 보호 토큰이 만료되었습니다. 다시 로그인해 주세요.",
   invalid_issue_id: "Issue 식별자가 올바르지 않습니다.",
   invalid_issue_query: "Issue 조회 조건을 확인해 주세요.",

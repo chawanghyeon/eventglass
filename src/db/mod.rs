@@ -1,5 +1,6 @@
 //! SQLite schema ownership and connection policy.
 
+pub mod alerts;
 pub mod auth;
 pub mod indexer;
 pub mod ingest;

@@ -2,6 +2,10 @@ import { apiRequest } from "./client";
 import type {
   AggregateRequest,
   AggregateResponse,
+  Alert,
+  AlertDelivery,
+  AlertInput,
+  AlertUpdate,
   Credentials,
   Issue,
   IssuePage,
@@ -153,6 +157,36 @@ export const endpoints = {
     ),
   systemStatus: (signal?: AbortSignal) =>
     apiRequest<SystemStatus>("/api/system/status", { signal }),
+  alerts: (signal?: AbortSignal) =>
+    apiRequest<{ items: Alert[] }>("/api/alerts", { signal }).then(
+      (response) => response.items,
+    ),
+  createAlert: (input: AlertInput, signal?: AbortSignal) =>
+    apiRequest<{ id: string }>("/api/alerts", {
+      method: "POST",
+      body: input,
+      signal,
+    }),
+  updateAlert: (id: string, input: AlertUpdate, signal?: AbortSignal) =>
+    apiRequest<Alert>(`/api/alerts/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: input,
+      signal,
+    }),
+  deleteAlert: (id: string, revision: number, signal?: AbortSignal) =>
+    apiRequest<undefined>(
+      `/api/alerts/${encodeURIComponent(id)}?revision=${revision}`,
+      { method: "DELETE", signal },
+    ),
+  alertDeliveries: (signal?: AbortSignal) =>
+    apiRequest<{ items: AlertDelivery[] }>("/api/alert-deliveries", {
+      signal,
+    }).then((response) => response.items),
+  retryAlertDelivery: (id: string, signal?: AbortSignal) =>
+    apiRequest<undefined>(
+      `/api/alert-deliveries/${encodeURIComponent(id)}/retry`,
+      { method: "POST", signal },
+    ),
   logs: (
     input: {
       projects: string[];

@@ -1,5 +1,6 @@
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { LoginPage, SetupPage } from "../features/auth";
+import { AlertsPage } from "../features/alerts";
 import { DashboardPage } from "../features/dashboard";
 import { ExplorePage } from "../features/explore";
 import { IssueDetailPage, IssuesPage } from "../features/issues";
@@ -24,6 +25,7 @@ export const router = createBrowserRouter([
           { path: "/issues/:id", element: <IssueDetailPage /> },
           { path: "/projects", element: <ProjectsPage /> },
           { path: "/users", element: <UsersPage /> },
+          { path: "/alerts", element: <AlertsPage /> },
           { path: "/", element: <DashboardPage /> },
         ],
       },

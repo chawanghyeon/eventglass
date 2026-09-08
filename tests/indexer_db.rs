@@ -308,10 +308,11 @@ fn lifecycle_uses_finalize_time_state_tuple_order_and_deterministic_outbox() -> 
     let (_directory, mut db) = database()?;
     for (id, condition) in [(1, "new_issue"), (2, "regression")] {
         db.execute(
-            "INSERT INTO alerts(
+            r#"INSERT INTO alerts(
                  id,project_id,name,condition_type,condition_json,destination_type,
                  destination_json,enabled,created_at_us,updated_at_us)
-             VALUES(?1,1,?2,?3,'{}','webhook','{}',1,1,1)",
+             VALUES(?1,1,?2,?3,'{}','webhook',
+                 '{"type":"webhook","url":"https://hooks.example.test"}',1,1,1)"#,
             params![id, condition, condition],
         )?;
     }
@@ -489,10 +490,11 @@ fn changed_inbox_and_alert_overflow_roll_back_the_whole_finalize() -> Result<()>
     let tx = db.transaction()?;
     {
         let mut insert = tx.prepare(
-            "INSERT INTO alerts(
+            r#"INSERT INTO alerts(
                  id,project_id,name,condition_type,condition_json,destination_type,
                  destination_json,enabled,created_at_us,updated_at_us)
-             VALUES(?1,1,?2,'new_issue','{}','webhook','{}',1,1,1)",
+             VALUES(?1,1,?2,'new_issue','{}','webhook',
+                 '{"type":"webhook","url":"https://hooks.example.test"}',1,1,1)"#,
         )?;
         for id in 1..=1_001i64 {
             insert.execute(params![id, format!("alert-{id}")])?;

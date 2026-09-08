@@ -1,6 +1,7 @@
 //! Same-origin administration API. Public ingestion authentication is separate.
 
 mod aggregate;
+mod alerts;
 #[cfg(feature = "embed-ui")]
 mod assets;
 mod auth;
@@ -14,6 +15,10 @@ mod search;
 
 use std::sync::Arc;
 
+use alerts::{
+    create as create_alert, delete_alert, deliveries as alert_deliveries, list as alerts,
+    retry_delivery, update as update_alert,
+};
 use auth::{create_user, list_users, login, logout, me, setup, status, update_user};
 use axum::{
     Json, Router,
@@ -85,6 +90,17 @@ impl From<anyhow::Error> for ApiError {
                 }
             };
         }
+        if let Some(error) = error.downcast_ref::<crate::db::alerts::AlertError>() {
+            use crate::db::alerts::AlertError;
+            return match error {
+                AlertError::Forbidden => Self(StatusCode::FORBIDDEN, "admin_required"),
+                AlertError::Invalid => Self(StatusCode::BAD_REQUEST, "invalid_alert"),
+                AlertError::NotFound => Self(StatusCode::NOT_FOUND, "alert_not_found"),
+                AlertError::RevisionConflict => {
+                    Self(StatusCode::CONFLICT, "alert_revision_conflict")
+                }
+            };
+        }
         // Database/native error strings can contain sensitive input or paths.
         Self(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable")
     }
@@ -133,6 +149,10 @@ pub fn router(app: AppState) -> Router {
         .route("/api/explore/aggregate", post(aggregate::post_aggregate))
         .route("/api/logs", get(search::get_logs))
         .route("/api/logs/live", get(live::live))
+        .route("/api/alerts", get(alerts).post(create_alert))
+        .route("/api/alerts/{id}", patch(update_alert).delete(delete_alert))
+        .route("/api/alert-deliveries", get(alert_deliveries))
+        .route("/api/alert-deliveries/{id}/retry", post(retry_delivery))
         .route("/api/records/{detail_token}", get(records::get_record))
         .route("/api/issues", get(list_issues))
         .route("/api/issues/{id}", get(get_issue).patch(update_issue))

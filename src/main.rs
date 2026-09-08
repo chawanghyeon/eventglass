@@ -28,6 +28,7 @@ async fn main() -> anyhow::Result<()> {
     anyhow::ensure!(args.is_empty() || args == ["serve"], "unknown command");
     let app = app.start_core().await?;
     let indexer = app.indexer.clone().expect("started core has an indexer");
+    let alerts = app.alerts.clone().expect("started core has alert tasks");
     let listener = tokio::net::TcpListener::bind(app.config.addr).await?;
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let server = axum::serve(listener, eventglass::http::router(app))
@@ -37,11 +38,11 @@ async fn main() -> anyhow::Result<()> {
         .into_future();
     tokio::pin!(server);
     tokio::select! {
-        result = &mut server => { result?; indexer.shutdown().await?; },
+        result = &mut server => { result?; alerts.shutdown().await?; indexer.shutdown().await?; },
         result = shutdown_signal() => {
             result?;
             let _ = stop.send(());
-            let drain = async { server.await?; indexer.shutdown().await?; Ok::<_,anyhow::Error>(()) };
+            let drain = async { server.await?; alerts.shutdown().await?; indexer.shutdown().await?; Ok::<_,anyhow::Error>(()) };
             if let Ok(result) = tokio::time::timeout(std::time::Duration::from_secs(30),drain).await {
                 result?;
             } else {

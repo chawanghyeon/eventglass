@@ -49,10 +49,16 @@ export function AppShell() {
             프로젝트
           </NavLink>
           {user.role === "admin" ? (
-            <NavLink to="/users">
-              <span aria-hidden="true">◎</span>
-              사용자
-            </NavLink>
+            <>
+              <NavLink to="/alerts">
+                <span aria-hidden="true">△</span>
+                Alerts
+              </NavLink>
+              <NavLink to="/users">
+                <span aria-hidden="true">◎</span>
+                사용자
+              </NavLink>
+            </>
           ) : null}
         </nav>
         <div className="sidebar__bottom">

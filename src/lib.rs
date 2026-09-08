@@ -1,5 +1,6 @@
 //! Eventglass's application contracts and embedded server implementation.
 
+pub mod alerts;
 pub mod app;
 pub mod auth;
 pub mod config;

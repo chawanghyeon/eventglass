@@ -665,6 +665,176 @@ paths:
           $ref: "#/components/responses/Error"
         "504":
           $ref: "#/components/responses/Error"
+  /api/alerts:
+    get:
+      operationId: listAlerts
+      summary: List active alert configurations
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Alert configurations visible to an administrator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertList"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createAlert
+      summary: Create an alert configuration
+      security:
+        - cookieAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertInput"
+      responses:
+        "201":
+          description: Alert created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IdResponse"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/alerts/{id}:
+    patch:
+      operationId: updateAlert
+      summary: Replace an alert configuration using revision compare-and-swap
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertUpdate"
+      responses:
+        "200":
+          description: Updated alert
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Alert"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteAlert
+      summary: Soft-delete an alert and cancel pending deliveries
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+        - name: revision
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        "204":
+          description: Alert deleted
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/alert-deliveries:
+    get:
+      operationId: listAlertDeliveries
+      summary: Inspect recent alert delivery outcomes
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Recent deliveries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertDeliveryList"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
+  /api/alert-deliveries/{id}/retry:
+    post:
+      operationId: retryAlertDelivery
+      summary: Retry one failed delivery with its stable identity
+      security:
+        - cookieAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{64}$"
+      responses:
+        "204":
+          description: Delivery queued with the same ID
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/system/status:
     get:
       operationId: getSystemStatus
@@ -1242,6 +1412,199 @@ components:
           type: string
           pattern: "^[0-9a-f]{64}$"
         raw: {}
+    AlertTimeBasis:
+      type: string
+      enum: [received_at, timestamp]
+    AlertCondition:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [type]
+          properties:
+            type:
+              type: string
+              const: new_issue
+        - type: object
+          additionalProperties: false
+          required: [type]
+          properties:
+            type:
+              type: string
+              const: regression
+        - type: object
+          additionalProperties: false
+          required: [type, query, window_seconds, threshold, cooldown_seconds, time_basis]
+          properties:
+            type:
+              type: string
+              enum: [error_count, log_count]
+            query:
+              type: string
+              maxLength: 8192
+            window_seconds:
+              type: integer
+              minimum: 60
+              maximum: 2592000
+            threshold:
+              type: integer
+              format: uint64
+              minimum: 1
+            cooldown_seconds:
+              type: integer
+              minimum: 0
+              maximum: 2592000
+            time_basis:
+              $ref: "#/components/schemas/AlertTimeBasis"
+    AlertDestination:
+      type: object
+      additionalProperties: false
+      required: [type, url]
+      properties:
+        type:
+          type: string
+          const: webhook
+        url:
+          type: string
+          format: uri
+          pattern: "^https://"
+    AlertInput:
+      type: object
+      additionalProperties: false
+      required: [name, project_id, condition, destination, enabled]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        project_id:
+          oneOf:
+            - $ref: "#/components/schemas/PositiveDecimalString"
+            - type: "null"
+        condition:
+          $ref: "#/components/schemas/AlertCondition"
+        destination:
+          $ref: "#/components/schemas/AlertDestination"
+        enabled:
+          type: boolean
+    AlertUpdate:
+      allOf:
+        - $ref: "#/components/schemas/AlertInput"
+        - type: object
+          required: [revision]
+          properties:
+            revision:
+              type: integer
+              format: int64
+              minimum: 0
+    Alert:
+      allOf:
+        - $ref: "#/components/schemas/AlertInput"
+        - type: object
+          required:
+            - id
+            - revision
+            - last_evaluation_error
+            - last_evaluation_watermark
+            - pending_evaluation_end_us
+            - pending_cut_seq
+            - last_evaluated_at_us
+            - last_triggered_at_us
+            - created_at_us
+            - updated_at_us
+          properties:
+            id:
+              $ref: "#/components/schemas/PositiveDecimalString"
+            revision:
+              type: integer
+              format: int64
+              minimum: 0
+            last_evaluation_error:
+              type: [string, "null"]
+            last_evaluation_watermark:
+              oneOf:
+                - $ref: "#/components/schemas/NonNegativeDecimalString"
+                - type: "null"
+            pending_evaluation_end_us:
+              oneOf:
+                - $ref: "#/components/schemas/Int64String"
+                - type: "null"
+            pending_cut_seq:
+              oneOf:
+                - $ref: "#/components/schemas/NonNegativeDecimalString"
+                - type: "null"
+            last_evaluated_at_us:
+              oneOf:
+                - $ref: "#/components/schemas/Int64String"
+                - type: "null"
+            last_triggered_at_us:
+              oneOf:
+                - $ref: "#/components/schemas/Int64String"
+                - type: "null"
+            created_at_us:
+              $ref: "#/components/schemas/Int64String"
+            updated_at_us:
+              $ref: "#/components/schemas/Int64String"
+    AlertList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Alert"
+    AlertDelivery:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - alert_id
+        - payload
+        - state
+        - sent_at_us
+        - last_status_code
+        - attempts
+        - next_retry_at_us
+        - created_at_us
+        - last_error
+      properties:
+        id:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        alert_id:
+          $ref: "#/components/schemas/PositiveDecimalString"
+        payload:
+          type: object
+          additionalProperties: true
+        state:
+          type: string
+          enum: [pending, sent, failed, cancelled]
+        sent_at_us:
+          oneOf:
+            - $ref: "#/components/schemas/Int64String"
+            - type: "null"
+        last_status_code:
+          type: [integer, "null"]
+          minimum: 100
+          maximum: 599
+        attempts:
+          type: integer
+          minimum: 0
+        next_retry_at_us:
+          $ref: "#/components/schemas/Int64String"
+        created_at_us:
+          $ref: "#/components/schemas/Int64String"
+        last_error:
+          type: [string, "null"]
+    AlertDeliveryList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AlertDelivery"
     SystemStatus:
       type: object
       additionalProperties: false

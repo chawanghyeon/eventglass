@@ -475,6 +475,66 @@ textarea {
   color: #607077;
   font-size: 0.82rem;
 }
+.alert-form__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+.alert-form__grid label {
+  display: grid;
+  gap: 0.4rem;
+  color: #52636a;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+.alert-form__grid input,
+.alert-form__grid select {
+  min-width: 0;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid #ccd7da;
+  border-radius: 0.65rem;
+  background: #fff;
+  color: #102c31;
+  font: inherit;
+}
+.alert-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+.alert-card > header,
+.delivery-list li {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.alert-card h2,
+.alert-card p {
+  margin: 0;
+}
+.alert-card {
+  display: grid;
+  gap: 0.8rem;
+}
+.delivery-list {
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.delivery-list li {
+  padding: 0.8rem 0;
+  border-top: 1px solid #e8edef;
+}
+.delivery-list li > div {
+  display: grid;
+  gap: 0.25rem;
+}
+.delivery-list span {
+  color: #607077;
+  font-size: 0.82rem;
+}
 .histogram {
   min-width: 0;
   margin: 0;
@@ -1454,5 +1514,9 @@ textarea {
   }
   .occurrence-row > span {
     grid-column: 1;
+  }
+  .alert-form__grid,
+  .alert-grid {
+    grid-template-columns: 1fr;
   }
 }

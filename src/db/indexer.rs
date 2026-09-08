@@ -717,13 +717,19 @@ fn enqueue_event_alerts(
         .as_deref()
         .context("Error missing issue ID")?;
     let mut statement = db.prepare(
-        "SELECT id FROM alerts
+        "SELECT id,revision,destination_json FROM alerts
          WHERE condition_type=?1 AND enabled=1 AND deleted_at_us IS NULL
            AND (project_id IS NULL OR project_id=?2)
          ORDER BY id LIMIT 1001",
     )?;
     let alert_ids = statement
-        .query_map(params![kind, record.project_id], |row| row.get::<_, i64>(0))?
+        .query_map(params![kind, record.project_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     drop(statement);
     let next_delivery_count = event_deliveries
@@ -734,7 +740,7 @@ fn enqueue_event_alerts(
         "enabled event alert count exceeds finalize bound"
     );
     *event_deliveries = next_delivery_count;
-    for alert_id in alert_ids {
+    for (alert_id, alert_revision, destination_json) in alert_ids {
         let dedupe_key = format!(
             "eventglass:{alert_id}:{kind}:{issue_id}:{}",
             record.ingest_seq
@@ -743,12 +749,16 @@ fn enqueue_event_alerts(
             "{:x}",
             Sha256::digest(format!("eventglass.alert.delivery.v1:{dedupe_key}").as_bytes())
         );
+        let destination: serde_json::Value = serde_json::from_str(&destination_json)?;
         let payload = json!({
             "version": 1,
             "kind": kind,
+            "alert_id": alert_id.to_string(),
+            "alert_revision": alert_revision,
             "issue_id": issue_id,
             "project_id": record.project_id.to_string(),
-            "trigger_ingest_seq": record.ingest_seq.to_string()
+            "trigger_ingest_seq": record.ingest_seq.to_string(),
+            "destination": destination
         })
         .to_string();
         let inserted = db.execute(
