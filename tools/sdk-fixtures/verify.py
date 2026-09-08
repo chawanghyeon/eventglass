@@ -9,7 +9,14 @@ import re
 import sys
 from pathlib import Path
 
-from generate import EXPECTED, FIXTURE_ROOT, ROOT, decode_wire, split_envelope
+from generate import (
+    EXPECTED,
+    FIXTURE_ROOT,
+    NORMALIZABLE_DSN,
+    ROOT,
+    decode_wire,
+    split_envelope,
+)
 
 
 def verify_case(case: str) -> None:
@@ -47,7 +54,9 @@ def verify_case(case: str) -> None:
                 if not isinstance(message, str):
                     message = payload.get("logentry", {}).get("formatted")
                 if not isinstance(message, str):
-                    message = payload["exception"]["values"][-1]["value"]
+                    exception = payload["exception"]
+                    values = exception["values"] if isinstance(exception, dict) else exception
+                    message = values[-1]["value"]
                 record: dict[str, object] = {
                     "kind": "error",
                     "project_id": 1,
@@ -87,7 +96,8 @@ def verify_case(case: str) -> None:
     for record in expected["records"]:
         if record["message"].encode() not in joined:
             raise AssertionError(f"{case}: expected message is absent: {record['message']}")
-    if re.search(rb"127\.0\.0\.1:\d+", joined):
+    dynamic_ports = joined.replace(NORMALIZABLE_DSN.encode(), b"")
+    if re.search(rb"127\.0\.0\.1:\d+", dynamic_ports):
         raise AssertionError(f"{case}: unsanitized localhost port remains")
 
     sort_key = lambda record: json.dumps(record, sort_keys=True, ensure_ascii=False)

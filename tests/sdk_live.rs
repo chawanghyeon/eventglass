@@ -17,6 +17,7 @@ use tantivy::{
 
 const SENTINEL: &str = "eventglass-live-scrub-sentinel";
 const CASES: &[&str] = &[
+    "browser-events-and-console",
     "python-events",
     "python-logging-default",
     "python-logging-debug",
@@ -69,18 +70,19 @@ fn real_sdks_reach_running_eventglass() -> Result<()> {
     let report: Value = serde_json::from_slice(&std::fs::read(&report_path)?)?;
     ensure!(report["result"] == "pass");
     ensure!(report["localhost_only"] == true);
-    ensure!(report["acknowledged_records"] == 21);
-    ensure!(report["durable_cut_before_restart"] == 21);
-    ensure!(report["durable_cut_after_restart"] == 21);
+    ensure!(report["acknowledged_records"] == 24);
+    ensure!(report["durable_cut_before_restart"] == 24);
+    ensure!(report["durable_cut_after_restart"] == 24);
     ensure!(report["gzip_exercised"] == true);
     ensure!(report["chunked_transfer_exercised"] == true);
     ensure!(report["event_and_log_envelope_items_exercised"] == true);
+    ensure!(report["browser_cross_origin_cors_exercised"] == true);
     ensure!(report["sdk_mode"] == "live-sequential");
 
-    let records = native_records(&data_dir, 21)?;
-    ensure!(records.len() == 21, "expected 21 published native records");
+    let records = native_records(&data_dir, 24)?;
+    ensure!(records.len() == 24, "expected 24 published native records");
     compare_expected(&root, &records, CASES)?;
-    verify_native_storage(&records, 21)?;
+    verify_native_storage(&records, 24)?;
 
     let direct_data_dir = directory.path().join("direct-data");
     std::fs::create_dir(&direct_data_dir)?;
@@ -134,7 +136,8 @@ fn real_sdks_reach_running_eventglass() -> Result<()> {
         })
         .sum::<Result<u64>>()?;
     println!(
-        "SDK live PASS: {} observed HTTP requests, 21 ACKed/native records, {wire_bytes} wire \
+        "SDK live PASS: {} observed server SDK HTTP requests, 24 ACKed/native records including \
+         Chromium cross-origin CORS, {wire_bytes} wire \
          bytes, {decoded_bytes} decoded bytes, restart preserved cut; direct Node added 8 exact \
          native records without observer; scrub sentinel absent",
         requests.len()

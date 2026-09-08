@@ -12,7 +12,7 @@ Rust 1.97.1, Node 22.22.2/npm 10.9.7, Python 3.12를 사용합니다. `./scripts
 ./scripts/check crash-smoke   # failpoint 프로세스 복구
 ./scripts/check embed-smoke   # UI 내장 바이너리
 ./tools/sdk-fixtures/bootstrap-live.sh
-./scripts/check sdk-live      # 실제 Python/Node SDK 전송
+./scripts/check sdk-live      # 실제 Python/Node/Browser/Go SDK 전송
 ./scripts/check resource      # Linux 실행: CPU 1 / 1GiB / swap 0
 ```
 

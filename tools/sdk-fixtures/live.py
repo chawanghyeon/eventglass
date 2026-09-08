@@ -32,6 +32,7 @@ from generate import EXPECTED, ROOT, TOOL_DIR, command_for, decode_wire, split_e
 
 SENTINEL = "eventglass-live-scrub-sentinel"
 CASES = (
+    "browser-events-and-console",
     "python-events",
     "python-logging-default",
     "python-logging-debug",
@@ -203,6 +204,17 @@ def verify_dependencies() -> dict[str, str]:
     locked_node_sdk = lock["packages"]["node_modules/@sentry/node"]["version"]
     if installed_node_sdk != locked_node_sdk or installed_node_sdk != "10.73.0":
         raise RuntimeError("pinned @sentry/node environment does not match package-lock.json")
+    browser_package = TOOL_DIR / "browser-app" / "node_modules" / "@sentry" / "browser" / "package.json"
+    browser_lock_path = TOOL_DIR / "browser-app" / "package-lock.json"
+    browser_bundle = TOOL_DIR / "browser-app" / "dist" / "app.js"
+    if not browser_package.is_file() or not browser_bundle.is_file():
+        raise RuntimeError("missing pinned Browser environment; run tools/sdk-fixtures/bootstrap.sh")
+    installed_browser_sdk = json.loads(browser_package.read_text())["version"]
+    browser_lock = json.loads(browser_lock_path.read_text())
+    locked_browser_sdk = browser_lock["packages"]["node_modules/@sentry/browser"]["version"]
+    locked_playwright = browser_lock["packages"]["node_modules/playwright"]["version"]
+    if installed_browser_sdk != locked_browser_sdk or installed_browser_sdk != "10.73.0":
+        raise RuntimeError("pinned @sentry/browser environment does not match package-lock.json")
     node_version = subprocess.run(
         [node, "--version"], check=True, capture_output=True, text=True
     ).stdout.strip()
@@ -221,6 +233,8 @@ def verify_dependencies() -> dict[str, str]:
         "sentry_sdk_python": installed["sentry-sdk"],
         "node": node_version,
         "sentry_sdk_node": installed_node_sdk,
+        "sentry_sdk_browser": installed_browser_sdk,
+        "playwright": locked_playwright,
         "go": go_version,
         "sentry_sdk_go": "0.49.0",
     }
@@ -435,9 +449,14 @@ def run(binary: Path, report_path: Path | None, supplied_data_dir: Path) -> dict
                 before_count = len(observer.acks)
                 observer.current_case = case
                 sdk_environment = scrub_environment(environment)
-                sdk_environment["SENTRY_FIXTURE_DSN"] = sdk_dsn
+                sdk_environment["SENTRY_FIXTURE_DSN"] = (
+                    str(key["dsn"]) if case == "browser-events-and-console" else sdk_dsn
+                )
                 sdk_environment["SENTRY_FIXTURE_SECRET"] = SENTINEL
                 sdk_environment["SENTRY_FIXTURE_MODE"] = "live-sequential"
+                sdk_environment["PLAYWRIGHT_BROWSERS_PATH"] = str(
+                    TOOL_DIR / ".playwright-browsers"
+                )
                 subprocess.run(
                     command_for(case),
                     cwd=ROOT,
@@ -447,9 +466,15 @@ def run(binary: Path, report_path: Path | None, supplied_data_dir: Path) -> dict
                 )
                 with observer.lock:
                     case_acks = list(observer.acks[before_count:])
-                accepted = sum(int(ack.body.get("accepted", -1)) for ack in case_acks)
                 expected_case = len(EXPECTED[case]["records"])
-                if not case_acks or any(ack.status != 202 for ack in case_acks):
+                if case == "browser-events-and-console":
+                    ledger = read_ledger(data_dir / "meta.db")
+                    accepted = durable_record_count(ledger) - expected_total
+                else:
+                    accepted = sum(int(ack.body.get("accepted", -1)) for ack in case_acks)
+                if case != "browser-events-and-console" and (
+                    not case_acks or any(ack.status != 202 for ack in case_acks)
+                ):
                     responses = [
                         {"status": ack.status, "body": ack.body, "item_types": ack.item_types}
                         for ack in case_acks
@@ -459,7 +484,7 @@ def run(binary: Path, report_path: Path | None, supplied_data_dir: Path) -> dict
                     )
                 if accepted != expected_case:
                     raise RuntimeError(f"{case}: accepted {accepted}, expected {expected_case}")
-                if case not in {"python-fastapi", "python-celery-fork"} and not any(
+                if case not in {"python-fastapi", "python-celery-fork", "browser-events-and-console"} and not any(
                     ack.sentinel_sent for ack in case_acks
                 ):
                     raise RuntimeError(f"{case}: scrub sentinel was absent from SDK requests")
@@ -474,7 +499,8 @@ def run(binary: Path, report_path: Path | None, supplied_data_dir: Path) -> dict
                     "case": case,
                     "accepted": accepted,
                     "next_ingest_seq": ledger["next_ingest_seq"],
-                    "requests": len(case_acks),
+                    "requests": len(case_acks) if case != "browser-events-and-console" else None,
+                    "transport": "direct_cross_origin_cors" if case == "browser-events-and-console" else "observed_proxy",
                 })
 
             with observer.lock:
@@ -527,6 +553,7 @@ def run(binary: Path, report_path: Path | None, supplied_data_dir: Path) -> dict
             "gzip_exercised": True,
             "chunked_transfer_exercised": True,
             "event_and_log_envelope_items_exercised": True,
+            "browser_cross_origin_cors_exercised": True,
             "sdk_mode": "live-sequential",
             "native_content_inspection_required": True,
             "database_bytes_at_end": database_bytes,

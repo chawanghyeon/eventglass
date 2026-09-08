@@ -1,0 +1,19 @@
+{
+  "name": "eventglass-sentry-browser-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "esbuild app.mjs --bundle --format=iife --platform=browser --outfile=dist/app.js"
+  },
+  "dependencies": {
+    "@sentry/browser": "10.73.0",
+    "playwright": "1.63.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.9"
+  }
+}

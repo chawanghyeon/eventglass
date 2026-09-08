@@ -50,8 +50,17 @@ fn fixture_records(case: &str) -> Vec<eventglass::model::Record> {
             &Limits::default(),
         )
         .unwrap();
-        assert_eq!(normalized.unsupported_items, 0);
-        assert!(normalized.envelope_auth.is_none());
+        let expected_unsupported = request["item_types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|kind| !matches!(kind.as_str(), Some("event" | "log")))
+            .count();
+        assert_eq!(normalized.unsupported_items, expected_unsupported);
+        if let Some(auth) = normalized.envelope_auth {
+            assert_eq!(auth.project_id, 1);
+            assert_eq!(auth.public_key, "fixturePublicKey");
+        }
         records.extend(normalized.records);
     }
     assert_fixture_mapping(&root, &records);
@@ -86,7 +95,7 @@ fn assert_fixture_mapping(root: &std::path::Path, records: &[eventglass::model::
 }
 
 #[test]
-fn real_python_and_node_sdk_fixtures_normalize() {
+fn every_supported_sdk_fixture_normalizes() {
     let python_events = fixture_records("python-events");
     assert_eq!(python_events.len(), 2);
     assert!(
@@ -151,6 +160,38 @@ fn real_python_and_node_sdk_fixtures_normalize() {
             .collect::<Vec<_>>(),
         ["trace", "debug", "info", "warning", "error", "fatal"]
     );
+
+    for (case, message) in [
+        ("python-fastapi", "fastapi fixture exception"),
+        ("python-celery-fork", "celery fixture exception"),
+    ] {
+        let records = fixture_records(case);
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].kind, RecordKind::Error);
+        assert_eq!(records[0].message, message);
+    }
+
+    let browser = fixture_records("browser-events-and-console");
+    assert_eq!(browser.len(), 3);
+    assert_eq!(
+        browser
+            .iter()
+            .filter(|record| record.kind == RecordKind::Error)
+            .count(),
+        2
+    );
+    assert_eq!(
+        browser
+            .iter()
+            .filter(|record| record.kind == RecordKind::Log)
+            .map(|record| record.message.as_str())
+            .collect::<Vec<_>>(),
+        ["browser fixture console info"]
+    );
+
+    let go = fixture_records("go-events");
+    assert_eq!(go.len(), 2);
+    assert!(go.iter().all(|record| record.kind == RecordKind::Error));
 }
 
 #[test]

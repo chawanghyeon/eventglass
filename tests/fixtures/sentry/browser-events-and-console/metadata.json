@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "case": "go-events",
+  "case": "browser-events-and-console",
   "capture": "real_sdk_to_localhost_http",
   "sdk": {
-    "package": "github.com/getsentry/sentry-go",
-    "version": "0.49.0"
+    "package": "@sentry/browser",
+    "version": "10.73.0"
   },
-  "runtime": "go version go1.26.5 darwin/arm64",
+  "runtime": "v22.22.2",
   "dsn": "http://fixturePublicKey@127.0.0.1:PORT/1",
   "response": {
     "status": 202,
@@ -14,20 +14,25 @@
     "body": "{}"
   },
   "integration_options": {
-    "attach_stacktrace": true,
-    "flush_after_each_event": true
+    "enableLogs": true,
+    "integrations": [
+      "browserApiErrors",
+      "globalHandlers",
+      "consoleLogging"
+    ]
   },
   "expected_kinds": [
-    "error"
+    "error",
+    "log"
   ],
   "requests": [
     {
       "file": "envelopes/001.envelope",
       "content_encoding": "identity",
       "original_transfer_encoding": "content-length",
-      "wire_bytes": 1630,
-      "decompressed_bytes": 1630,
-      "sha256": "755a08211d1626606259cd24f47ffd990d508430fdf7e69618cb2552d85dcff7",
+      "wire_bytes": 1858,
+      "decompressed_bytes": 1858,
+      "sha256": "f6f53e80c0c3f875ddcd449653b799d9b9b7b2bd1597976878f5aea106853962",
       "item_types": [
         "event"
       ]
@@ -36,11 +41,22 @@
       "file": "envelopes/002.envelope",
       "content_encoding": "identity",
       "original_transfer_encoding": "content-length",
-      "wire_bytes": 1613,
-      "decompressed_bytes": 1613,
-      "sha256": "dd6676d88b3281891d39db4deed3fef948759e48d14076f8f350038727c2a38d",
+      "wire_bytes": 1123,
+      "decompressed_bytes": 1123,
+      "sha256": "d42117c4e67bd9095629c7c1377301936ba8b7ad73d05aad3196bf8835c22b6c",
       "item_types": [
         "event"
+      ]
+    },
+    {
+      "file": "envelopes/003.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "content-length",
+      "wire_bytes": 905,
+      "decompressed_bytes": 905,
+      "sha256": "38cd3dd13d2d370029e9883ebec5ff15f4622470021490bf550924ce9bd63e7d",
+      "item_types": [
+        "log"
       ]
     }
   ],
@@ -49,7 +65,6 @@
     "timestamps fixed to 2026-01-02T03:04:05Z",
     "repository path replaced by <REPO>",
     "localhost ephemeral port replaced by PORT",
-    "envelope DSN port fixed to 8123 when the SDK serializes it in payload",
     "inner item byte lengths and outer HTTP content-length recomputed"
   ]
 }

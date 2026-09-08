@@ -24,10 +24,23 @@ TOOL_DIR = ROOT / "tools" / "sdk-fixtures"
 FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "sentry"
 PUBLIC_KEY = "fixturePublicKey"
 FIXED_DSN = f"http://{PUBLIC_KEY}@127.0.0.1:PORT/1"
+NORMALIZABLE_DSN = f"http://{PUBLIC_KEY}@127.0.0.1:8123/1"
 FIXED_TIMESTAMP = "2026-01-02T03:04:05.000000Z"
 
 
 EXPECTED: dict[str, dict[str, Any]] = {
+    "browser-events-and-console": {
+        "schema_version": 1,
+        "fixture_role": "normalization_contract_mapping",
+        "assertion": "unordered_record_subsets",
+        "server_normalization_executed": False,
+        "mapping_only": True,
+        "records": [
+            {"kind": "error", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "error", "message": "browser fixture exception"},
+            {"kind": "error", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "warning", "message": "browser fixture message"},
+            {"kind": "log", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "info", "message": "browser fixture console info"},
+        ],
+    },
     "python-events": {
         "schema_version": 1,
         "fixture_role": "normalization_contract_mapping",
@@ -154,9 +167,18 @@ class CaptureHandler(BaseHTTPRequestHandler):
         self.server.captures.append(capture)  # type: ignore[attr-defined]
         self.send_response(202)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Content-Length", "2")
         self.end_headers()
         self.wfile.write(b"{}")
+
+    def do_OPTIONS(self) -> None:  # noqa: N802 - stdlib handler API
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST")
+        self.send_header("Access-Control-Allow-Headers", "content-type,x-sentry-auth")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def log_message(self, _format: str, *_args: object) -> None:
         return
@@ -257,7 +279,7 @@ def sanitize_envelope(raw: bytes, sanitizer: Sanitizer) -> tuple[bytes, list[str
     envelope_header, items = split_envelope(raw)
     envelope_header = sanitizer.value(envelope_header)
     if "dsn" in envelope_header:
-        envelope_header["dsn"] = FIXED_DSN
+        envelope_header["dsn"] = NORMALIZABLE_DSN
     item_types: list[str] = []
     output = bytearray(json.dumps(envelope_header, ensure_ascii=False, separators=(",", ":")).encode())
     output.extend(b"\n")
@@ -294,6 +316,8 @@ def sanitize_headers(headers: dict[str, str], wire_length: int) -> dict[str, str
 
 
 def command_for(case: str) -> list[str]:
+    if case == "browser-events-and-console":
+        return ["node", str(TOOL_DIR / "browser-app" / "run.mjs")]
     if case.startswith("python-"):
         python = TOOL_DIR / ".venv" / "bin" / "python"
         mode = case.removeprefix("python-")
@@ -314,6 +338,9 @@ def sdk_version(case: str) -> tuple[str, str]:
             text=True,
         )
         return "sentry-sdk", result.stdout.strip()
+    if case == "browser-events-and-console":
+        package = json.loads((TOOL_DIR / "browser-app" / "node_modules" / "@sentry" / "browser" / "package.json").read_text())
+        return "@sentry/browser", package["version"]
     package = json.loads((TOOL_DIR / "node-app" / "node_modules" / "@sentry" / "node" / "package.json").read_text())
     if case == "node-events-and-logs":
         return "@sentry/node", package["version"]
@@ -404,7 +431,7 @@ def run_case(case: str) -> None:
         runtime = subprocess.run(
             [sys.executable, "--version"], capture_output=True, text=True, check=True
         ).stdout.strip()
-    elif case.startswith("node-"):
+    elif case.startswith("node-") or case.startswith("browser-"):
         runtime = subprocess.run(
             ["node", "--version"], capture_output=True, text=True, check=True
         ).stdout.strip()
@@ -425,6 +452,8 @@ def run_case(case: str) -> None:
             if case.startswith("python-")
             else {"enableLogs": True, "defaultIntegrations": False}
             if case.startswith("node-")
+            else {"enableLogs": True, "integrations": ["browserApiErrors", "globalHandlers", "consoleLogging"]}
+            if case.startswith("browser-")
             else {"attach_stacktrace": True, "flush_after_each_event": True}
         ),
         "expected_kinds": sorted({record["kind"] for record in expected["records"]}),
@@ -434,6 +463,7 @@ def run_case(case: str) -> None:
             "timestamps fixed to 2026-01-02T03:04:05Z",
             "repository path replaced by <REPO>",
             "localhost ephemeral port replaced by PORT",
+            "envelope DSN port fixed to 8123 when the SDK serializes it in payload",
             "inner item byte lengths and outer HTTP content-length recomputed",
         ],
     }

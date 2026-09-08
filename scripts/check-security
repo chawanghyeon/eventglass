@@ -18,5 +18,6 @@ cd "$ROOT"
 cargo deny --locked check advisories bans licenses sources
 npm --prefix web audit --omit=dev --audit-level=high
 npm --prefix tools/sdk-fixtures/node-app audit --omit=dev --audit-level=high
+npm --prefix tools/sdk-fixtures/browser-app audit --omit=dev --audit-level=high
 "$ROOT/.tools/quality/bin/pre-commit" run secrets --all-files
 printf 'security: Rust advisories/licenses/sources, production npm dependencies, and repository secrets passed\n'
