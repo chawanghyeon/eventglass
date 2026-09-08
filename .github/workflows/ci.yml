@@ -197,10 +197,36 @@ jobs:
       - name: Verify Linux runtime under one CPU and one GiB without swap
         run: ./scripts/check resource
 
+  security:
+    name: security
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.22.2
+      - name: Install pinned security tools
+        run: |
+          ./scripts/install-ci-tools
+          cargo install cargo-deny --version 0.19.0 --locked
+      - name: Install secret scanner
+        run: .tools/quality/bin/pip install --requirement requirements/quality.txt
+      - name: Run dependency, license, source, and secret gates
+        run: ./scripts/check security
+
   required:
     name: required
     if: ${{ always() }}
-    needs: [hygiene, contracts, web, integration, release-smoke, sdk-live, resource]
+    needs: [hygiene, contracts, web, integration, release-smoke, sdk-live, resource, security]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -213,3 +239,4 @@ jobs:
           test "${{ needs.release-smoke.result }}" = success
           test "${{ needs.sdk-live.result }}" = success
           test "${{ needs.resource.result }}" = success
+          test "${{ needs.security.result }}" = success

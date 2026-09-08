@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+PATH="$ROOT/.tools/cargo-deny/bin:$ROOT/.tools/bin:$PATH"
+export PATH
+
+command -v cargo-deny >/dev/null 2>&1 || {
+    printf 'security: cargo-deny 0.19.0 is required\n' >&2
+    exit 1
+}
+[ "$(cargo deny --version)" = "cargo-deny 0.19.0" ] || {
+    printf 'security: cargo-deny must be version 0.19.0\n' >&2
+    exit 1
+}
+
+cd "$ROOT"
+cargo deny --locked check advisories bans licenses sources
+npm --prefix web audit --omit=dev --audit-level=high
+npm --prefix tools/sdk-fixtures/node-app audit --omit=dev --audit-level=high
+"$ROOT/.tools/quality/bin/pre-commit" run secrets --all-files
+printf 'security: Rust advisories/licenses/sources, production npm dependencies, and repository secrets passed\n'
