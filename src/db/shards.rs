@@ -13,6 +13,67 @@ pub struct StartupCatalog {
     pub active_id: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct LocalCatalogShard {
+    pub id: String,
+    pub state: String,
+    pub size_bytes: i64,
+    pub record_count: i64,
+    pub min_timestamp_us: Option<i64>,
+    pub max_timestamp_us: Option<i64>,
+    pub min_received_at_us: Option<i64>,
+    pub max_received_at_us: Option<i64>,
+    pub min_ingest_seq: Option<i64>,
+    pub max_ingest_seq: Option<i64>,
+    pub last_applied_inbox_id: i64,
+    pub sealed_at_us: Option<i64>,
+}
+
+impl LocalCatalogShard {
+    pub fn matches(&self, manifest: &Manifest, local_size: u64) -> bool {
+        self.id == manifest.shard_id
+            && matches!(self.state.as_str(), "local" | "remote_verified")
+            && self.size_bytes >= 0
+            && u64::try_from(self.size_bytes).ok() == Some(local_size)
+            && u64::try_from(self.record_count).ok() == Some(manifest.stats.record_count)
+            && self.min_timestamp_us == manifest.stats.min_timestamp_us
+            && self.max_timestamp_us == manifest.stats.max_timestamp_us
+            && self.min_received_at_us == manifest.stats.min_received_at_us
+            && self.max_received_at_us == manifest.stats.max_received_at_us
+            && self.min_ingest_seq == manifest.stats.min_ingest_seq
+            && self.max_ingest_seq == manifest.stats.max_ingest_seq
+            && self.last_applied_inbox_id == manifest.boundary.inbox_id
+            && self.sealed_at_us == Some(manifest.sealed_at_us)
+    }
+}
+
+pub fn local_catalog(db: &Connection) -> Result<Vec<LocalCatalogShard>> {
+    let mut statement = db.prepare(
+        "SELECT id,state,size_bytes,record_count,min_timestamp_us,max_timestamp_us,
+                min_received_at_us,max_received_at_us,min_ingest_seq,max_ingest_seq,
+                last_applied_inbox_id,sealed_at_us
+         FROM shards WHERE state IN ('local','remote_verified') ORDER BY id",
+    )?;
+    Ok(statement
+        .query_map([], |row| {
+            Ok(LocalCatalogShard {
+                id: row.get(0)?,
+                state: row.get(1)?,
+                size_bytes: row.get(2)?,
+                record_count: row.get(3)?,
+                min_timestamp_us: row.get(4)?,
+                max_timestamp_us: row.get(5)?,
+                min_received_at_us: row.get(6)?,
+                max_received_at_us: row.get(7)?,
+                min_ingest_seq: row.get(8)?,
+                max_ingest_seq: row.get(9)?,
+                last_applied_inbox_id: row.get(10)?,
+                sealed_at_us: row.get(11)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 struct SealRow {
     state: String,
     last_applied_inbox_id: i64,

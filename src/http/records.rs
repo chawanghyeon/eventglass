@@ -15,7 +15,6 @@ use super::{
 use crate::{
     db::search::{self as authorization, Authorization},
     search::{
-        active::Published,
         detail::{self, RecordDetail},
         tokens::{Position, TokenError, TokenKind},
     },
@@ -73,20 +72,20 @@ pub(super) async fn get_record(
         .ok_or_else(unavailable)?
         .snapshot()
         .map_err(|_| unavailable())?;
-    if published.shard_id != shard_id || verified.watermark > published.boundary.ingest_seq {
+    if verified.watermark > published.boundary.ingest_seq {
         return Err(unavailable());
     }
-    let active_id = published.shard_id.clone();
+    let detail_shard_id = shard_id.clone();
     state
         .app
         .db
-        .call(move |db| authorization::require_only_active(db, &active_id))
+        .call(move |db| authorization::local_detail_shard(db, &detail_shard_id))
         .await
         .map_err(scope_error)?;
 
     let detail = load_native(
         &state,
-        published,
+        shard_id,
         NativeDetail::Watermark {
             project_id,
             record_id,
@@ -139,7 +138,7 @@ pub(super) enum NativeDetail {
 
 pub(super) async fn load_native(
     state: &HttpState,
-    published: Published,
+    shard_id: String,
     lookup: NativeDetail,
 ) -> ApiResult<Option<RecordDetail>> {
     let permit = state
@@ -148,19 +147,25 @@ pub(super) async fn load_native(
         .clone()
         .try_acquire_owned()
         .map_err(|_| ApiError(StatusCode::TOO_MANY_REQUESTS, "query_busy"))?;
+    let indexer = state.app.indexer.clone().ok_or_else(unavailable)?;
     let task = tokio::task::spawn_blocking(move || {
         let _permit = permit;
+        let pins = indexer.pin_shards(&[shard_id])?;
+        let published = pins
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("missing shard pin"))?
+            .published();
         match lookup {
             NativeDetail::Watermark {
                 project_id,
                 record_id,
                 watermark,
-            } => detail::load(&published, project_id, &record_id, watermark),
+            } => detail::load(published, project_id, &record_id, watermark),
             NativeDetail::Occurrence {
                 project_id,
                 record_id,
                 ingest_seq,
-            } => detail::load_occurrence(&published, project_id, &record_id, ingest_seq),
+            } => detail::load_occurrence(published, project_id, &record_id, ingest_seq),
         }
     });
     tokio::time::timeout(std::time::Duration::from_secs(10), task)

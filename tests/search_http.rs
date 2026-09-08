@@ -7,8 +7,12 @@ use eventglass::{
     app::AppState,
     config::Config,
     db::ingest::{self, IngestProject},
+    model::Boundary,
+    search::active::ActiveShard,
     sentry::{self, ProjectContext},
+    storage::manifest::{self, ShardStats},
 };
+use rusqlite::params;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -143,8 +147,134 @@ async fn ingest(app: &AppState, project: i64, id: u32, message: &str) -> anyhow:
     .await?;
     Ok(target)
 }
+
+async fn add_matching_local_shard(
+    dir: &tempfile::TempDir,
+    app: &AppState,
+    message: &str,
+) -> anyhow::Result<String> {
+    let (installation, boundary) = app
+        .db
+        .call(|db| {
+            Ok((
+                db.query_row(
+                    "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )?,
+                eventglass::db::indexer::applied(db)?,
+            ))
+        })
+        .await?;
+    let shard_id = uuid::Uuid::new_v4().to_string();
+    let path = dir.path().join("shards").join(&shard_id);
+    std::fs::create_dir(&path)?;
+    let received_at = 1_788_825_600_000_001;
+    let mut records = sentry::normalize_store(
+        &serde_json::to_vec(&json!({
+            "event_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "timestamp":"2026-09-08T00:00:00.000001Z",
+            "message":message
+        }))?,
+        &ProjectContext {
+            project_id: 1,
+            slug: "test".into(),
+            public_key: "public".into(),
+            scrub_keys: vec![],
+        },
+        uuid::Uuid::new_v4(),
+        received_at,
+        &Default::default(),
+    )?
+    .records;
+    records[0].ingest_seq = boundary.ingest_seq;
+    let mut native = ActiveShard::create(&path, &installation, &shard_id, Boundary::default())?;
+    native.publish(Boundary::default())?;
+    native.commit(&records, boundary)?;
+    native.publish(boundary)?;
+    let manifest = native.seal(
+        &path,
+        ShardStats {
+            record_count: 1,
+            min_timestamp_us: Some(received_at),
+            max_timestamp_us: Some(received_at),
+            min_received_at_us: Some(received_at),
+            max_received_at_us: Some(received_at),
+            min_ingest_seq: Some(boundary.ingest_seq),
+            max_ingest_seq: Some(boundary.ingest_seq),
+        },
+        received_at,
+    )?;
+    let size = i64::try_from(manifest::local_size(&path, &manifest)?)?;
+    let catalog_id = shard_id.clone();
+    app.db
+        .call(move |db| {
+            db.execute(
+                "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                    min_timestamp_us,max_timestamp_us,min_received_at_us,max_received_at_us,
+                    first_record_received_at_us,min_ingest_seq,max_ingest_seq,last_applied_inbox_id,
+                    record_count,size_bytes,created_at_us,sealed_at_us)
+                 VALUES(?1,1,?2,1,'local',?3,?3,?3,?3,?3,?4,?4,?5,1,?6,?3,?3)",
+                params![
+                    catalog_id,
+                    eventglass::db::shards::FORMAT_VERSION,
+                    received_at,
+                    boundary.ingest_seq,
+                    boundary.inbox_id,
+                    size
+                ],
+            )?;
+            Ok(())
+        })
+        .await?;
+    Ok(shard_id)
+}
 fn query() -> Value {
     json!({"projects":["1"],"start":"2026-09-07T00:00:00Z","end":"2026-09-09T00:00:00Z","query":"","limit":1})
+}
+
+#[tokio::test]
+async fn rows_aggregate_and_detail_read_a_verified_local_sealed_shard() -> anyhow::Result<()> {
+    let (dir, app, router, cookie) = fixture().await?;
+    ingest(&app, 1, 91, "active-only").await?;
+    add_matching_local_shard(&dir, &app, "sealed-only").await?;
+    let mut input = query();
+    input["query"] = json!("\"sealed-only\"");
+    input["limit"] = json!(10);
+    let (status, rows) = call(&router, "/api/explore/search", &cookie, input.clone()).await?;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+    assert_eq!(rows["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(rows["rows"][0]["message"], "sealed-only");
+    assert_eq!(rows["searched_shards"], "2");
+
+    let detail = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/api/records/{}",
+                    rows["rows"][0]["detail_token"].as_str().unwrap()
+                ))
+                .header(header::COOKIE, &cookie)
+                .body(Body::empty())?,
+        )
+        .await?;
+    assert_eq!(detail.status(), StatusCode::OK);
+
+    let aggregate = json!({
+        "projects":["1"],
+        "start":"2026-09-07T00:00:00Z",
+        "end":"2026-09-09T00:00:00Z",
+        "query":"\"sealed-only\"",
+        "metrics":[{"op":"count"}],
+        "read_token":rows["read_token"]
+    });
+    let (status, result) = call(&router, "/api/explore/aggregate", &cookie, aggregate).await?;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["record_count"], "1");
+    assert_eq!(result["searched_shards"], "2");
+    app.indexer.as_ref().unwrap().shutdown().await?;
+    Ok(())
 }
 
 #[tokio::test]

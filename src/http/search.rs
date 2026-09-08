@@ -243,7 +243,8 @@ async fn execute(
     .await?;
     let ReadView {
         auth,
-        published,
+        active_boundary,
+        candidate_ids,
         read_context,
         mut scope,
         query: query_text,
@@ -280,7 +281,7 @@ async fn execute(
     } else {
         None
     };
-    if watermark > published.boundary.ingest_seq {
+    if watermark > active_boundary.ingest_seq {
         return Err(unavailable());
     }
     let permit = state
@@ -297,24 +298,34 @@ async fn execute(
         cursor,
         limit,
     };
+    let indexer = state.app.indexer.clone().ok_or_else(unavailable)?;
+    let searched_shards = candidate_ids.len();
     let task = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        query::search(
-            &[SearchShard {
-                id: published.shard_id,
-                searcher: published.searcher,
-            }],
-            &request,
-        )
+        let pins = indexer.pin_shards(&candidate_ids)?;
+        let shards = pins
+            .iter()
+            .map(|pin| SearchShard {
+                id: pin.published().shard_id.clone(),
+                searcher: pin.published().searcher.clone(),
+            })
+            .collect::<Vec<_>>();
+        query::search(&shards, &request).map_err(anyhow::Error::from)
     });
     let page = tokio::time::timeout(std::time::Duration::from_secs(10), task)
         .await
         .map_err(|_| ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"))?
         .map_err(|_| unavailable())?
         .map_err(|error| {
-            if error.is_bad_request() {
+            if error
+                .downcast_ref::<query::SearchError>()
+                .is_some_and(query::SearchError::is_bad_request)
+            {
                 invalid()
-            } else if error.is_unprocessable() {
+            } else if error
+                .downcast_ref::<query::SearchError>()
+                .is_some_and(query::SearchError::is_unprocessable)
+            {
                 ApiError(StatusCode::UNPROCESSABLE_ENTITY, "search_result_too_large")
             } else {
                 unavailable()
@@ -380,7 +391,7 @@ async fn execute(
         .map_err(token_error)?;
     Ok(Json(
         json!({"rows":rows,"next_cursor":next_cursor,"read_token":read_token,"watermark":watermark.to_string(),
-        "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":"1","hydrated_shards":"0"}),
+        "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":searched_shards.to_string(),"hydrated_shards":"0"}),
     ))
 }
 
@@ -395,7 +406,8 @@ pub(super) struct ReadInput {
 }
 pub(super) struct ReadView {
     pub auth: Authorization,
-    pub published: crate::search::active::Published,
+    pub active_boundary: crate::model::Boundary,
+    pub candidate_ids: Vec<String>,
     pub read_context: TokenContext,
     pub scope: QueryScope,
     pub query: String,
@@ -431,13 +443,6 @@ pub(super) async fn capture_read(
         .ok_or_else(unavailable)?
         .snapshot()
         .map_err(|_| unavailable())?;
-    let shard_id = published.shard_id.clone();
-    state
-        .app
-        .db
-        .call(move |db| authorization::require_only_active(db, &shard_id))
-        .await
-        .map_err(scope_error)?;
     let read_context = context(
         &auth,
         hash(&(
@@ -467,6 +472,12 @@ pub(super) async fn capture_read(
     if watermark > published.boundary.ingest_seq {
         return Err(unavailable());
     }
+    let candidate_ids = state
+        .app
+        .db
+        .call(move |db| authorization::event_candidates(db, start_us, end_us, watermark))
+        .await
+        .map_err(scope_error)?;
     let scope = QueryScope {
         project_ids: auth.projects.clone(),
         start_us,
@@ -476,7 +487,8 @@ pub(super) async fn capture_read(
     };
     Ok(ReadView {
         auth,
-        published,
+        active_boundary: published.boundary,
+        candidate_ids,
         read_context,
         scope,
         query: input.query,

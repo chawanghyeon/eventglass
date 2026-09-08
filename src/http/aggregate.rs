@@ -128,7 +128,7 @@ fn buckets(set: BucketSet) -> Value {
     }).collect();
     json!({"dimension":set.dimension,"buckets":values,"has_more":set.has_more})
 }
-fn native_error(error: AggregateError) -> ApiError {
+fn native_error(error: &AggregateError) -> ApiError {
     if error.is_bad_request() {
         return invalid();
     }
@@ -177,15 +177,24 @@ pub(super) async fn post_aggregate(
         },
     )
     .await?;
+    let super::search::ReadView {
+        auth,
+        candidate_ids,
+        read_context,
+        scope,
+        query,
+        filters,
+        ..
+    } = prepared;
     let histogram = input
         .histogram
-        .map(|value| histogram(value, prepared.scope.start_us, prepared.scope.end_us))
+        .map(|value| histogram(value, scope.start_us, scope.end_us))
         .transpose()?;
-    let watermark = prepared.scope.watermark;
+    let watermark = scope.watermark;
     let request = AggregateRequest {
-        query: prepared.query,
-        scope: prepared.scope,
-        filters: prepared.filters,
+        query,
+        scope,
+        filters,
         metrics,
         group_by: input
             .group_by
@@ -203,27 +212,35 @@ pub(super) async fn post_aggregate(
         .clone()
         .try_acquire_owned()
         .map_err(|_| ApiError(StatusCode::TOO_MANY_REQUESTS, "query_busy"))?;
+    let indexer = state.app.indexer.clone().ok_or_else(unavailable)?;
+    let searched_shards = candidate_ids.len();
     let task = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        aggregate::aggregate(
-            &[SearchShard {
-                id: prepared.published.shard_id,
-                searcher: prepared.published.searcher,
-            }],
-            &request,
-        )
+        let pins = indexer.pin_shards(&candidate_ids)?;
+        let shards = pins
+            .iter()
+            .map(|pin| SearchShard {
+                id: pin.published().shard_id.clone(),
+                searcher: pin.published().searcher.clone(),
+            })
+            .collect::<Vec<_>>();
+        aggregate::aggregate(&shards, &request).map_err(anyhow::Error::from)
     });
     let result = tokio::time::timeout(std::time::Duration::from_secs(10), task)
         .await
         .map_err(|_| ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"))?
         .map_err(|_| unavailable())?
-        .map_err(native_error)?;
-    revalidate_read(&state, &headers, &prepared.auth).await?;
+        .map_err(|error| {
+            error
+                .downcast_ref::<AggregateError>()
+                .map_or_else(unavailable, native_error)
+        })?;
+    revalidate_read(&state, &headers, &auth).await?;
     let read_token = state
         .app
         .tokens
         .issue(
-            prepared.read_context,
+            read_context,
             watermark,
             Position::Read,
             crate::model::now_us()?,
@@ -232,6 +249,6 @@ pub(super) async fn post_aggregate(
     Ok(Json(
         json!({"record_count":result.record_count.to_string(),"metrics":result.metrics.into_iter().map(metric_value).collect::<Vec<_>>(),
         "buckets":result.buckets.map(buckets),"warnings":result.warnings,"read_token":read_token,"watermark":watermark.to_string(),
-        "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":"1","hydrated_shards":"0"}),
+        "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":searched_shards.to_string(),"hydrated_shards":"0"}),
     ))
 }

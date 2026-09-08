@@ -290,3 +290,13 @@ pub fn verify(root: &Path, installation: &str, shard: &str) -> Result<Manifest> 
     );
     Ok(manifest)
 }
+
+pub fn local_size(root: &Path, manifest: &Manifest) -> Result<u64> {
+    manifest
+        .files
+        .iter()
+        .try_fold(regular(&root.join(NAME))?, |sum, file| {
+            sum.checked_add(file.size)
+                .context("sealed shard size overflow")
+        })
+}

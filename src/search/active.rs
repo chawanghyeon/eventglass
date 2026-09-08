@@ -217,3 +217,29 @@ impl ActiveShard {
         Ok(published)
     }
 }
+
+/// Opens an immutable shard after its durable manifest has been verified.
+pub fn open_sealed(
+    path: &Path,
+    manifest: &crate::storage::manifest::Manifest,
+) -> Result<Published> {
+    let index = Index::open_in_dir(path)?;
+    ensure!(
+        index.schema() == super::schema::build(),
+        "sealed shard schema mismatch"
+    );
+    let reader = index
+        .reader_builder()
+        .reload_policy(ReloadPolicy::Manual)
+        .try_into()?;
+    let searcher = reader.searcher();
+    ensure!(
+        searcher.num_docs() == manifest.stats.record_count,
+        "sealed shard record count mismatch"
+    );
+    Ok(Published {
+        shard_id: manifest.shard_id.clone(),
+        boundary: manifest.boundary,
+        searcher,
+    })
+}

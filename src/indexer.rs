@@ -18,6 +18,21 @@ use crate::{
 pub struct Indexer {
     control: Arc<Control>,
     view: Arc<RwLock<View>>,
+    registry: crate::storage::registry::Registry,
+}
+
+pub enum ReadPin {
+    Active(Published),
+    Sealed(crate::storage::registry::ShardPin),
+}
+
+impl ReadPin {
+    pub fn published(&self) -> &Published {
+        match self {
+            Self::Active(shard) => shard,
+            Self::Sealed(pin) => pin.published(),
+        }
+    }
 }
 
 struct Control {
@@ -49,13 +64,7 @@ impl Indexer {
                 let verified = tokio::task::spawn_blocking(move || -> Result<_> {
                     let manifest =
                         crate::storage::manifest::verify(&path, &installation, &active_id)?;
-                    let size = manifest.files.iter().try_fold(
-                        std::fs::metadata(path.join(crate::storage::manifest::NAME))?.len(),
-                        |sum, file| {
-                            sum.checked_add(file.size)
-                                .context("sealed shard size overflow")
-                        },
-                    )?;
+                    let size = crate::storage::manifest::local_size(&path, &manifest)?;
                     Ok((manifest, size))
                 })
                 .await??;
@@ -64,6 +73,25 @@ impl Indexer {
                 catalog = db.call(|db| shards::startup(db)).await?;
             }
         }
+        let local_catalog = db.call(|db| shards::local_catalog(db)).await?;
+        let catalog_root = directory.join("shards");
+        let catalog_installation = catalog.installation_id.clone();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            for row in local_catalog {
+                let path = catalog_root.join(&row.id);
+                let manifest =
+                    crate::storage::manifest::verify(&path, &catalog_installation, &row.id)?;
+                let size = crate::storage::manifest::local_size(&path, &manifest)?;
+                ensure!(
+                    row.matches(&manifest, size),
+                    "sealed shard manifest differs from SQLite catalog"
+                );
+            }
+            Ok(())
+        })
+        .await??;
+        let registry =
+            crate::storage::registry::Registry::new(&directory, catalog.installation_id.clone());
         let installation = catalog.installation_id;
         let applied = catalog.applied;
         let existing = catalog.active_id;
@@ -148,6 +176,7 @@ impl Indexer {
                 join: Mutex::new(Some(join)),
             }),
             view,
+            registry,
         })
     }
 
@@ -162,6 +191,19 @@ impl Indexer {
             .map_err(|_| anyhow::anyhow!("index publication lock poisoned"))?;
         ensure!(!view.failed, "indexer unavailable");
         Ok(view.published.clone())
+    }
+
+    pub fn pin_shards(&self, ids: &[String]) -> Result<Vec<ReadPin>> {
+        let active = self.snapshot()?;
+        ids.iter()
+            .map(|id| {
+                if id == &active.shard_id {
+                    Ok(ReadPin::Active(active.clone()))
+                } else {
+                    self.registry.pin_local(id).map(ReadPin::Sealed)
+                }
+            })
+            .collect()
     }
 
     pub fn wake(&self) {

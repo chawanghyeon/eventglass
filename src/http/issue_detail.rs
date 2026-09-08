@@ -56,21 +56,19 @@ pub(super) async fn get_occurrence_detail(
         .ok_or_else(unavailable)?
         .snapshot()
         .map_err(|_| unavailable())?;
-    if published.shard_id != initial.location.shard_id
-        || published.boundary.ingest_seq < initial.location.ingest_seq
-    {
+    if published.boundary.ingest_seq < initial.location.ingest_seq {
         return Err(unavailable());
     }
-    let active_id = published.shard_id.clone();
+    let detail_shard_id = initial.location.shard_id.clone();
     state
         .app
         .db
-        .call(move |db| authorization::require_only_active(db, &active_id))
+        .call(move |db| authorization::local_detail_shard(db, &detail_shard_id))
         .await
         .map_err(scope_error)?;
     let detail = load_native(
         &state,
-        published,
+        initial.location.shard_id.clone(),
         NativeDetail::Occurrence {
             project_id: initial.location.project_id,
             record_id: initial.location.record_id.clone(),
