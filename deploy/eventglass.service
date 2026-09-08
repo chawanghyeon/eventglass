@@ -1,0 +1,36 @@
+[Unit]
+Description=Eventglass error and log server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eventglass
+Group=eventglass
+WorkingDirectory=/data/eventglass
+EnvironmentFile=/etc/eventglass/eventglass.env
+ExecStart=/usr/local/bin/eventglass serve
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=30
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictSUIDSGID=true
+ReadWritePaths=/data/eventglass
+MemoryMax=768M
+CPUQuota=100%
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+OUTPUT=${1:-"$ROOT/.tools/release/eventglass-linux-arm64"}
+OUTPUT_DIR=$(dirname -- "$OUTPUT")
+mkdir -p "$OUTPUT_DIR"
+
+docker buildx build \
+    --platform linux/arm64 \
+    --build-arg "EVENTGLASS_REVISION=$(git -C "$ROOT" rev-parse HEAD)" \
+    --target artifact \
+    --output "type=local,dest=$OUTPUT_DIR/rootfs" \
+    "$ROOT"
+cp "$OUTPUT_DIR/rootfs/eventglass" "$OUTPUT"
+rm -rf "$OUTPUT_DIR/rootfs"
+chmod 0755 "$OUTPUT"
+case "$(file "$OUTPUT")" in
+    *ELF*ARM\ aarch64*) ;;
+    *) printf 'build-release: output is not a Linux AArch64 ELF binary\n' >&2; exit 1 ;;
+esac
+if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$OUTPUT"
+else
+    shasum -a 256 "$OUTPUT"
+fi

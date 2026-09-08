@@ -19,6 +19,10 @@ pub mod storage;
 /// assert!(!eventglass::VERSION.is_empty());
 /// ```
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const REVISION: &str = match option_env!("EVENTGLASS_REVISION") {
+    Some(value) => value,
+    None => "development",
+};
 
 #[cfg(test)]
 mod tests {

@@ -1,0 +1,12 @@
+(eventglass_app) {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8088
+}
+
+http://eventglass.uridogu.com {
+	import eventglass_app
+}
+
+https://eventglass.uridogu.com {
+	import eventglass_app
+}

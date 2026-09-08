@@ -134,5 +134,6 @@ case "${1:-}" in
     embed-smoke) run_embed_smoke ;;
     sdk-live) "$REPO_ROOT/tools/sdk-fixtures/run-live.sh" ;;
     resource) "$REPO_ROOT/scripts/check-resource" ;;
-    *) fail "usage: ./scripts/check {quick|rust|s3-smoke|contracts|web|integration|crash-smoke|embed-smoke|sdk-live|resource}" ;;
+    container) "$REPO_ROOT/scripts/check-container" ;;
+    *) fail "usage: ./scripts/check {quick|rust|s3-smoke|contracts|web|integration|crash-smoke|embed-smoke|sdk-live|resource|container}" ;;
 esac

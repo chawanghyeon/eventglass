@@ -5,6 +5,7 @@ use std::{
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-env-changed=EVENTGLASS_REVISION");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_EMBED_UI");
     if env::var_os("CARGO_FEATURE_EMBED_UI").is_none() {
         return;

@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+REVISION=$(git -C "$ROOT" rev-parse HEAD)
+BINARY="$ROOT/.tools/release/eventglass-linux-arm64"
+
+[ -x "$BINARY" ] || "$SCRIPT_DIR/build-release" "$BINARY"
+case "$(file "$BINARY")" in
+    *ELF*ARM\ aarch64*) ;;
+    *) printf 'deploy: release is not a Linux AArch64 ELF binary\n' >&2; exit 1 ;;
+esac
+
+STAGE="/tmp/eventglass-$REVISION"
+ssh oracle mkdir -p "$STAGE"
+scp "$BINARY" \
+    "$ROOT/deploy/eventglass.service" \
+    "$ROOT/deploy/eventglass.env" \
+    "$ROOT/deploy/eventglass.caddy" \
+    "oracle:$STAGE/"
+ssh oracle sudo /bin/sh -s -- "$STAGE" "$REVISION" <<'REMOTE'
+set -eu
+stage=$1
+revision=$2
+id eventglass >/dev/null 2>&1 || useradd --system --home /data/eventglass --shell /usr/sbin/nologin eventglass
+install -d -m 0700 -o eventglass -g eventglass /data/eventglass
+install -d -m 0755 /etc/eventglass /etc/caddy/sites
+install -m 0755 "$stage/eventglass-linux-arm64" "/usr/local/bin/eventglass.$revision"
+case "$("/usr/local/bin/eventglass.$revision" --version)" in
+    *"($revision)") ;;
+    *) printf 'candidate revision does not match deployment revision\n' >&2; exit 1 ;;
+esac
+previous=$(readlink /usr/local/bin/eventglass 2>/dev/null || printf '')
+ln -sfn "/usr/local/bin/eventglass.$revision" /usr/local/bin/eventglass
+install -m 0644 "$stage/eventglass.service" /etc/systemd/system/eventglass.service
+install -m 0640 -o root -g eventglass "$stage/eventglass.env" /etc/eventglass/eventglass.env
+install -m 0644 "$stage/eventglass.caddy" /etc/caddy/sites/eventglass.caddy
+grep -Fqx 'import /etc/caddy/sites/*.caddy' /etc/caddy/Caddyfile || printf '\nimport /etc/caddy/sites/*.caddy\n' >> /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile
+systemctl daemon-reload
+systemctl enable eventglass
+systemctl restart eventglass
+systemctl reload caddy
+for attempt in $(seq 1 30); do
+    if curl --fail --silent http://127.0.0.1:8088/readyz >/dev/null; then
+        rm -rf "$stage"
+        systemctl is-active --quiet eventglass
+        printf 'eventglass deployed: %s\n' "$revision"
+        exit 0
+    fi
+    sleep 1
+done
+journalctl -u eventglass -n 80 --no-pager >&2
+if [ -n "$previous" ] && [ -x "$previous" ]; then
+    ln -sfn "$previous" /usr/local/bin/eventglass
+    systemctl restart eventglass
+fi
+exit 1
+REMOTE

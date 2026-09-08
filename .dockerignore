@@ -1,0 +1,10 @@
+.git
+.github
+.tools
+target
+web/dist
+web/node_modules
+tools/sdk-fixtures/.npm-cache
+tools/sdk-fixtures/.venv
+**/__pycache__
+data

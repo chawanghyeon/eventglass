@@ -9,7 +9,11 @@ async fn main() -> anyhow::Result<()> {
         args.first().map(String::as_str),
         Some("version" | "--version" | "-V")
     ) {
-        println!("eventglass {}", eventglass::VERSION);
+        println!(
+            "eventglass {} ({})",
+            eventglass::VERSION,
+            eventglass::REVISION
+        );
         return Ok(());
     }
     tracing_subscriber::fmt()
