@@ -51,7 +51,7 @@ repos:
         stages: [pre-commit]
       - id: pre-push-rust
         name: Rust pre-push checks
-        entry: ./scripts/check rust
+        entry: env CARGO_TARGET_DIR=target CARGO_BUILD_JOBS=2 ./scripts/check rust
         language: system
         files: '^(Cargo\.(toml|lock)|rust-toolchain\.toml|src/|tests/|migrations/)'
         pass_filenames: false
