@@ -219,7 +219,9 @@ jobs:
           ./scripts/install-ci-tools
           cargo install cargo-deny --version 0.19.0 --locked
       - name: Install secret scanner
-        run: .tools/quality/bin/pip install --requirement requirements/quality.txt
+        run: |
+          python -m venv .tools/quality
+          .tools/quality/bin/pip install --requirement requirements/quality.txt
       - name: Run dependency, license, source, and secret gates
         run: ./scripts/check security
 
