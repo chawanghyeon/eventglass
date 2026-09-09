@@ -24,6 +24,42 @@ async fn app() -> anyhow::Result<(tempfile::TempDir, AppState, Router)> {
     Ok((dir, state, router))
 }
 
+fn assert_security_headers(response: &axum::response::Response) -> anyhow::Result<()> {
+    let headers = response.headers();
+    assert_eq!(
+        headers["content-security-policy"],
+        "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; frame-src 'self' blob:"
+    );
+    assert_eq!(headers["strict-transport-security"], "max-age=31536000");
+    assert_eq!(headers["x-content-type-options"], "nosniff");
+    assert_eq!(headers["x-frame-options"], "DENY");
+    assert_eq!(headers["referrer-policy"], "no-referrer");
+    assert_eq!(
+        headers["permissions-policy"],
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn browser_security_headers_cover_api_errors_health_and_ingest_cors() -> anyhow::Result<()> {
+    let (_dir, _state, router) = app().await?;
+    for request in [
+        Request::builder().uri("/healthz").body(Body::empty())?,
+        Request::builder().uri("/api/missing").body(Body::empty())?,
+        Request::builder()
+            .method("OPTIONS")
+            .uri("/api/1/envelope/")
+            .header("origin", "https://sdk.example.test")
+            .header("access-control-request-method", "POST")
+            .body(Body::empty())?,
+    ] {
+        let response = router.clone().oneshot(request).await?;
+        assert_security_headers(&response)?;
+    }
+    Ok(())
+}
+
 fn request(
     method: &str,
     path: &str,

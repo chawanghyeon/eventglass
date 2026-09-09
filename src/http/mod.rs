@@ -181,6 +181,34 @@ async fn no_store(mut response: Response) -> Response {
     response
 }
 
+async fn security_headers(mut response: Response) -> Response {
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(
+            "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; frame-src 'self' blob:",
+        ),
+    );
+    headers.insert(
+        header::STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static("max-age=31536000"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        "permissions-policy",
+        HeaderValue::from_static("camera=(), microphone=(), geolocation=(), payment=(), usb=()"),
+    );
+    response
+}
+
 pub fn router(app: AppState) -> Router {
     let ingest = ingest::router(app.clone());
     let router = Router::new()
@@ -258,7 +286,7 @@ pub fn router(app: AppState) -> Router {
         .merge(ingest);
     #[cfg(feature = "embed-ui")]
     let router = router.fallback(assets::serve);
-    router
+    router.layer(axum::middleware::map_response(security_headers))
 }
 
 #[cfg(test)]
