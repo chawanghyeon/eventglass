@@ -1,0 +1,36 @@
+{
+  "sdk": "@sentry/browser",
+  "version": "10.73.0",
+  "captured": [
+    {
+      "mode": "plain",
+      "name": "plain-0.envelope",
+      "bytes": 7347
+    },
+    {
+      "mode": "plain",
+      "name": "plain-1.envelope",
+      "bytes": 1968
+    },
+    {
+      "mode": "plain",
+      "name": "plain-2.envelope",
+      "bytes": 4161
+    },
+    {
+      "mode": "compressed",
+      "name": "compressed-0.envelope",
+      "bytes": 2858
+    },
+    {
+      "mode": "compressed",
+      "name": "compressed-1.envelope",
+      "bytes": 1648
+    },
+    {
+      "mode": "compressed",
+      "name": "compressed-2.envelope",
+      "bytes": 2238
+    }
+  ]
+}

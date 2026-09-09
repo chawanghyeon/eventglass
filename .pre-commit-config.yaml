@@ -9,7 +9,7 @@ repos:
         entry: .tools/quality/bin/python scripts/hooks/check-text.py
         language: system
         types: [text]
-        exclude: '^(vendor/|web/generated/)'
+        exclude: '^(vendor/|web/generated/|tests/fixtures/replay/.*\.envelope$)'
         stages: [pre-commit]
       - id: structured-syntax
         name: YAML, TOML, and JSON syntax

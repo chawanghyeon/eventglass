@@ -10,7 +10,7 @@ import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 IMAGE = 'rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97'
-TARGETS = ['contracts', 'integration', 'auth', 'ingest', 'ingest_http', 'sdk', 'indexer_native', 'indexer', 'indexer_db', 'issues', 'issue_detail', 'tokens', 'query_scope', 'search', 'search_http', 'live_http', 'alerts', 'alerts_http', 'records_http', 'seal', 'archive', 'aggregate', 'operations', 'cold', 'disk_pressure']
+TARGETS = ['contracts', 'integration', 'auth', 'ingest', 'ingest_http', 'sdk', 'replay', 'indexer_native', 'indexer', 'indexer_db', 'issues', 'issue_detail', 'tokens', 'query_scope', 'search', 'search_http', 'live_http', 'alerts', 'alerts_http', 'records_http', 'seal', 'archive', 'aggregate', 'operations', 'cold', 'disk_pressure']
 
 def container(arguments, stdout=None):
     identifier = subprocess.check_output(['docker', 'create', *arguments], text=True).strip()

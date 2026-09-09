@@ -3,6 +3,8 @@
 //! This module has no HTTP or database dependency. Callers authenticate first, then pass the
 //! accepted project context and a request-scoped UUID into these functions.
 
+pub mod replay;
+
 mod envelope;
 mod identity;
 mod json;

@@ -9,10 +9,16 @@ const MAX_NODES: usize = 20_000;
 const MAX_DEPTH: usize = 64;
 
 pub(super) fn parse(bytes: &[u8]) -> Result<Value, SentryError> {
+    parse_with_limit(bytes, MAX_NODES)
+}
+
+pub(super) fn parse_with_limit(bytes: &[u8], max_nodes: usize) -> Result<Value, SentryError> {
     let mut decoder = serde_json::Deserializer::from_slice(bytes);
     let mut nodes = 0;
     let mut limit_error = None;
-    let result = BoundedValue::new(&mut nodes, &mut limit_error).deserialize(&mut decoder);
+    let mut seed = BoundedValue::new(&mut nodes, &mut limit_error);
+    seed.max_nodes = max_nodes;
+    let result = seed.deserialize(&mut decoder);
     if let Some(error) = limit_error {
         return Err(error);
     }
@@ -25,6 +31,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Value, SentryError> {
 
 pub(super) struct BoundedValue<'a> {
     nodes: &'a mut usize,
+    max_nodes: usize,
     depth: usize,
     limit_error: &'a mut Option<SentryError>,
 }
@@ -33,6 +40,7 @@ impl<'a> BoundedValue<'a> {
     pub(super) fn new(nodes: &'a mut usize, limit_error: &'a mut Option<SentryError>) -> Self {
         Self {
             nodes,
+            max_nodes: MAX_NODES,
             depth: 1,
             limit_error,
         }
@@ -41,6 +49,7 @@ impl<'a> BoundedValue<'a> {
     fn child(&mut self) -> BoundedValue<'_> {
         BoundedValue {
             nodes: self.nodes,
+            max_nodes: self.max_nodes,
             depth: self.depth + 1,
             limit_error: self.limit_error,
         }
@@ -52,7 +61,7 @@ impl<'de> DeserializeSeed<'de> for BoundedValue<'_> {
 
     fn deserialize<D: de::Deserializer<'de>>(self, decoder: D) -> Result<Value, D::Error> {
         *self.nodes += 1;
-        if *self.nodes > MAX_NODES || self.depth > MAX_DEPTH {
+        if *self.nodes > self.max_nodes || self.depth > MAX_DEPTH {
             *self.limit_error = Some(SentryError::TooLarge("record JSON shape exceeds limit"));
             return Err(de::Error::custom("record JSON shape exceeds limit"));
         }
