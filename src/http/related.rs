@@ -17,9 +17,7 @@ use super::{
 use crate::{
     db::search as authorization,
     search::{
-        query::{
-            KeywordField, QueryScope, SearchRequest, SearchShard, TimeField, TypedFilter, search,
-        },
+        query::{KeywordField, QueryScope, SearchRequest, TimeField, TypedFilter},
         tokens::{Position, TokenError, TokenKind},
     },
 };
@@ -186,15 +184,7 @@ pub(super) async fn related(
         "search_unavailable",
     ))?;
     let page = super::run_native(permit, std::time::Duration::from_secs(10), move || {
-        let pins = indexer.pin_shards(&candidate_ids)?;
-        let shards = pins
-            .iter()
-            .map(|pin| SearchShard {
-                id: pin.published().shard_id.clone(),
-                searcher: pin.published().searcher.clone(),
-            })
-            .collect::<Vec<_>>();
-        search(&shards, &request).map_err(anyhow::Error::from)
+        indexer.search(&candidate_ids, &request)
     })
     .await
     .map_err(|failure| match failure {

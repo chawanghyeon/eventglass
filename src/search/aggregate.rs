@@ -318,15 +318,17 @@ enum DimensionPlan {
 
 /// Executes a complete distributed native aggregation over all supplied pinned shards.
 pub fn aggregate(shards: &[SearchShard], request: &AggregateRequest) -> Result<AggregatePage> {
+    aggregate_lazy(shards.len(), |index| Ok(&shards[index]), request)
+}
+
+/// Keeps native intermediate results while releasing each shard before opening the next.
+pub fn aggregate_lazy<G: AsRef<SearchShard>>(
+    shard_count: usize,
+    mut load: impl FnMut(usize) -> Result<G>,
+    request: &AggregateRequest,
+) -> Result<AggregatePage> {
     validate_request(request)?;
     let production_schema = schema::build();
-    for shard in shards {
-        if shard.searcher.schema() != &production_schema {
-            return Err(AggregateError::Search(SearchError::SchemaMismatch {
-                shard_id: shard.id.clone(),
-            }));
-        }
-    }
     let query = scoped_query(
         &production_schema,
         &request.query,
@@ -338,7 +340,14 @@ pub fn aggregate(shards: &[SearchShard], request: &AggregateRequest) -> Result<A
     let limits = AggregationLimitsGuard::new(Some(NATIVE_MEMORY_LIMIT_BYTES), Some(MAX_BUCKETS));
     let mut merged = IntermediateAggregationResults::default();
     let mut record_count = 0u64;
-    for shard in shards {
+    for index in 0..shard_count {
+        let guard = load(index)?;
+        let shard = guard.as_ref();
+        if shard.searcher.schema() != &production_schema {
+            return Err(AggregateError::Search(SearchError::SchemaMismatch {
+                shard_id: shard.id.clone(),
+            }));
+        }
         let context =
             AggContextParams::new(limits.clone(), shard.searcher.index().tokenizers().clone());
         let collector = DistributedAggregationCollector::from_aggs(native_request.clone(), context);

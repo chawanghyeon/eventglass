@@ -236,6 +236,78 @@ fn query() -> Value {
 }
 
 #[tokio::test]
+async fn more_than_cache_capacity_keeps_global_pages_aggregates_and_live_complete()
+-> anyhow::Result<()> {
+    let (dir, app, router, cookie) = fixture().await?;
+    let mut ids = Vec::new();
+    for id in 1..=12 {
+        ingest(&app, 1, id, "active-only").await?;
+        ids.push(add_matching_local_shard(&dir, &app, "sealed-many").await?);
+    }
+    let mut input = query();
+    input["query"] = json!("\"sealed-many\"");
+    input["limit"] = json!(3);
+    let mut sequences = Vec::new();
+    loop {
+        let (status, page) = call(&router, "/api/explore/search", &cookie, input.clone()).await?;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(page["searched_shards"], "13");
+        sequences.extend(
+            page["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["ingest_seq"].as_str().unwrap().parse::<i64>().unwrap()),
+        );
+        input["read_token"] = page["read_token"].clone();
+        if page["next_cursor"].is_null() {
+            break;
+        }
+        input["cursor"] = page["next_cursor"].clone();
+        assert!(sequences.len() <= 12, "pagination did not advance");
+    }
+    assert_eq!(sequences, (1..=12).rev().collect::<Vec<_>>());
+    let (status, aggregate) = call(
+        &router,
+        "/api/explore/aggregate",
+        &cookie,
+        json!({
+            "projects":["1"], "start":input["start"], "end":input["end"],
+            "query":input["query"], "read_token":input["read_token"],
+            "metrics":[{"op":"count"}], "group_by":["service"]
+        }),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{aggregate}");
+    assert_eq!(aggregate["record_count"], "12");
+    let request = eventglass::search::query::SearchRequest {
+        query: "\"sealed-many\"".into(),
+        scope: eventglass::search::query::QueryScope {
+            project_ids: vec![1],
+            start_us: 1_788_825_599_000_000,
+            end_us: 1_788_825_601_000_000,
+            watermark: 12,
+            time_field: eventglass::search::query::TimeField::ReceivedAt,
+        },
+        filters: vec![],
+        cursor: None,
+        limit: 100,
+    };
+    let indexer = app.indexer.as_ref().unwrap();
+    let live = indexer.search_live(&ids, &request, 0)?;
+    assert_eq!(
+        live.rows
+            .iter()
+            .map(|row| row.ingest_seq)
+            .collect::<Vec<_>>(),
+        (1..=12).collect::<Vec<_>>()
+    );
+    assert!(!live.has_more);
+    indexer.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn rows_aggregate_and_detail_read_a_verified_local_sealed_shard() -> anyhow::Result<()> {
     let (dir, app, router, cookie) = fixture().await?;
     ingest(&app, 1, 91, "active-only").await?;

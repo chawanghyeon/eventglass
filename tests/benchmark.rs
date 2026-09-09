@@ -11,8 +11,8 @@ use eventglass::{
     db::ingest::{self, IngestProject},
     model::{Record, RecordKind},
     search::{
-        aggregate::{self, AggregateRequest, HistogramSpec, MetricSpec},
-        query::{JsonScalar, QueryScope, SearchRequest, SearchShard, TimeField, TypedFilter},
+        aggregate::{AggregateRequest, HistogramSpec, MetricSpec},
+        query::{JsonScalar, QueryScope, SearchRequest, TimeField, TypedFilter},
     },
 };
 use serde::Serialize;
@@ -333,27 +333,50 @@ async fn seeded_dataset_capacity() -> Result<()> {
     };
     for _ in 0..5 {
         ensure!(
-            !eventglass::search::query::search(&shards, &structured)?
+            !app.indexer
+                .as_ref()
+                .context("missing Indexer")?
+                .search(&shards, &structured)?
                 .rows
                 .is_empty()
         );
         ensure!(
-            !eventglass::search::query::search(&shards, &text)?
+            !app.indexer
+                .as_ref()
+                .context("missing Indexer")?
+                .search(&shards, &text)?
                 .rows
                 .is_empty()
         );
-        ensure!(aggregate::aggregate(&shards, &histogram)?.record_count == total_records as u64);
+        ensure!(
+            app.indexer
+                .as_ref()
+                .context("missing Indexer")?
+                .aggregate(&shards, &histogram)?
+                .record_count
+                == total_records as u64
+        );
     }
     let structured_us = measure(30, || {
-        eventglass::search::query::search(&shards, &structured)?;
+        app.indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .search(&shards, &structured)?;
         Ok(())
     })?;
     let text_us = measure(30, || {
-        eventglass::search::query::search(&shards, &text)?;
+        app.indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .search(&shards, &text)?;
         Ok(())
     })?;
     let histogram_us = measure(30, || {
-        let page = aggregate::aggregate(&shards, &histogram)?;
+        let page = app
+            .indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .aggregate(&shards, &histogram)?;
         ensure!(
             page.record_count == total_records as u64,
             "histogram lost records"
@@ -520,20 +543,33 @@ async fn measure_query_mix(app: &AppState, records: usize) -> Result<[u64; 3]> {
     };
     let structured_started = Instant::now();
     ensure!(
-        !eventglass::search::query::search(&shards, &structured)?
+        !app.indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .search(&shards, &structured)?
             .rows
             .is_empty()
     );
     let structured_us = duration_us(structured_started.elapsed());
     let text_started = Instant::now();
     ensure!(
-        !eventglass::search::query::search(&shards, &text)?
+        !app.indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .search(&shards, &text)?
             .rows
             .is_empty()
     );
     let text_us = duration_us(text_started.elapsed());
     let histogram_started = Instant::now();
-    ensure!(aggregate::aggregate(&shards, &histogram)?.record_count > 0);
+    ensure!(
+        app.indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .aggregate(&shards, &histogram)?
+            .record_count
+            > 0
+    );
     Ok([
         structured_us,
         text_us,
@@ -670,7 +706,7 @@ async fn wait_for_visibility(app: &AppState, target: i64) -> Result<()> {
     Ok(())
 }
 
-async fn snapshot(app: &AppState) -> Result<(Vec<SearchShard>, i64, i64, i64)> {
+async fn snapshot(app: &AppState) -> Result<(Vec<String>, i64, i64, i64)> {
     let (mut ids, issues, inbox_records, inbox_bytes) = app
         .db
         .call(|database| {
@@ -697,19 +733,7 @@ async fn snapshot(app: &AppState) -> Result<(Vec<SearchShard>, i64, i64, i64)> {
         })
         .await?;
     ids.sort();
-    let pins = app
-        .indexer
-        .as_ref()
-        .context("missing Indexer")?
-        .pin_shards(&ids)?;
-    let shards = pins
-        .iter()
-        .map(|pin| SearchShard {
-            id: pin.published().shard_id.clone(),
-            searcher: pin.published().searcher.clone(),
-        })
-        .collect();
-    Ok((shards, issues, inbox_records, inbox_bytes))
+    Ok((ids, issues, inbox_records, inbox_bytes))
 }
 
 async fn issue_occurrences(app: &AppState) -> Result<i64> {

@@ -638,7 +638,7 @@ async fn evaluate_pending(
 ) -> Result<u64> {
     use crate::search::{
         aggregate::{AggregateRequest, MetricSpec},
-        query::{KeywordField, QueryScope, SearchShard, TimeField, TypedFilter},
+        query::{KeywordField, QueryScope, TimeField, TypedFilter},
     };
     let (query, window_seconds, kind, time_basis) = match &pending.condition {
         Condition::ErrorCount {
@@ -710,17 +710,9 @@ async fn evaluate_pending(
     let indexer = indexer.clone();
     let task = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        let pins = indexer.pin_shards(&candidate_ids)?;
-        let shards = pins
-            .iter()
-            .map(|pin| SearchShard {
-                id: pin.published().shard_id.clone(),
-                searcher: pin.published().searcher.clone(),
-            })
-            .collect::<Vec<_>>();
-        crate::search::aggregate::aggregate(&shards, &request)
+        indexer
+            .aggregate(&candidate_ids, &request)
             .map(|page| page.record_count)
-            .map_err(anyhow::Error::from)
     });
     tokio::time::timeout(Duration::from_secs(10), task)
         .await

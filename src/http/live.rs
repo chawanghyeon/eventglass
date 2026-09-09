@@ -10,7 +10,7 @@ use super::{
 use crate::{
     db::search as authorization,
     search::{
-        query::{self, QueryScope, SearchRequest, SearchShard, TimeField},
+        query::{self, QueryScope, SearchRequest, TimeField},
         tokens::{Position, TokenContext, TokenKind},
     },
 };
@@ -270,15 +270,7 @@ async fn catch_up(
             .try_acquire_owned()
             .map_err(|_| "live_query_busy")?;
         let page = super::run_native(permit, Duration::from_secs(10), move || {
-            let pins = indexer.pin_shards(&candidate_ids)?;
-            let shards = pins
-                .iter()
-                .map(|pin| SearchShard {
-                    id: pin.published().shard_id.clone(),
-                    searcher: pin.published().searcher.clone(),
-                })
-                .collect::<Vec<_>>();
-            query::search_live(&shards, &request, after).map_err(anyhow::Error::from)
+            indexer.search_live(&candidate_ids, &request, after)
         })
         .await
         .map_err(|failure| match failure {

@@ -8,10 +8,9 @@ use super::{
 };
 use crate::search::{
     aggregate::{
-        self, AggregateError, AggregateRequest, BucketKey, BucketSet, GroupField, GroupSpec,
+        AggregateError, AggregateRequest, BucketKey, BucketSet, GroupField, GroupSpec,
         HistogramSpec, MetricOp, MetricSpec, MetricValue, NumericField,
     },
-    query::SearchShard,
     tokens::Position,
 };
 use axum::{
@@ -219,15 +218,7 @@ pub(super) async fn post_aggregate(
     let indexer = state.app.indexer.clone().ok_or_else(unavailable)?;
     let searched_shards = candidate_ids.len();
     let result = super::run_native(permit, std::time::Duration::from_secs(10), move || {
-        let pins = indexer.pin_shards(&candidate_ids)?;
-        let shards = pins
-            .iter()
-            .map(|pin| SearchShard {
-                id: pin.published().shard_id.clone(),
-                searcher: pin.published().searcher.clone(),
-            })
-            .collect::<Vec<_>>();
-        aggregate::aggregate(&shards, &request).map_err(anyhow::Error::from)
+        indexer.aggregate(&candidate_ids, &request)
     })
     .await
     .map_err(|failure| match failure {

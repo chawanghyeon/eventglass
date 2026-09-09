@@ -153,6 +153,12 @@ pub struct SearchShard {
     pub searcher: Searcher,
 }
 
+impl AsRef<SearchShard> for SearchShard {
+    fn as_ref(&self) -> &SearchShard {
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct LogRow {
     pub shard_id: String,
@@ -185,6 +191,7 @@ pub struct SearchPage {
 
 #[derive(Debug)]
 pub enum SearchError {
+    ShardUnavailable,
     InvalidRequest(&'static str),
     InvalidQuery,
     SchemaMismatch {
@@ -213,6 +220,7 @@ impl SearchError {
 impl fmt::Display for SearchError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ShardUnavailable => formatter.write_str("candidate shard is unavailable"),
             Self::InvalidRequest(code) => write!(formatter, "invalid search request: {code}"),
             Self::InvalidQuery => formatter.write_str("invalid Tantivy query syntax"),
             Self::SchemaMismatch { shard_id } => {
@@ -268,18 +276,20 @@ pub(super) fn scoped_query(
 /// Callers must supply the complete, already pinned candidate-shard set. Any shard error fails the
 /// whole request, and stored documents are loaded only for the final global `limit + 1` candidates.
 pub fn search(shards: &[SearchShard], request: &SearchRequest) -> Result<SearchPage> {
+    search_lazy(shards.len(), |index| Ok(&shards[index]), request)
+}
+
+/// Opens one immutable shard at a time and reopens only final row candidates.
+pub fn search_lazy<G: AsRef<SearchShard>>(
+    shard_count: usize,
+    mut load: impl FnMut(usize) -> Result<G>,
+    request: &SearchRequest,
+) -> Result<SearchPage> {
     validate_request(request)?;
     let expected_schema = schema::build();
-    for shard in shards {
-        if shard.searcher.schema() != &expected_schema {
-            return Err(SearchError::SchemaMismatch {
-                shard_id: shard.id.clone(),
-            });
-        }
-    }
 
     let query = build_query(&expected_schema, request)?;
-    if request.scope.project_ids.is_empty() || shards.is_empty() {
+    if request.scope.project_ids.is_empty() || shard_count == 0 {
         return Ok(SearchPage {
             rows: Vec::new(),
             has_more: false,
@@ -292,7 +302,14 @@ pub fn search(shards: &[SearchShard], request: &SearchRequest) -> Result<SearchP
         .ok_or(SearchError::InvalidRequest("limit_overflow"))?;
     let time_field = request.scope.time_field.field_name();
     let mut selected = BinaryHeap::with_capacity(candidate_limit);
-    for (shard_index, shard) in shards.iter().enumerate() {
+    for shard_index in 0..shard_count {
+        let guard = load(shard_index)?;
+        let shard = guard.as_ref();
+        if shard.searcher.schema() != &expected_schema {
+            return Err(SearchError::SchemaMismatch {
+                shard_id: shard.id.clone(),
+            });
+        }
         let collector = TopDocs::with_limit(candidate_limit)
             .order_by::<(Option<DateTime>, Option<i64>)>((
                 (SortByStaticFastValue::for_field(time_field), Order::Desc),
@@ -332,7 +349,8 @@ pub fn search(shards: &[SearchShard], request: &SearchRequest) -> Result<SearchP
     let mut rows = Vec::with_capacity(request.limit.min(selected.len()));
     let mut row_string_bytes = 0usize;
     for candidate in selected.into_iter().take(request.limit) {
-        let row = load_row(&shards[candidate.shard_index], candidate.address)?;
+        let guard = load(candidate.shard_index)?;
+        let row = load_row(guard.as_ref(), candidate.address)?;
         row_string_bytes = row_string_bytes.checked_add(row.string_bytes()).ok_or(
             SearchError::ResultTooLarge {
                 limit_bytes: MAX_ROW_STRING_BYTES,
@@ -355,6 +373,20 @@ pub fn search_live(
     request: &SearchRequest,
     after_sequence: i64,
 ) -> Result<SearchPage> {
+    search_live_lazy(
+        shards.len(),
+        |index| Ok(&shards[index]),
+        request,
+        after_sequence,
+    )
+}
+
+pub fn search_live_lazy<G: AsRef<SearchShard>>(
+    shard_count: usize,
+    mut load: impl FnMut(usize) -> Result<G>,
+    request: &SearchRequest,
+    after_sequence: i64,
+) -> Result<SearchPage> {
     validate_request(request)?;
     if request.cursor.is_some()
         || request.scope.time_field != TimeField::ReceivedAt
@@ -364,14 +396,7 @@ pub fn search_live(
         return Err(SearchError::InvalidRequest("invalid_live_scope"));
     }
     let expected_schema = schema::build();
-    for shard in shards {
-        if shard.searcher.schema() != &expected_schema {
-            return Err(SearchError::SchemaMismatch {
-                shard_id: shard.id.clone(),
-            });
-        }
-    }
-    if request.scope.project_ids.is_empty() || shards.is_empty() {
+    if request.scope.project_ids.is_empty() || shard_count == 0 {
         return Ok(SearchPage {
             rows: Vec::new(),
             has_more: false,
@@ -395,7 +420,14 @@ pub fn search_live(
         .checked_add(1)
         .ok_or(SearchError::InvalidRequest("limit_overflow"))?;
     let mut selected = BinaryHeap::with_capacity(candidate_limit);
-    for (shard_index, shard) in shards.iter().enumerate() {
+    for shard_index in 0..shard_count {
+        let guard = load(shard_index)?;
+        let shard = guard.as_ref();
+        if shard.searcher.schema() != &expected_schema {
+            return Err(SearchError::SchemaMismatch {
+                shard_id: shard.id.clone(),
+            });
+        }
         let collector = TopDocs::with_limit(candidate_limit)
             .order_by::<Option<i64>>((SortByStaticFastValue::for_field("ingest_seq"), Order::Asc));
         for (sequence, address) in shard.searcher.search(query.as_ref(), &collector)? {
@@ -422,7 +454,8 @@ pub fn search_live(
     let mut rows = Vec::with_capacity(request.limit.min(selected.len()));
     let mut row_string_bytes = 0usize;
     for candidate in selected.into_iter().take(request.limit) {
-        let row = load_row(&shards[candidate.shard_index], candidate.address)?;
+        let guard = load(candidate.shard_index)?;
+        let row = load_row(guard.as_ref(), candidate.address)?;
         row_string_bytes = row_string_bytes.checked_add(row.string_bytes()).ok_or(
             SearchError::ResultTooLarge {
                 limit_bytes: MAX_ROW_STRING_BYTES,

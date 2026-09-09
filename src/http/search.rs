@@ -3,10 +3,7 @@ use super::{ApiError, ApiResult, HttpState, auth::authenticate};
 use crate::{
     db::search::{self as authorization, Authorization, ScopeError},
     search::{
-        query::{
-            self, KeywordField, QueryScope, RowCursor, SearchRequest, SearchShard, TimeField,
-            TypedFilter,
-        },
+        query::{self, KeywordField, QueryScope, RowCursor, SearchRequest, TimeField, TypedFilter},
         tokens::{Position, TokenContext, TokenError, TokenKind},
     },
 };
@@ -302,15 +299,7 @@ async fn execute(
     let indexer = state.app.indexer.clone().ok_or_else(unavailable)?;
     let searched_shards = candidate_ids.len();
     let page = super::run_native(permit, std::time::Duration::from_secs(10), move || {
-        let pins = indexer.pin_shards(&candidate_ids)?;
-        let shards = pins
-            .iter()
-            .map(|pin| SearchShard {
-                id: pin.published().shard_id.clone(),
-                searcher: pin.published().searcher.clone(),
-            })
-            .collect::<Vec<_>>();
-        query::search(&shards, &request).map_err(anyhow::Error::from)
+        indexer.search(&candidate_ids, &request)
     })
     .await
     .map_err(|failure| match failure {

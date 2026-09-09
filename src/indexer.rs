@@ -27,6 +27,17 @@ pub enum ReadPin {
     Sealed(crate::storage::registry::ShardPin),
 }
 
+struct PinnedSearchShard {
+    shard: crate::search::query::SearchShard,
+    _pin: ReadPin,
+}
+
+impl AsRef<crate::search::query::SearchShard> for PinnedSearchShard {
+    fn as_ref(&self) -> &crate::search::query::SearchShard {
+        &self.shard
+    }
+}
+
 impl ReadPin {
     pub fn published(&self) -> &Published {
         match self {
@@ -312,6 +323,74 @@ impl Indexer {
 
     pub fn registry(&self) -> crate::storage::registry::Registry {
         self.registry.clone()
+    }
+
+    fn load_search_shard(&self, id: &str, active: &Published) -> Result<PinnedSearchShard> {
+        let pin = if id == active.shard_id {
+            ReadPin::Active(active.clone())
+        } else {
+            ReadPin::Sealed(self.registry.pin_local(id)?)
+        };
+        Ok(PinnedSearchShard {
+            shard: crate::search::query::SearchShard {
+                id: pin.published().shard_id.clone(),
+                searcher: pin.published().searcher.clone(),
+            },
+            _pin: pin,
+        })
+    }
+
+    pub fn search(
+        &self,
+        ids: &[String],
+        request: &crate::search::query::SearchRequest,
+    ) -> Result<crate::search::query::SearchPage> {
+        let active = self.snapshot()?;
+        Ok(crate::search::query::search_lazy(
+            ids.len(),
+            |index| {
+                self.load_search_shard(&ids[index], &active)
+                    .map_err(|_| crate::search::query::SearchError::ShardUnavailable)
+            },
+            request,
+        )?)
+    }
+
+    pub fn search_live(
+        &self,
+        ids: &[String],
+        request: &crate::search::query::SearchRequest,
+        after: i64,
+    ) -> Result<crate::search::query::SearchPage> {
+        let active = self.snapshot()?;
+        Ok(crate::search::query::search_live_lazy(
+            ids.len(),
+            |index| {
+                self.load_search_shard(&ids[index], &active)
+                    .map_err(|_| crate::search::query::SearchError::ShardUnavailable)
+            },
+            request,
+            after,
+        )?)
+    }
+
+    pub fn aggregate(
+        &self,
+        ids: &[String],
+        request: &crate::search::aggregate::AggregateRequest,
+    ) -> Result<crate::search::aggregate::AggregatePage> {
+        let active = self.snapshot()?;
+        Ok(crate::search::aggregate::aggregate_lazy(
+            ids.len(),
+            |index| {
+                self.load_search_shard(&ids[index], &active).map_err(|_| {
+                    crate::search::aggregate::AggregateError::Search(
+                        crate::search::query::SearchError::ShardUnavailable,
+                    )
+                })
+            },
+            request,
+        )?)
     }
 
     pub fn wake(&self) {
