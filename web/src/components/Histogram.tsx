@@ -47,17 +47,33 @@ export function Histogram({
             <li
               aria-label={`${time}, ${bucket.doc_count}건`}
               key={bucket.key.timestamp_us}
+              title={`${time}, ${bucket.doc_count}건`}
             >
               <span
                 className="histogram__bar"
                 style={{ height: percent(bucket.doc_count, maximum) }}
               />
-              <span className="histogram__value">{bucket.doc_count}</span>
-              <time>{time}</time>
+              {timestampBuckets.length <= 6 ? (
+                <span className="histogram__value">{bucket.doc_count}</span>
+              ) : null}
             </li>
           );
         })}
       </ol>
+      <figcaption className="histogram__axis">
+        {[
+          timestampBuckets[0],
+          ...(timestampBuckets.length > 1
+            ? [timestampBuckets[timestampBuckets.length - 1]]
+            : []),
+        ].map((bucket) =>
+          bucket.key.type === "timestamp" ? (
+            <time key={bucket.key.timestamp_us}>
+              {timestampLabel(bucket.key.timestamp_us)}
+            </time>
+          ) : null,
+        )}
+      </figcaption>
     </figure>
   );
 }

@@ -47,7 +47,8 @@ export function LogsPage() {
         ? liveLogsUrl({
             projects: state.projects,
             start: liveStart,
-            end: "9999-12-31T23:59:59Z",
+            // The native search index stores dates as signed i64 nanoseconds.
+            end: "2262-04-11T23:47:16.854Z",
             query: state.query,
             filters: state.filters,
           })

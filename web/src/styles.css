@@ -538,14 +538,12 @@ textarea {
 .histogram {
   min-width: 0;
   margin: 0;
-  overflow-x: auto;
 }
 .histogram ol {
-  min-width: 38rem;
-  height: 15rem;
+  height: 12rem;
   display: flex;
   align-items: end;
-  gap: 0.35rem;
+  gap: 0;
   margin: 0;
   padding: 1.5rem 0 0;
   list-style: none;
@@ -572,16 +570,13 @@ textarea {
   color: var(--muted);
   font-size: 0.68rem;
 }
-.histogram time {
-  position: absolute;
-  bottom: -2.6rem;
-  left: 50%;
-  width: 8rem;
-  transform: translateX(-50%) rotate(-28deg);
-  transform-origin: center;
+.histogram__axis {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-top: 0.5rem;
   color: var(--muted);
-  font-size: 0.63rem;
-  text-align: center;
+  font-size: 0.7rem;
 }
 .histogram__empty {
   color: var(--muted);

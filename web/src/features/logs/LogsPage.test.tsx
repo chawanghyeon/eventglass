@@ -151,13 +151,65 @@ function renderPage(path = basePath) {
   return { client, ...render(<LogsPage />, { wrapper: Wrapper }) };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 beforeEach(() => {
   vi.spyOn(endpoints, "aggregate").mockResolvedValue(aggregate());
   vi.spyOn(endpoints, "relatedRecords").mockResolvedValue(related());
 });
 
 describe("LogsPage", () => {
+  it("subscribes with a native-search-compatible future date", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "EventSource",
+      class {
+        constructor(url: string) {
+          calls.push(url);
+        }
+        addEventListener() {}
+        close() {}
+      },
+    );
+    vi.spyOn(endpoints, "logs").mockResolvedValue(page());
+    renderPage();
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "Live 시작" }));
+    await waitFor(() => expect(calls).toHaveLength(1));
+    const end =
+      new URL(calls[0], "http://localhost").searchParams.get("end") ?? "";
+    const nanos = BigInt(Date.parse(end)) * 1000000n;
+    expect(nanos).toBeLessThanOrEqual(9223372036854775807n);
+    expect(Date.parse(end)).toBeGreaterThan(Date.now());
+  });
+
+  it("shows the fixed fallback correlation window instead of an ineffective selector", async () => {
+    vi.spyOn(endpoints, "logs").mockResolvedValue(page());
+    vi.spyOn(endpoints, "recordDetail").mockResolvedValue({
+      record_id: "a".repeat(64),
+      raw: {},
+    });
+    vi.mocked(endpoints.relatedRecords).mockResolvedValue({
+      ...related(),
+      exact: false,
+      strategy: "project_service_error_time",
+      window_seconds: 30,
+    });
+    renderPage();
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: "상세 보기" }));
+    expect(
+      await screen.findByText("시간 범위 ±30초 (고정)"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("combobox", { name: "시간 범위" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("uses the rows read token and exact URL scope for its histogram", async () => {
     vi.spyOn(endpoints, "logs").mockResolvedValue(page());
     const aggregation = vi.mocked(endpoints.aggregate);

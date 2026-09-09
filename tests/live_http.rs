@@ -177,7 +177,7 @@ async fn subscribe(
     resume: Option<&str>,
 ) -> anyhow::Result<BodyDataStream> {
     let path =
-        "/api/logs/live?projects=1&start=2026-09-01T00%3A00%3A00Z&end=2026-10-01T00%3A00%3A00Z";
+        "/api/logs/live?projects=1&start=2026-09-01T00%3A00%3A00Z&end=2262-04-11T23%3A47%3A16.854Z";
     let mut request = Request::builder().uri(path).header(header::COOKIE, cookie);
     if let Some(resume) = resume {
         request = request.header("last-event-id", resume);

@@ -202,19 +202,23 @@ export function RecordDetailPanel({
                     </p>
                   ) : null}
                 </div>
-                <label>
-                  시간 범위
-                  <select
-                    onChange={(event) =>
-                      setRelatedWindow(Number(event.target.value))
-                    }
-                    value={relatedWindow}
-                  >
-                    <option value={3600}>±1시간</option>
-                    <option value={21600}>±6시간</option>
-                    <option value={86400}>±24시간</option>
-                  </select>
-                </label>
+                {related.data && !related.data.exact ? (
+                  <span>시간 범위 ±{related.data.window_seconds}초 (고정)</span>
+                ) : (
+                  <label>
+                    시간 범위
+                    <select
+                      onChange={(event) =>
+                        setRelatedWindow(Number(event.target.value))
+                      }
+                      value={relatedWindow}
+                    >
+                      <option value={3600}>±1시간</option>
+                      <option value={21600}>±6시간</option>
+                      <option value={86400}>±24시간</option>
+                    </select>
+                  </label>
+                )}
               </div>
               {related.isPending ? <Spinner label="연관 로그 검색 중" /> : null}
               {related.isError ? (
