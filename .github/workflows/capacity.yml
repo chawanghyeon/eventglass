@@ -13,6 +13,7 @@ on:
         options:
           - 1m
           - 10m
+          - sustained
 
 permissions:
   contents: read

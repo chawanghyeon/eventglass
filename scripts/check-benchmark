@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the deterministic capacity smoke under one Linux CPU and 512 MiB."""
+"""Run deterministic capacity and sustained profiles under one CPU and 512 MiB."""
 
 import argparse
 import hashlib
@@ -11,7 +11,13 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 IMAGE = "rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97"
 MEMORY_BYTES = 536_870_912
-PROFILES = {"100k": 100_000, "1m": 1_000_000, "10m": 10_000_000}
+PROFILES = {"100k": 100_000, "1m": 1_000_000, "10m": 10_000_000, "sustained": 100_000}
+SUSTAINED = {
+    "warmup_seconds": 300,
+    "sustained_seconds": 1_800,
+    "drain_seconds": 600,
+    "records_per_second": 105,
+}
 
 
 def run_container(arguments, stdout=None):
@@ -151,21 +157,37 @@ def main():
         selected = sum(line.endswith(": test") for line in list_output.splitlines())
         if selected != 1:
             raise RuntimeError(f"benchmark selected {selected} tests instead of one")
+        environment = [
+            "-e",
+            f"EVENTGLASS_BENCH_PROFILE={args.profile}",
+            "-e",
+            f"EVENTGLASS_BENCH_RECORDS={records}",
+            "-e",
+            f"EVENTGLASS_BENCH_REPORT=/report/{report.name}",
+            "-e",
+            f"EVENTGLASS_BENCH_REVISION={revision}",
+            "-e",
+            "EVENTGLASS_BENCH_RUST_VERSION=1.97.1",
+        ]
+        if args.profile == "sustained":
+            environment.extend(
+                [
+                    "-e",
+                    f"EVENTGLASS_BENCH_WARMUP_SECONDS={SUSTAINED['warmup_seconds']}",
+                    "-e",
+                    f"EVENTGLASS_BENCH_SUSTAINED_SECONDS={SUSTAINED['sustained_seconds']}",
+                    "-e",
+                    f"EVENTGLASS_BENCH_DRAIN_SECONDS={SUSTAINED['drain_seconds']}",
+                    "-e",
+                    f"EVENTGLASS_BENCH_RECORDS_PER_SECOND={SUSTAINED['records_per_second']}",
+                ]
+            )
         state = run_container(
             [
                 *limited,
                 "--mount",
                 f"type=bind,src={report.parent},dst=/report",
-                "-e",
-                f"EVENTGLASS_BENCH_PROFILE={args.profile}-development",
-                "-e",
-                f"EVENTGLASS_BENCH_RECORDS={records}",
-                "-e",
-                f"EVENTGLASS_BENCH_REPORT=/report/{report.name}",
-                "-e",
-                f"EVENTGLASS_BENCH_REVISION={revision}",
-                "-e",
-                "EVENTGLASS_BENCH_RUST_VERSION=1.97.1",
+                *environment,
                 IMAGE,
                 executable,
                 "--ignored",
@@ -188,6 +210,21 @@ def main():
         )
         if int(memory_events.get("oom", "0")) != 0:
             raise RuntimeError("benchmark cgroup recorded an OOM")
+        if args.profile == "sustained":
+            expected_records = (
+                SUSTAINED["sustained_seconds"] * SUSTAINED["records_per_second"]
+            )
+            for field, seconds in [
+                ("warmup_duration_ms", SUSTAINED["warmup_seconds"]),
+                ("sustained_duration_ms", SUSTAINED["sustained_seconds"]),
+                ("drain_duration_ms", SUSTAINED["drain_seconds"]),
+            ]:
+                if evidence[field] < seconds * 1_000:
+                    raise RuntimeError(f"{field} does not prove the required phase")
+            if evidence["sustained_records"] != expected_records:
+                raise RuntimeError("sustained phase did not accept the required records")
+            if evidence["inbox_records_after_drain"] != 0:
+                raise RuntimeError("sustained drain left Inbox records")
         evidence.update(
             {
                 "image": IMAGE,

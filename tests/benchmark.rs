@@ -22,6 +22,46 @@ use sha2::{Digest, Sha256};
 const BASE_US: i64 = 1_788_825_600_000_000;
 const BATCH_RECORDS: usize = 1_000;
 
+struct PhaseProfile {
+    warmup: Duration,
+    sustained: Duration,
+    drain: Duration,
+    target_records_per_second: usize,
+}
+
+impl PhaseProfile {
+    fn from_env() -> Result<Self> {
+        let profile = Self {
+            warmup: Duration::from_secs(optional_seconds("EVENTGLASS_BENCH_WARMUP_SECONDS")?),
+            sustained: Duration::from_secs(optional_seconds("EVENTGLASS_BENCH_SUSTAINED_SECONDS")?),
+            drain: Duration::from_secs(optional_seconds("EVENTGLASS_BENCH_DRAIN_SECONDS")?),
+            target_records_per_second: env::var("EVENTGLASS_BENCH_RECORDS_PER_SECOND")
+                .map_or(Ok(0), |value| {
+                    value.parse::<usize>().map_err(anyhow::Error::from)
+                })?,
+        };
+        ensure!(
+            (!profile.enabled() && profile.target_records_per_second == 0)
+                || (profile.warmup == Duration::from_secs(300)
+                    && profile.sustained == Duration::from_secs(1_800)
+                    && profile.drain == Duration::from_secs(600)
+                    && profile.target_records_per_second == 105),
+            "sustained benchmark requires 300s warmup, 1800s workload, 600s drain, and 105 records/s"
+        );
+        Ok(profile)
+    }
+
+    fn enabled(&self) -> bool {
+        !self.warmup.is_zero() || !self.sustained.is_zero() || !self.drain.is_zero()
+    }
+
+    fn maximum_sustained_records(&self) -> usize {
+        usize::try_from(self.sustained.as_secs())
+            .unwrap_or(usize::MAX)
+            .saturating_mul(self.target_records_per_second)
+    }
+}
+
 #[derive(Serialize)]
 struct Distribution {
     samples: usize,
@@ -29,6 +69,12 @@ struct Distribution {
     p95: u64,
     p99: u64,
     max: u64,
+}
+
+#[derive(Serialize)]
+struct InboxSample {
+    elapsed_ms: u128,
+    bytes: i64,
 }
 
 #[derive(Serialize)]
@@ -49,6 +95,18 @@ struct Report {
     seed_elapsed_ms: u128,
     seed_records_per_second: f64,
     visibility_lag_ms: u128,
+    warmup_duration_ms: u128,
+    sustained_duration_ms: u128,
+    drain_duration_ms: u128,
+    sustained_target_records_per_second: usize,
+    sustained_records: usize,
+    sustained_acceptance_latency: Distribution,
+    sustained_structured_search_latency: Distribution,
+    sustained_text_search_latency: Distribution,
+    sustained_histogram_latency: Distribution,
+    inbox_bytes_at_sustained_start: i64,
+    inbox_bytes_peak: i64,
+    inbox_bytes_timeline: Vec<InboxSample>,
     structured_search_latency: Distribution,
     text_search_latency: Distribution,
     histogram_latency: Distribution,
@@ -77,6 +135,7 @@ async fn seeded_dataset_capacity() -> Result<()> {
         .try_init();
     let profile = required_env("EVENTGLASS_BENCH_PROFILE")?;
     let records = parse_record_count(&required_env("EVENTGLASS_BENCH_RECORDS")?)?;
+    let phases = PhaseProfile::from_env()?;
     let report_path = PathBuf::from(required_env("EVENTGLASS_BENCH_REPORT")?);
     let data_root = tempfile::tempdir()?;
     let data_dir = data_root.path().join("data");
@@ -143,12 +202,104 @@ async fn seeded_dataset_capacity() -> Result<()> {
     wait_for_visibility(&app, i64::try_from(records)?).await?;
     let visibility_lag = visibility_started.elapsed();
 
+    let warmup_started = Instant::now();
+    while warmup_started.elapsed() < phases.warmup {
+        measure_query_mix(&app, records).await?;
+        sleep_until_next_second(warmup_started).await;
+    }
+    let warmup_elapsed = phase_elapsed(warmup_started, phases.warmup);
+
+    let inbox_bytes_at_sustained_start = inbox_bytes(&app).await?;
+    let mut inbox_bytes_peak = inbox_bytes_at_sustained_start;
+    let mut inbox_bytes_timeline = vec![InboxSample {
+        elapsed_ms: 0,
+        bytes: inbox_bytes_at_sustained_start,
+    }];
+    let mut sustained_acceptance_us = Vec::new();
+    let mut sustained_structured_us = Vec::new();
+    let mut sustained_text_us = Vec::new();
+    let mut sustained_histogram_us = Vec::new();
+    let mut sustained_records = 0usize;
+    let sustained_started = Instant::now();
+    while sustained_started.elapsed() < phases.sustained {
+        let scheduled = ((sustained_started.elapsed().as_secs_f64()
+            * phases.target_records_per_second as f64) as usize)
+            .min(phases.maximum_sustained_records());
+        if scheduled > sustained_records {
+            let start = records + sustained_records;
+            let end = records + scheduled;
+            let batch = (start..end)
+                .map(|index| record(index, received_base_us))
+                .collect::<Vec<_>>();
+            let input = project.clone();
+            let acceptance_id = format!("benchmark-sustained-{sustained_records}");
+            let started = Instant::now();
+            app.db
+                .call(move |database| {
+                    ingest::accept(database, input, &acceptance_id, batch, &Limits::default())
+                })
+                .await?;
+            sustained_acceptance_us.push(duration_us(started.elapsed()));
+            sustained_records = scheduled;
+            app.indexer.as_ref().context("missing Indexer")?.wake();
+        }
+        let measured = measure_query_mix(&app, records + sustained_records).await?;
+        sustained_structured_us.push(measured[0]);
+        sustained_text_us.push(measured[1]);
+        sustained_histogram_us.push(measured[2]);
+        let pending_bytes = inbox_bytes(&app).await?;
+        inbox_bytes_peak = inbox_bytes_peak.max(pending_bytes);
+        inbox_bytes_timeline.push(InboxSample {
+            elapsed_ms: sustained_started.elapsed().as_millis(),
+            bytes: pending_bytes,
+        });
+        sleep_until_next_second(sustained_started).await;
+    }
+    if sustained_records < phases.maximum_sustained_records() {
+        let start = records + sustained_records;
+        let end = records + phases.maximum_sustained_records();
+        ensure!(
+            end - start <= BATCH_RECORDS,
+            "sustained workload fell more than one batch behind its target"
+        );
+        let batch = (start..end)
+            .map(|index| record(index, received_base_us))
+            .collect::<Vec<_>>();
+        let input = project.clone();
+        let acceptance_id = format!("benchmark-sustained-{sustained_records}");
+        let started = Instant::now();
+        app.db
+            .call(move |database| {
+                ingest::accept(database, input, &acceptance_id, batch, &Limits::default())
+            })
+            .await?;
+        sustained_acceptance_us.push(duration_us(started.elapsed()));
+        sustained_records = phases.maximum_sustained_records();
+        app.indexer.as_ref().context("missing Indexer")?.wake();
+    }
+    let sustained_elapsed = phase_elapsed(sustained_started, phases.sustained);
+    let total_records = records + sustained_records;
+
+    let drain_started = Instant::now();
+    while drain_started.elapsed() < phases.drain {
+        app.indexer.as_ref().context("missing Indexer")?.wake();
+        let pending_bytes = inbox_bytes(&app).await?;
+        inbox_bytes_peak = inbox_bytes_peak.max(pending_bytes);
+        inbox_bytes_timeline.push(InboxSample {
+            elapsed_ms: phases.sustained.as_millis() + drain_started.elapsed().as_millis(),
+            bytes: pending_bytes,
+        });
+        sleep_until_next_second(drain_started).await;
+    }
+    let drain_elapsed = phase_elapsed(drain_started, phases.drain);
+    wait_for_visibility(&app, i64::try_from(total_records)?).await?;
+
     let (shards, issue_count, inbox_records, inbox_bytes) = snapshot(&app).await?;
     let scope = QueryScope {
         project_ids: vec![1],
         start_us: BASE_US - 24 * 60 * 60 * 1_000_000,
-        end_us: BASE_US + i64::try_from(records)? * 10_000 + 60 * 60 * 1_000_000,
-        watermark: i64::try_from(records)?,
+        end_us: BASE_US + i64::try_from(total_records)? * 10_000 + 60 * 60 * 1_000_000,
+        watermark: i64::try_from(total_records)?,
         time_field: TimeField::Timestamp,
     };
     let structured = SearchRequest {
@@ -191,7 +342,7 @@ async fn seeded_dataset_capacity() -> Result<()> {
                 .rows
                 .is_empty()
         );
-        ensure!(aggregate::aggregate(&shards, &histogram)?.record_count == records as u64);
+        ensure!(aggregate::aggregate(&shards, &histogram)?.record_count == total_records as u64);
     }
     let structured_us = measure(30, || {
         eventglass::search::query::search(&shards, &structured)?;
@@ -204,21 +355,34 @@ async fn seeded_dataset_capacity() -> Result<()> {
     let histogram_us = measure(30, || {
         let page = aggregate::aggregate(&shards, &histogram)?;
         ensure!(
-            page.record_count == records as u64,
+            page.record_count == total_records as u64,
             "histogram lost records"
         );
         Ok(())
     })?;
 
+    acceptance_us.extend_from_slice(&sustained_acceptance_us);
+    let limitations = if phases.enabled() {
+        vec![
+            "acceptance calls the production durable operation directly; HTTP wire ACK latency is covered separately",
+            "S3 transfer and checkpoint lag are measured by the separate compatible storage gate",
+        ]
+    } else {
+        vec![
+            "seed phase calls the production durable acceptance operation in 1000-record batches; it does not measure HTTP wire ACK latency",
+            "capacity profile omits the separate 5-minute warmup and 30-minute sustained mixed workload",
+            "S3 transfer and checkpoint lag are measured by the separate compatible storage gate",
+        ]
+    };
     let report = Report {
-        format_version: 1,
+        format_version: 2,
         duration_unit: "microseconds",
         size_unit: "bytes",
         profile,
-        records,
-        logs: records - records.div_ceil(21),
-        errors: records.div_ceil(21),
-        late_records: records.div_ceil(97),
+        records: total_records,
+        logs: total_records - total_records.div_ceil(21),
+        errors: total_records.div_ceil(21),
+        late_records: total_records.div_ceil(97),
         attributes_per_record: 15,
         high_cardinality_fields: vec!["host", "customer_id", "request_id"],
         record_bytes: distribution(record_sizes),
@@ -227,6 +391,18 @@ async fn seeded_dataset_capacity() -> Result<()> {
         seed_elapsed_ms: seed_elapsed.as_millis(),
         seed_records_per_second: records as f64 / seed_elapsed.as_secs_f64(),
         visibility_lag_ms: visibility_lag.as_millis(),
+        warmup_duration_ms: warmup_elapsed.as_millis(),
+        sustained_duration_ms: sustained_elapsed.as_millis(),
+        drain_duration_ms: drain_elapsed.as_millis(),
+        sustained_target_records_per_second: phases.target_records_per_second,
+        sustained_records,
+        sustained_acceptance_latency: distribution(sustained_acceptance_us),
+        sustained_structured_search_latency: distribution(sustained_structured_us),
+        sustained_text_search_latency: distribution(sustained_text_us),
+        sustained_histogram_latency: distribution(sustained_histogram_us),
+        inbox_bytes_at_sustained_start,
+        inbox_bytes_peak,
+        inbox_bytes_timeline,
         structured_search_latency: distribution(structured_us),
         text_search_latency: distribution(text_us),
         histogram_latency: distribution(histogram_us),
@@ -243,11 +419,7 @@ async fn seeded_dataset_capacity() -> Result<()> {
         cargo_lock_sha256: sha256_file(Path::new("Cargo.lock"))?,
         rust_version: required_env("EVENTGLASS_BENCH_RUST_VERSION")?,
         native_format: eventglass::db::shards::FORMAT_VERSION,
-        limitations: vec![
-            "seed phase calls the production durable acceptance operation in 1000-record batches; it does not measure HTTP wire ACK latency",
-            "development profile omits the required 5-minute warmup and 30-minute sustained mixed workload",
-            "S3 transfer and checkpoint lag are measured by the separate compatible storage gate",
-        ],
+        limitations,
     };
     ensure!(report.inbox_records_after_drain == 0 && report.inbox_bytes_after_drain == 0);
     ensure!(report.errors == usize::try_from(issue_occurrences(&app).await?)?);
@@ -272,6 +444,101 @@ fn parse_record_count(value: &str) -> Result<usize> {
 
 fn required_env(name: &str) -> Result<String> {
     env::var(name).with_context(|| format!("{name} is required"))
+}
+
+fn optional_seconds(name: &str) -> Result<u64> {
+    env::var(name).map_or(Ok(0), |value| {
+        value.parse::<u64>().map_err(anyhow::Error::from)
+    })
+}
+
+fn phase_elapsed(started: Instant, configured: Duration) -> Duration {
+    if configured.is_zero() {
+        Duration::ZERO
+    } else {
+        started.elapsed()
+    }
+}
+
+async fn inbox_bytes(app: &AppState) -> Result<i64> {
+    app.db
+        .call(|database| {
+            Ok(database.query_row(
+                "SELECT inbox_bytes FROM runtime_state WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await
+}
+
+async fn sleep_until_next_second(started: Instant) {
+    let elapsed = started.elapsed();
+    let next = Duration::from_secs(elapsed.as_secs().saturating_add(1));
+    if next > elapsed {
+        tokio::time::sleep(next - elapsed).await;
+    }
+}
+
+async fn measure_query_mix(app: &AppState, records: usize) -> Result<[u64; 3]> {
+    let (shards, _, _, _) = snapshot(app).await?;
+    let scope = QueryScope {
+        project_ids: vec![1],
+        start_us: BASE_US - 24 * 60 * 60 * 1_000_000,
+        end_us: BASE_US + i64::try_from(records)? * 10_000 + 60 * 60 * 1_000_000,
+        watermark: i64::try_from(records)?,
+        time_field: TimeField::Timestamp,
+    };
+    let structured = SearchRequest {
+        query: String::new(),
+        scope: scope.clone(),
+        filters: vec![TypedFilter::JsonEq {
+            path: "region".into(),
+            value: JsonScalar::String("ap-northeast-2".into()),
+        }],
+        cursor: None,
+        limit: 100,
+    };
+    let text = SearchRequest {
+        query: "checkout latency".into(),
+        scope: scope.clone(),
+        filters: Vec::new(),
+        cursor: None,
+        limit: 100,
+    };
+    let histogram = AggregateRequest {
+        query: String::new(),
+        scope,
+        filters: Vec::new(),
+        metrics: vec![MetricSpec::Count {
+            name: "records".into(),
+        }],
+        group_by: Vec::new(),
+        histogram: Some(HistogramSpec {
+            interval_ms: 60_000,
+        }),
+    };
+    let structured_started = Instant::now();
+    ensure!(
+        !eventglass::search::query::search(&shards, &structured)?
+            .rows
+            .is_empty()
+    );
+    let structured_us = duration_us(structured_started.elapsed());
+    let text_started = Instant::now();
+    ensure!(
+        !eventglass::search::query::search(&shards, &text)?
+            .rows
+            .is_empty()
+    );
+    let text_us = duration_us(text_started.elapsed());
+    let histogram_started = Instant::now();
+    ensure!(aggregate::aggregate(&shards, &histogram)?.record_count > 0);
+    Ok([
+        structured_us,
+        text_us,
+        duration_us(histogram_started.elapsed()),
+    ])
 }
 
 fn record(index: usize, received_base_us: i64) -> Record {
@@ -472,7 +739,15 @@ fn duration_us(duration: Duration) -> u64 {
 }
 
 fn distribution(mut values: Vec<u64>) -> Distribution {
-    assert!(!values.is_empty());
+    if values.is_empty() {
+        return Distribution {
+            samples: 0,
+            p50: 0,
+            p95: 0,
+            p99: 0,
+            max: 0,
+        };
+    }
     values.sort_unstable();
     let at = |percent: usize| values[(values.len() * percent).div_ceil(100).saturating_sub(1)];
     Distribution {
