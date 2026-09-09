@@ -1,3 +1,4 @@
+import { ReplaysPage, ReplayDetailPage } from "../features/replays";
 import { Navigate, createBrowserRouter } from "react-router-dom";
 import { LoginPage, SetupPage } from "../features/auth";
 import { AlertsPage } from "../features/alerts";
@@ -20,6 +21,8 @@ export const router = createBrowserRouter([
       {
         element: <AppShell />,
         children: [
+          { path: "/replays", element: <ReplaysPage /> },
+          { path: "/replays/:project/:id", element: <ReplayDetailPage /> },
           { path: "/issues", element: <IssuesPage /> },
           { path: "/logs", element: <LogsPage /> },
           { path: "/explore", element: <ExplorePage /> },

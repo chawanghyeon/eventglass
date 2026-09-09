@@ -220,6 +220,20 @@ async fn minio_checkpoint_and_object_contract() -> Result<()> {
 
     install_prepared(&data_dir, restored)?;
     let database = db::open(&data_dir.join("meta.db"))?;
+    let replay_refs = eventglass::db::replays::blob_references(&database)?;
+    ensure!(
+        replay_refs.len() == 1,
+        "Replay reference missing from complete restore"
+    );
+    let expected = eventglass::sentry::replay::decode_envelope(
+        include_bytes!("fixtures/replay/plain-0.envelope"),
+        &[],
+    )?
+    .context("fixture")?;
+    ensure!(
+        eventglass::storage::replay::read(&data_dir, &replay_refs[0])? == expected.recording,
+        "restored Replay bytes differ"
+    );
     let users: i64 = database.query_row("SELECT count(*) FROM users", [], |row| row.get(0))?;
     let sessions: i64 =
         database.query_row("SELECT count(*) FROM sessions", [], |row| row.get(0))?;
@@ -427,6 +441,10 @@ async fn minio_checkpoint_and_object_contract() -> Result<()> {
         .shutdown()
         .await?;
 
+    // Replay-only metadata can legitimately publish a newer complete checkpoint.
+    let last_completed: LatestDocument =
+        serde_json::from_slice(&store.get_small("latest.json", 4096).await?)?;
+    ensure!(last_completed.sequence >= candidate.document.sequence);
     store.put_bytes("latest.json", b"not json".to_vec()).await?;
     let fallback = root.path().join("fallback-data").join(".restore");
     let restored = prepare_restore(
@@ -438,8 +456,9 @@ async fn minio_checkpoint_and_object_contract() -> Result<()> {
     )
     .await?;
     ensure!(
-        restored.document.sequence == candidate.document.sequence,
-        "corrupt latest did not fall back"
+        restored.document.checkpoint_id == last_completed.checkpoint_id
+            && restored.document.sequence == last_completed.sequence,
+        "corrupt latest did not fall back to the newest complete checkpoint"
     );
 
     let wrong = AwsObjectStore::load(
@@ -823,6 +842,34 @@ async fn restorable_candidate(root: &Path) -> Result<RestoreFixture> {
         })
         .await?;
 
+    // A real SDK Replay blob must participate in the SAME complete checkpoint.
+    let replay = eventglass::sentry::replay::decode_envelope(
+        include_bytes!("fixtures/replay/plain-0.envelope"),
+        &[],
+    )?
+    .context("SDK replay fixture")?;
+    let replay_blob = eventglass::storage::replay::write(&data_dir, &replay.recording)?;
+    let expected_replay_blob = replay_blob.clone();
+    let replay_bytes = replay.recording.len();
+    app.db
+        .call(move |db| {
+            let tx = db.transaction()?;
+            eventglass::db::replays::accept(
+                &tx,
+                1,
+                &eventglass::db::replays::PreparedReplay {
+                    metadata: replay.metadata,
+                    blob: replay_blob,
+                    recording_bytes: replay_bytes,
+                    frustration: Default::default(),
+                },
+                eventglass::model::now_us()?,
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .await?;
+
     let database_path = data_dir.join("meta.db");
     let checkpoint_id = uuid::Uuid::new_v4().to_string();
     let snapshot_path = root.join("snapshot.db");
@@ -851,6 +898,10 @@ async fn restorable_candidate(root: &Path) -> Result<RestoreFixture> {
     )?;
     let checkpoint_generation = snapshot.cut.storage_generation.clone();
     let candidate = LocalCheckpoint {
+        replay_files: vec![(
+            expected_replay_blob.key.clone(),
+            data_dir.join(&expected_replay_blob.key),
+        )],
         document: CheckpointDocument {
             format_version: 1,
             checkpoint_id: checkpoint_id.clone(),

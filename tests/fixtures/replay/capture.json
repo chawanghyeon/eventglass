@@ -5,32 +5,32 @@
     {
       "mode": "plain",
       "name": "plain-0.envelope",
-      "bytes": 7347
+      "bytes": 7684
     },
     {
       "mode": "plain",
       "name": "plain-1.envelope",
-      "bytes": 1968
+      "bytes": 1965
     },
     {
       "mode": "plain",
       "name": "plain-2.envelope",
-      "bytes": 4161
+      "bytes": 4168
     },
     {
       "mode": "compressed",
       "name": "compressed-0.envelope",
-      "bytes": 2858
+      "bytes": 2878
     },
     {
       "mode": "compressed",
       "name": "compressed-1.envelope",
-      "bytes": 1648
+      "bytes": 1650
     },
     {
       "mode": "compressed",
       "name": "compressed-2.envelope",
-      "bytes": 2238
+      "bytes": 2240
     }
   ]
 }

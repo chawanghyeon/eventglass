@@ -1,5 +1,11 @@
 import { apiRequest } from "./client";
 import type {
+  ReplayPage,
+  FeedbackPage,
+  ReplayMaps,
+  ReplayDetail,
+  ReplayRecording,
+  ReplayAnalysis,
   AggregateRequest,
   AggregateResponse,
   Alert,
@@ -32,6 +38,35 @@ import type {
 } from "./types";
 
 export const endpoints = {
+  feedback: (project: string, signal?: AbortSignal) =>
+    apiRequest<FeedbackPage>(
+      `/api/feedback?project_id=${encodeURIComponent(project)}`,
+      { signal },
+    ),
+  replayMaps: (query: string, signal?: AbortSignal) =>
+    apiRequest<ReplayMaps>(`/api/replay-pages?${query}`, { signal }),
+  replays: (query: string, signal?: AbortSignal) =>
+    apiRequest<ReplayPage>(`/api/replays?${query}`, { signal }),
+  replay: (project: string, id: string, signal?: AbortSignal) =>
+    apiRequest<ReplayDetail>(
+      `/api/replays/${encodeURIComponent(project)}/${encodeURIComponent(id)}`,
+      { signal },
+    ),
+  replayAnalysis: (project: string, id: string, signal?: AbortSignal) =>
+    apiRequest<ReplayAnalysis>(
+      `/api/replays/${encodeURIComponent(project)}/${encodeURIComponent(id)}/analysis`,
+      { signal },
+    ),
+  replayRecording: (
+    project: string,
+    id: string,
+    segment: number,
+    signal?: AbortSignal,
+  ) =>
+    apiRequest<ReplayRecording>(
+      `/api/replays/${encodeURIComponent(project)}/${encodeURIComponent(id)}/segments/${segment}`,
+      { signal },
+    ),
   setup: (input: SetupRequest, signal?: AbortSignal) =>
     apiRequest<undefined>("/api/setup", {
       method: "POST",

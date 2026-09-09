@@ -44,6 +44,9 @@ export function AppShell() {
             <span aria-hidden="true">◇</span>
             Issues
           </NavLink>
+          <NavLink to="/replays">
+            <span aria-hidden="true">▷</span>Replays
+          </NavLink>
           <NavLink to="/projects">
             <span aria-hidden="true">⌁</span>
             프로젝트

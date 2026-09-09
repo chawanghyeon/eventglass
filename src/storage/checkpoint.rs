@@ -31,6 +31,10 @@ pub struct CheckpointCut {
     pub storage_generation: String,
     pub boundary: Boundary,
     pub shards: Vec<CheckpointShard>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replay_blobs: Vec<super::remote::ObjectReference>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub replay_revision: i64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -130,6 +134,8 @@ impl PinnedSnapshot {
             }),
             "checkpoint catalog contains an unavailable shard"
         );
+        let replay_blobs = crate::db::replays::blob_references(&source)?;
+        let replay_revision = crate::db::replays::revision(&source)?;
         Ok(Self {
             source,
             source_path: source_path.to_owned(),
@@ -142,6 +148,8 @@ impl PinnedSnapshot {
                     ingest_seq,
                 },
                 shards,
+                replay_blobs,
+                replay_revision,
             },
         })
     }
@@ -296,6 +304,10 @@ fn file_size(path: &Path) -> Result<u64> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(0),
         Err(error) => Err(error.into()),
     }
+}
+
+fn is_zero(value: &i64) -> bool {
+    *value == 0
 }
 
 #[cfg(test)]

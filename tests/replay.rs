@@ -19,6 +19,43 @@ fn metadata() -> Value {
 }
 
 #[test]
+fn movement_uses_sample_time_viewport_and_page_and_ignores_iframe_coordinates() {
+    let mut analysis = eventglass::replay::Analysis::default();
+    for event in [
+        json!({"type":4,"timestamp":1000,"data":{"href":"https://example.test/first?secret=masked","width":1000,"height":500}}),
+        json!({"type":2,"timestamp":1001,"data":{"node":{"type":0,"id":1,"childNodes":[{"type":2,"id":2},{"type":0,"id":10,"childNodes":[{"type":2,"id":11}]}]}}}),
+        json!({"type":3,"timestamp":2000,"data":{"source":4,"width":500,"height":250}}),
+        json!({"type":5,"timestamp":2000,"data":{"tag":"breadcrumb","payload":{"category":"navigation","data":{"to":"/second"}}}}),
+        json!({"type":3,"timestamp":2100,"data":{"source":1,"positions":[{"id":2,"x":250,"y":125,"timeOffset":-200},{"id":2,"x":250,"y":125,"timeOffset":0},{"id":11,"x":1,"y":1,"timeOffset":0}]}}),
+        json!({"type":3,"timestamp":2200,"data":{"source":3,"id":1,"y":500,"x":0}}),
+        json!({"type":3,"timestamp":2300,"data":{"source":3,"id":10,"y":10000,"x":0}}),
+    ] {
+        analysis.event(&event);
+    }
+    analysis.finish(3000);
+    assert_eq!(
+        analysis.pages["https://example.test/first"].movement["5,5"],
+        1
+    );
+    let second = &analysis.pages["https://example.test/second"];
+    assert_eq!(second.movement.values().sum::<u32>(), 1);
+    assert_eq!(second.movement["10,10"], 1);
+    assert_eq!(second.max_scroll_viewports, 2.0);
+    assert_eq!(second.scroll_reach_replays["2"], 1);
+    assert_eq!(second.scroll_reach_replays["3"], 0);
+    assert_eq!(analysis.journey[0].duration_ms, Some(1000));
+    analysis.gap(4);
+    analysis.event(&json!({"type":3,"timestamp":4000,"data":{"source":1,"positions":[{"id":2,"x":10,"y":10,"timeOffset":0}]}}));
+    assert_eq!(
+        analysis.pages["https://example.test/second"]
+            .movement
+            .values()
+            .sum::<u32>(),
+        1
+    );
+}
+
+#[test]
 fn official_sdk_plain_and_zlib_recordings_preserve_privacy() {
     for bytes in [PLAIN, COMPRESSED] {
         let segment = decode(bytes);
@@ -157,4 +194,236 @@ fn frustration_matches_sentry_predicates_without_guessing() {
             ..Default::default()
         }
     );
+}
+
+#[tokio::test]
+async fn durable_http_segments_are_atomic_idempotent_order_independent_and_authorized()
+-> anyhow::Result<()> {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use tower::ServiceExt;
+    let dir = tempfile::tempdir()?;
+    let state = eventglass::app::AppState::open(eventglass::config::Config {
+        addr: "127.0.0.1:0".parse()?,
+        data_dir: dir.path().to_owned(),
+        base_url: "http://localhost:8080".parse()?,
+        s3_url: None,
+        s3_endpoint: None,
+        s3_initialize: false,
+    })
+    .await?;
+    let token = "a".repeat(64);
+    use sha2::Digest;
+    let hash = format!("{:x}", sha2::Sha256::digest(token.as_bytes()));
+    state.db.call(move |db| {
+        db.execute_batch("INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'replay','Replay',0,0); INSERT INTO project_keys(id,project_id,public_key,created_at_us) VALUES(1,1,'public',0); INSERT INTO users(id,email,password_hash,role,created_at_us,updated_at_us) VALUES(1,'fixture@example.invalid','unused','admin',0,0);")?;
+        eventglass::db::auth::create_session(db,1,"unused",&hash,eventglass::model::now_us()?,eventglass::model::now_us()?+1_000_000_000)?;
+        Ok(())
+    }).await?;
+    let router = eventglass::http::router(state.clone());
+    let replay_id = decode(PLAIN).metadata.replay_id;
+    let last = include_bytes!("fixtures/replay/plain-2.envelope").as_slice();
+    let middle = include_bytes!("fixtures/replay/plain-1.envelope").as_slice();
+    let get = |path: String| {
+        Request::get(path)
+            .header("cookie", format!("eventglass_session={token}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    for bytes in [last, PLAIN, last] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::post("/api/1/envelope/?sentry_key=public")
+                    .body(Body::from(bytes.to_vec()))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+    let path = format!("/api/replays/1/{replay_id}");
+    let response = router.clone().oneshot(get(path.clone())).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let detail: Value = serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await?)?;
+    assert_eq!(detail["replay"]["segment_count"], 2);
+    assert_eq!(detail["replay"]["partial"], true);
+    assert_eq!(
+        detail["replay"]["metadata"]["error_ids"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let response = router
+        .clone()
+        .oneshot(Request::get(&path).body(Body::empty())?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/1/envelope/?sentry_key=public")
+                .body(Body::from(middle.to_vec()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let response = router.clone().oneshot(get(path.clone())).await?;
+    let detail: Value = serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await?)?;
+    assert_eq!(detail["replay"]["segment_count"], 3);
+    assert_eq!(detail["replay"]["partial"], false);
+    assert_eq!(detail["replay"]["frustration"]["dead"], 1);
+    let response = router
+        .clone()
+        .oneshot(get(format!("{path}/analysis")))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let analysis: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await?)?;
+    assert_eq!(analysis["journey"].as_array().unwrap().len(), 2);
+    assert!(
+        analysis["pages"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|p| p["max_scroll_viewports"].as_f64() == Some(2.0))
+    );
+    assert!(
+        analysis["pages"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|p| !p["clicks"].as_object().unwrap().is_empty())
+    );
+    assert!(
+        analysis["pages"]
+            .as_object()
+            .unwrap()
+            .values()
+            .any(|p| !p["movement"].as_object().unwrap().is_empty())
+    );
+    let response = router
+        .clone()
+        .oneshot(get(format!("{path}/segments/0")))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let events: Value = serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await?)?;
+    assert!(
+        events["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["type"] == 2)
+    );
+    // A conflicting retry rolls back a normal Event in the SAME envelope.
+    let altered =
+        String::from_utf8(PLAIN.to_vec())?.replace("replay-fixture@1", "replay-fixture@2");
+    let mixed = format!("{altered}\n{{\"type\":\"event\"}}\n{{\"message\":\"must roll back\"}}");
+    let response = router
+        .clone()
+        .oneshot(Request::post("/api/1/envelope/?sentry_key=public").body(Body::from(mixed))?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    state
+        .db
+        .call(|db| {
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM inbox", [], |r| r.get::<_, i64>(0))?,
+                0
+            );
+            Ok(())
+        })
+        .await?;
+    let core = state.clone().start_core().await?;
+    let response = router
+        .clone()
+        .oneshot(
+            Request::post("/api/1/envelope/?sentry_key=public").body(Body::from(
+                include_bytes!("fixtures/replay/plain-error.envelope").to_vec(),
+            ))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        let response = router.clone().oneshot(get(path.clone())).await?;
+        let detail: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await?)?;
+        if detail["associations"]["errors"]
+            .as_array()
+            .is_some_and(|v| v.len() == 1)
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "SDK Error association did not index"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    // Official Feedback can arrive independently of a recording and is idempotent.
+    for _ in 0..2 {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::post("/api/1/envelope/?sentry_key=public").body(Body::from(
+                    include_bytes!("fixtures/replay/feedback.envelope").to_vec(),
+                ))?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+    }
+    let response = router
+        .clone()
+        .oneshot(get("/api/feedback?project_id=1".into()))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let feedback: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await?)?;
+    assert_eq!(feedback["items"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        feedback["items"][0]["contexts"]["feedback"]["message"],
+        "Replay fixture feedback"
+    );
+    core.alerts.as_ref().unwrap().shutdown().await?;
+    core.indexer.as_ref().unwrap().shutdown().await?;
+    // Public ingest key never grants access to recordings; disabled projects lose access.
+    state
+        .db
+        .call(|db| {
+            db.execute("UPDATE projects SET is_active=0 WHERE id=1", [])?;
+            Ok(())
+        })
+        .await?;
+    assert_eq!(
+        router.clone().oneshot(get(path)).await?.status(),
+        StatusCode::FORBIDDEN
+    );
+    let refs = state
+        .db
+        .call(|db| eventglass::db::replays::blob_references(db))
+        .await?;
+    assert_eq!(refs.len(), 3);
+    for reference in refs {
+        assert!(!eventglass::storage::replay::read(dir.path(), &reference)?.is_empty());
+    }
+    let root = dir.path().to_owned();
+    state
+        .db
+        .call(move |db| {
+            eventglass::db::replays::expire_at_startup(
+                db,
+                &root,
+                eventglass::model::now_us()? + eventglass::db::replays::RETENTION_US + 1,
+            )?;
+            assert_eq!(
+                db.query_row("SELECT count(*) FROM replay_segments", [], |r| r
+                    .get::<_, i64>(0))?,
+                0
+            );
+            assert_eq!(std::fs::read_dir(root.join("replay-blobs"))?.count(), 0);
+            Ok(())
+        })
+        .await?;
+    Ok(())
 }

@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chromium } from "playwright";
+import { checkReplayUi } from "./replay-ui.mjs";
 
 const binary = process.env.EVENTGLASS_E2E_BIN;
 if (!binary) throw new Error("EVENTGLASS_E2E_BIN is required");
@@ -179,6 +180,8 @@ try {
   await page.getByText("선택한 기록의 필드", { exact: true }).click();
   await page.getByRole("cell", { name: '$["extra"]["detail"]', exact: true }).waitFor();
   await page.getByRole("button", { name: "닫기" }).click();
+
+  await checkReplayUi(page,baseUrl,dsn);
 
   await page.getByRole("link", { name: "사용자", exact: true }).click();
   await page.getByLabel("이메일").fill(memberEmail);

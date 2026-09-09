@@ -199,10 +199,11 @@ async fn receive(
     };
     let acceptance_id = uuid::Uuid::new_v4();
     let received_at = crate::model::now_us()?;
-    let (normalized, permit, disk_reservation) =
+    let replay_root = app.config.data_dir.clone();
+    let (normalized, prepared_replay, permit, disk_reservation) =
         tokio::task::spawn_blocking(move || -> ApiResult<_> {
             let _held = &permit;
-            let result = if is_envelope {
+            let mut result = if is_envelope {
                 sentry::normalize_envelope(
                     &decoded,
                     &context,
@@ -220,7 +221,31 @@ async fn receive(
                 )
             }
             .map_err(wire_error)?;
-            Ok((result, permit, disk_reservation))
+            let prepared_replay = result
+                .replay
+                .take()
+                .map(|segment| -> ApiResult<_> {
+                    let events =
+                        sentry::replay::recording_events(&segment.recording).map_err(wire_error)?;
+                    let mut frustration = sentry::replay::Frustration::default();
+                    for event in &events {
+                        let f = sentry::replay::frustration(event);
+                        frustration.slow += f.slow;
+                        frustration.dead += f.dead;
+                        frustration.rage += f.rage;
+                        frustration.multi += f.multi;
+                    }
+                    drop(events);
+                    let blob = crate::storage::replay::write(&replay_root, &segment.recording)?;
+                    Ok(crate::db::replays::PreparedReplay {
+                        metadata: segment.metadata.clone(),
+                        blob,
+                        recording_bytes: segment.recording.len(),
+                        frustration,
+                    })
+                })
+                .transpose()?;
+            Ok((result, prepared_replay, permit, disk_reservation))
         })
         .await
         .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "ingest_worker_failed"))??;
@@ -234,12 +259,15 @@ async fn receive(
             // The worker owns this guard even when the HTTP request is cancelled.
             let _permit = permit;
             let _disk_reservation = disk_reservation;
-            ingest::accept(
+            ingest::accept_with_replay(
                 db,
                 project,
                 &acceptance_id.to_string(),
                 normalized.records,
                 &Limits::default(),
+                prepared_replay,
+                normalized.feedback,
+                received_at,
             )
         })
         .await

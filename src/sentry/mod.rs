@@ -53,6 +53,8 @@ pub struct EnvelopeAuth {
 #[derive(Debug, Clone)]
 pub struct NormalizedRequest {
     pub records: Vec<Record>,
+    pub replay: Option<replay::ReplaySegment>,
+    pub feedback: Vec<serde_json::Value>,
     pub unsupported_items: usize,
     pub envelope_auth: Option<EnvelopeAuth>,
 }
@@ -135,14 +137,35 @@ pub fn normalize_envelope(
     }
     let mut state =
         normalize::RequestNormalizer::new(project, acceptance_id, received_at_us, limits);
+    let replay = replay::decode_envelope(decoded, &project.scrub_keys)?;
+    let mut feedback = Vec::new();
     for item in parsed.items {
         match item.kind.as_str() {
             "event" => state.event(item.payload, item.ordinal, 0)?,
             "log" => state.logs(item.payload, item.ordinal)?,
+            "replay_event" | "replay_recording" => {}
+            "feedback" => {
+                let mut value = json::parse(item.payload)?;
+                replay::canonical_id(&value["event_id"])?;
+                if !value
+                    .pointer("/contexts/feedback/message")
+                    .is_some_and(serde_json::Value::is_string)
+                {
+                    return Err(SentryError::Malformed("invalid feedback"));
+                }
+                if let Some(id) = value.pointer("/contexts/feedback/replay_id") {
+                    replay::canonical_id(id)?;
+                }
+                scrub::scrub(&mut value, &project.scrub_keys);
+                feedback.push(value);
+            }
             _ => state.unsupported_item()?,
         }
     }
-    state.finish(envelope_auth)
+    let mut normalized = state.finish(envelope_auth)?;
+    normalized.replay = replay;
+    normalized.feedback = feedback;
+    Ok(normalized)
 }
 
 pub fn normalize_store(

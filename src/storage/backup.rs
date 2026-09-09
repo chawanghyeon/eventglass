@@ -35,6 +35,7 @@ pub struct BackupJob {
     snapshot: PinnedSnapshot,
     _disk: Arc<super::budget::Reservation>,
     _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
+    sequence: u64,
 }
 
 impl BackupCoordinator {
@@ -66,10 +67,20 @@ impl BackupCoordinator {
                 anyhow::bail!("backup coordinator is closed")
             }
         };
+        let sequence=self.inner.db.call(|db| {
+            let now=crate::model::now_us()?;
+            let tx=db.transaction()?;
+            tx.execute("INSERT INTO settings(key,value_json,updated_at_us) VALUES('replay.backup_attempt','true',?1) ON CONFLICT(key) DO UPDATE SET updated_at_us=excluded.updated_at_us",[now])?;
+            tx.execute("INSERT INTO settings(key,value_json,updated_at_us) VALUES('checkpoint.sequence',CAST(?1 AS TEXT),?1) ON CONFLICT(key) DO UPDATE SET value_json=CAST(max(CAST(value_json AS INTEGER)+1,?1) AS TEXT),updated_at_us=excluded.updated_at_us",[now])?;
+            let sequence:i64=tx.query_row("SELECT CAST(value_json AS INTEGER) FROM settings WHERE key='checkpoint.sequence'",[],|r|r.get(0))?;
+            tx.commit()?;
+            Ok(u64::try_from(sequence)?)
+        }).await?;
         let path = self.inner.data_dir.join("meta.db");
         let snapshot = tokio::task::spawn_blocking(move || PinnedSnapshot::open(&path)).await??;
         let reservation = self.inner.disk.reserve(snapshot.temporary_bytes()?)?;
         Ok(Some(BackupJob {
+            sequence,
             _disk: Arc::new(reservation),
             coordinator: self.clone(),
             snapshot,
@@ -110,7 +121,7 @@ impl BackupJob {
     async fn complete(self) -> Result<()> {
         let checkpoint_id = uuid::Uuid::new_v4().to_string();
         let created_at_us = crate::model::now_us()?;
-        let sequence = u64::try_from(self.snapshot.cut().boundary.inbox_id)?;
+        let sequence = self.sequence;
         ensure!(sequence > 0, "checkpoint boundary must be nonzero");
         let root = self
             .coordinator
@@ -205,12 +216,20 @@ impl BackupJob {
             },
             shards,
         };
+        let replay_files = document
+            .cut
+            .replay_blobs
+            .iter()
+            .map(|r| (r.key.clone(), self.coordinator.inner.data_dir.join(&r.key)))
+            .collect();
         let candidate = LocalCheckpoint {
+            replay_files,
             document: document.clone(),
             snapshot_path,
             shard_archives,
         };
         publish(self.coordinator.inner.store.as_ref(), &candidate).await?;
+        let replay_revision = document.cut.replay_revision;
         let checkpoint = document.checkpoint_id;
         let verified = document.shards;
         self.coordinator
@@ -235,6 +254,7 @@ impl BackupJob {
                         "checkpoint shard catalog changed before verification"
                     );
                 }
+                transaction.execute("INSERT INTO settings(key,value_json,updated_at_us) VALUES('replay.backup_revision',CAST(?1 AS TEXT),?2) ON CONFLICT(key) DO UPDATE SET value_json=CAST(max(CAST(value_json AS INTEGER),?1) AS TEXT),updated_at_us=excluded.updated_at_us",rusqlite::params![replay_revision,created_at_us])?;
                 transaction.commit()?;
                 Ok(())
             })
@@ -347,6 +367,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn replay_only_ingest_checkpoints_zero_index_boundary_and_doctor_checks_blobs()
+    -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let app = crate::app::AppState::open(crate::config::Config {
+            addr: "127.0.0.1:0".parse()?,
+            data_dir: root.path().to_owned(),
+            base_url: "http://localhost:8080".parse()?,
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        })
+        .await?;
+        let segment = crate::sentry::replay::decode_envelope(
+            include_bytes!("../../tests/fixtures/replay/plain-0.envelope"),
+            &[],
+        )?
+        .context("SDK recording")?;
+        let blob = super::super::replay::write(root.path(), &segment.recording)?;
+        let stored = blob.clone();
+        let installation = app.db.call(move |db| {
+            let tx = db.transaction()?;
+            tx.execute("INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'replay','Replay',0,0)", [])?;
+            crate::db::replays::accept(&tx, 1, &crate::db::replays::PreparedReplay {
+                metadata: segment.metadata, blob: stored, recording_bytes: segment.recording.len(), frustration: Default::default(),
+            }, crate::model::now_us()?)?;
+            tx.commit()?;
+            db.query_row("SELECT installation_id FROM runtime_state", [], |r| r.get::<_,String>(0)).map_err(Into::into)
+        }).await?;
+        let store = Arc::new(MemoryStore::default());
+        store.put(
+            "installation.json",
+            serde_json::to_vec(&super::super::remote::InstallationDocument {
+                format_version: 1,
+                installation_id: installation,
+                created_at_us: 1,
+            })?,
+            true,
+        )?;
+        let backup = BackupCoordinator::new(
+            app.db.clone(),
+            root.path(),
+            store.clone(),
+            app.disk_budget.clone(),
+        );
+        let indexer = crate::indexer::Indexer::start_with_backup(
+            app.db.clone(),
+            root.path(),
+            Some(backup.clone()),
+        )
+        .await?;
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if !app
+                    .db
+                    .call(|db| crate::db::replays::backup_pending(db))
+                    .await?
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            anyhow::Ok(())
+        })
+        .await??;
+        indexer.shutdown().await?;
+        backup.shutdown().await;
+        let latest: super::super::remote::LatestDocument =
+            serde_json::from_slice(&store.get_small("latest.json", 4096).await?)?;
+        let document: CheckpointDocument = serde_json::from_slice(
+            &store
+                .get_small(
+                    &format!("checkpoints/{}.json", latest.checkpoint_id),
+                    1024 * 1024,
+                )
+                .await?,
+        )?;
+        assert_eq!(document.cut.boundary, Boundary::default());
+        assert_eq!(document.cut.replay_blobs, vec![blob.clone()]);
+        assert!(document.cut.replay_revision > 0);
+        assert!(crate::operations::doctor(root.path())?.ok);
+        let path = root.path().join(&blob.key);
+        let original = std::fs::read(&path)?;
+        std::fs::write(&path, b"corrupt")?;
+        assert!(crate::operations::doctor(root.path()).is_err());
+        assert_eq!(std::fs::read(path)?, b"corrupt", "doctor is read-only");
+        assert!(!original.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn sealed_cut_publishes_once_and_marks_only_checkpointed_shards() -> Result<()> {
         let root = tempfile::tempdir()?;
         let data = root.path();
@@ -398,6 +508,20 @@ mod tests {
             Ok(())
         })
         .await?;
+        let replay = crate::sentry::replay::decode_envelope(
+            include_bytes!("../../tests/fixtures/replay/plain-0.envelope"),
+            &[],
+        )?
+        .context("Replay fixture")?;
+        let replay_raw = replay.recording.clone();
+        let replay_blob = super::super::replay::write(data, &replay.recording)?;
+        let blob_for_db = replay_blob.clone();
+        db.call(move |db| {
+            let tx=db.transaction()?;
+            tx.execute("INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'replay','Replay',0,0)",[])?;
+            crate::db::replays::accept(&tx,1,&crate::db::replays::PreparedReplay{metadata:replay.metadata,blob:blob_for_db,recording_bytes:replay.recording.len(),frustration:Default::default()},crate::model::now_us()?)?;
+            tx.commit()?;Ok(())
+        }).await?;
         let store = Arc::new(MemoryStore::default());
         store.put(
             "installation.json",
@@ -516,6 +640,26 @@ mod tests {
             "remote_verified"
         );
         assert!(restored.directory.join("shards").join(shard_id).is_dir());
+        let replay_refs = crate::db::replays::blob_references(&restored_db)?;
+        assert_eq!(replay_refs, vec![replay_blob.clone()]);
+        assert_eq!(
+            super::super::replay::read(&restored.directory, &replay_blob)?,
+            replay_raw
+        );
+        // A SQLite snapshot without its referenced recording is not a valid checkpoint.
+        store.0.lock().unwrap().remove(&replay_blob.key);
+        assert!(
+            super::super::remote::prepare_restore(
+                store.as_ref(),
+                &installation,
+                &data.join("missing-replay-restore"),
+                Default::default(),
+                || false
+            )
+            .await
+            .is_err()
+        );
+
         Ok(())
     }
 }

@@ -94,6 +94,7 @@ pub struct LocalCheckpoint {
     pub document: CheckpointDocument,
     pub snapshot_path: PathBuf,
     pub shard_archives: Vec<(String, PathBuf)>,
+    pub replay_files: Vec<(String, PathBuf)>,
 }
 
 pub async fn ensure_installation(
@@ -156,6 +157,11 @@ pub async fn publish(
     store: &dyn ObjectStore,
     candidate: &LocalCheckpoint,
 ) -> Result<LatestDocument> {
+    let checkpoint_bytes = serde_json::to_vec(&candidate.document)?;
+    ensure!(
+        checkpoint_bytes.len() as u64 <= MAX_CONTROL_BYTES,
+        "checkpoint exceeds control document limit"
+    );
     validate_checkpoint(&candidate.document)?;
     let installation: InstallationDocument = serde_json::from_slice(
         &store
@@ -166,6 +172,23 @@ pub async fn publish(
     ensure!(
         installation.installation_id == candidate.document.cut.installation_id,
         "checkpoint publication namespace differs from local installation"
+    );
+    let replay_paths: BTreeMap<_, _> = candidate
+        .replay_files
+        .iter()
+        .map(|(key, path)| (key.as_str(), path))
+        .collect();
+    let replay_keys: BTreeSet<_> = replay_paths.keys().copied().collect();
+    let expected_keys: BTreeSet<_> = candidate
+        .document
+        .cut
+        .replay_blobs
+        .iter()
+        .map(|r| r.key.as_str())
+        .collect();
+    ensure!(
+        replay_keys.len() == candidate.replay_files.len() && replay_keys == expected_keys,
+        "checkpoint replay file set mismatch"
     );
     let archive_ids = candidate
         .shard_archives
@@ -183,11 +206,68 @@ pub async fn publish(
         "checkpoint archive set mismatch"
     );
 
-    let existing = if archive_ids.len() < document_ids.len() {
+    let existing = if archive_ids.len() < document_ids.len()
+        || !candidate.document.cut.replay_blobs.is_empty()
+    {
         list_all(store).await?
     } else {
         Vec::new()
     };
+    let existing_sizes: BTreeMap<_, _> = existing
+        .iter()
+        .map(|object| (&object.key, object.size))
+        .collect();
+    let mut previous_replays = BTreeMap::new();
+    if !candidate.document.cut.replay_blobs.is_empty()
+        && existing_sizes.contains_key(&"latest.json".to_owned())
+    {
+        // latest remains an optimization. A broken pointer cannot prevent a new
+        // complete checkpoint from being uploaded from verified local files.
+        let previous: Result<CheckpointDocument> = async {
+            let latest: LatestDocument =
+                serde_json::from_slice(&store.get_small("latest.json", MAX_CONTROL_BYTES).await?)?;
+            let bytes = store
+                .get_small(&checkpoint_key(&latest.checkpoint_id), MAX_CONTROL_BYTES)
+                .await?;
+            ensure!(
+                sha256(&bytes) == latest.checkpoint_sha256,
+                "previous checkpoint checksum mismatch"
+            );
+            let previous: CheckpointDocument = serde_json::from_slice(&bytes)?;
+            validate_checkpoint(&previous)?;
+            ensure!(
+                previous.cut.installation_id == candidate.document.cut.installation_id,
+                "previous Replay namespace mismatch"
+            );
+            Ok(previous)
+        }
+        .await;
+        if let Ok(previous) = previous {
+            previous_replays = previous
+                .cut
+                .replay_blobs
+                .into_iter()
+                .map(|r| (r.key.clone(), r))
+                .collect();
+        }
+    }
+    for reference in &candidate.document.cut.replay_blobs {
+        let path = replay_paths
+            .get(reference.key.as_str())
+            .context("missing replay file")?;
+        ensure!(
+            tokio::fs::metadata(path).await?.len() == reference.size,
+            "checkpoint replay size changed"
+        );
+        // Reuse only immutable objects already covered by a completed checkpoint.
+        if previous_replays.get(&reference.key) != Some(reference)
+            || existing_sizes.get(&reference.key) != Some(&reference.size)
+        {
+            store
+                .put_file(&reference.key, path, &reference.sha256)
+                .await?;
+        }
+    }
     for shard in &candidate.document.shards {
         let path = candidate
             .shard_archives
@@ -234,7 +314,6 @@ pub async fn publish(
         )
         .await?;
 
-    let checkpoint_bytes = serde_json::to_vec(&candidate.document)?;
     let checkpoint_key = checkpoint_key(&candidate.document.checkpoint_id);
     if let Err(error) = store
         .put_if_absent(&checkpoint_key, checkpoint_bytes.clone())
@@ -412,18 +491,30 @@ async fn restore_candidate(
         document.snapshot.size <= limits.snapshot_bytes,
         "checkpoint snapshot exceeds restore limit"
     );
-    let total =
+    let replay_size = document
+        .cut
+        .replay_blobs
+        .iter()
+        .try_fold(0u64, |total, reference| {
+            total
+                .checked_add(reference.size)
+                .context("replay restore size overflow")
+        })?;
+    let total = document.shards.iter().try_fold(
         document
-            .shards
-            .iter()
-            .try_fold(document.snapshot.size, |sum, shard| -> Result<u64> {
-                ensure!(
-                    shard.object.size <= limits.shard_archive_bytes,
-                    "shard archive exceeds restore limit"
-                );
-                sum.checked_add(shard.object.size)
-                    .context("restore download size overflow")
-            })?;
+            .snapshot
+            .size
+            .checked_add(replay_size)
+            .context("restore size overflow")?,
+        |sum, shard| -> Result<u64> {
+            ensure!(
+                shard.object.size <= limits.shard_archive_bytes,
+                "shard archive exceeds restore limit"
+            );
+            sum.checked_add(shard.object.size)
+                .context("restore download size overflow")
+        },
+    )?;
     ensure!(
         total <= limits.total_download_bytes,
         "checkpoint exceeds total restore limit"
@@ -437,6 +528,17 @@ async fn restore_candidate(
     let cut = document.cut.clone();
     tokio::task::spawn_blocking(move || validate_snapshot(&snapshot_path, &cut)).await??;
 
+    let replay_root = attempt.join("replay-blobs");
+    std::fs::create_dir(&replay_root)?;
+    for reference in &document.cut.replay_blobs {
+        ensure!(!cancelled(), "checkpoint restore cancelled");
+        let destination = attempt.join(&reference.key);
+        let downloaded = store
+            .download(&reference.key, &destination, reference.size)
+            .await?;
+        verify_download(&destination, reference, &downloaded).await?;
+    }
+    File::open(&replay_root)?.sync_all()?;
     let shard_root = attempt.join("shards");
     std::fs::create_dir(&shard_root)?;
     for shard in &document.shards {
@@ -486,14 +588,16 @@ pub fn install_prepared(data_dir: &Path, prepared: PreparedRestore) -> Result<()
         "a local database already exists"
     );
     ensure!(
-        prepared.directory.join("meta.db").is_file() && prepared.directory.join("shards").is_dir(),
+        prepared.directory.join("meta.db").is_file()
+            && prepared.directory.join("shards").is_dir()
+            && prepared.directory.join("replay-blobs").is_dir(),
         "restore staging layout is incomplete"
     );
     let quarantine = data_dir
         .join("quarantine")
         .join(format!("restore-{}", uuid::Uuid::new_v4()));
     let mut quarantined = false;
-    for name in ["meta.db-wal", "meta.db-shm", "shards"] {
+    for name in ["meta.db-wal", "meta.db-shm", "shards", "replay-blobs"] {
         let source = data_dir.join(name);
         if source.exists() {
             if !quarantined {
@@ -507,6 +611,10 @@ pub fn install_prepared(data_dir: &Path, prepared: PreparedRestore) -> Result<()
         File::open(quarantine.parent().context("restore quarantine parent")?)?.sync_all()?;
     }
     std::fs::rename(prepared.directory.join("shards"), data_dir.join("shards"))?;
+    std::fs::rename(
+        prepared.directory.join("replay-blobs"),
+        data_dir.join("replay-blobs"),
+    )?;
     File::open(data_dir)?.sync_all()?;
     std::fs::rename(prepared.directory.join("meta.db"), data_dir.join("meta.db"))?;
     File::open(data_dir)?.sync_all()?;
@@ -590,6 +698,14 @@ fn validate_snapshot(path: &Path, cut: &CheckpointCut) -> Result<()> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     ensure!(actual == cut.shards, "restored SQLite catalog mismatch");
+    ensure!(
+        crate::db::replays::revision(&connection)? == cut.replay_revision,
+        "restored replay revision mismatch"
+    );
+    ensure!(
+        crate::db::replays::blob_references(&connection)? == cut.replay_blobs,
+        "restored Replay catalog mismatch"
+    );
     Ok(())
 }
 
@@ -698,6 +814,16 @@ pub fn validate_checkpoint(document: &CheckpointDocument) -> Result<()> {
         "invalid checkpoint snapshot key"
     );
     validate_object(&document.snapshot)?;
+    let mut replay_keys = BTreeSet::new();
+    for reference in &document.cut.replay_blobs {
+        validate_object(reference)?;
+        ensure!(
+            reference.key == super::replay::key(&reference.sha256)?
+                && reference.size <= (crate::sentry::replay::MAX_RECORDING_BYTES + 65536) as u64
+                && replay_keys.insert(&reference.key),
+            "invalid checkpoint Replay reference"
+        );
+    }
     let cut_ids = document
         .cut
         .shards
@@ -902,12 +1028,15 @@ mod tests {
         std::fs::write(&snapshot_path, b"sqlite snapshot")?;
         std::fs::write(&archive_path, b"sealed shard")?;
         Ok(LocalCheckpoint {
+            replay_files: Vec::new(),
             document: CheckpointDocument {
                 format_version: 1,
                 checkpoint_id: checkpoint_id.clone(),
                 sequence: 7,
                 created_at_us: 2,
                 cut: CheckpointCut {
+                    replay_blobs: Vec::new(),
+                    replay_revision: 0,
                     format_version: 1,
                     installation_id: installation_id.to_owned(),
                     storage_generation: uuid::Uuid::new_v4().to_string(),
@@ -1025,6 +1154,7 @@ mod tests {
             || false,
         )?;
         Ok(LocalCheckpoint {
+            replay_files: Vec::new(),
             document: CheckpointDocument {
                 format_version: 1,
                 checkpoint_id: checkpoint_id.clone(),
@@ -1070,7 +1200,7 @@ mod tests {
     async fn checkpoint_is_published_only_after_every_data_object() -> Result<()> {
         let root = tempfile::tempdir()?;
         let installation_id = uuid::Uuid::new_v4().to_string();
-        let candidate = candidate(root.path(), &installation_id)?;
+        let mut candidate = candidate(root.path(), &installation_id)?;
         let store = MemoryStore::default();
         ensure_installation(&store, &installation(&installation_id), true).await?;
         let latest = publish(&store, &candidate).await?;
@@ -1101,6 +1231,24 @@ mod tests {
         assert!(publish(&failed, &candidate).await.is_err());
         assert!(!failed.keys().contains(&checkpoint));
         assert!(!failed.keys().contains(&"latest.json".to_owned()));
+        let writes_before = store.writes();
+        candidate.document.cut.replay_blobs = (0..25_000)
+            .map(|n| {
+                let hash = format!("{n:064x}");
+                ObjectReference {
+                    key: format!("replay-blobs/{hash}.zlib"),
+                    size: 1,
+                    sha256: hash,
+                }
+            })
+            .collect();
+        let error = publish(&store, &candidate).await.unwrap_err();
+        assert!(error.to_string().contains("control document limit"));
+        assert_eq!(
+            store.writes(),
+            writes_before,
+            "oversized checkpoint cannot publish a false recovery point"
+        );
         Ok(())
     }
 

@@ -101,6 +101,8 @@ impl<'a> RequestNormalizer<'a> {
     ) -> Result<NormalizedRequest, SentryError> {
         Ok(NormalizedRequest {
             records: self.records,
+            replay: None,
+            feedback: Vec::new(),
             unsupported_items: self.unsupported_items,
             envelope_auth,
         })

@@ -32,6 +32,8 @@ pub struct InboxChunk {
 #[derive(Debug, Serialize)]
 pub struct Acceptance {
     pub accepted: usize,
+    pub accepted_replay_segments: usize,
+    pub accepted_feedback: usize,
     pub first_ingest_seq: Option<String>,
     pub last_ingest_seq: Option<String>,
 }
@@ -83,6 +85,29 @@ pub fn accept(
     acceptance_id: &str,
     records: Vec<Record>,
     limits: &Limits,
+) -> Result<Acceptance> {
+    accept_with_replay(
+        db,
+        project,
+        acceptance_id,
+        records,
+        limits,
+        None,
+        Vec::new(),
+        crate::model::now_us()?,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn accept_with_replay(
+    db: &mut Connection,
+    project: IngestProject,
+    acceptance_id: &str,
+    records: Vec<Record>,
+    limits: &Limits,
+    replay: Option<super::replays::PreparedReplay>,
+    feedback: Vec<serde_json::Value>,
+    received_at_us: i64,
 ) -> Result<Acceptance> {
     if records.len() > limits.request_records {
         return Err(IngestError::TooLarge.into());
@@ -161,9 +186,31 @@ pub fn accept(
         "UPDATE runtime_state SET next_ingest_seq=?1,inbox_bytes=inbox_bytes+?2,inbox_records=inbox_records+?3 WHERE singleton=1",
         params![next,total_bytes as i64,accepted as i64],
     )?;
+    if let Some(prepared) = &replay {
+        super::replays::accept(&tx, project.id, prepared, received_at_us)?;
+    }
+    for item in &feedback {
+        let id = crate::sentry::replay::canonical_id(&item["event_id"])?;
+        let replay_id = item
+            .pointer("/contexts/feedback/replay_id")
+            .map(crate::sentry::replay::canonical_id)
+            .transpose()?;
+        let timestamp_ms = item["timestamp"]
+            .as_f64()
+            .filter(|t| t.is_finite() && *t >= 0.0 && *t < 253402300799.0)
+            .map(|t| (t * 1000.0) as i64)
+            .unwrap_or(received_at_us / 1000);
+        let payload = serde_json::to_string(item)?;
+        if payload.len() > limits.record_bytes {
+            return Err(IngestError::TooLarge.into());
+        }
+        if tx.execute("INSERT INTO feedback(project_id,event_id,replay_id,timestamp_ms,expires_at_us,payload) VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(project_id,event_id) DO NOTHING",params![project.id,id,replay_id,timestamp_ms,received_at_us.checked_add(super::replays::RETENTION_US).ok_or(IngestError::TooLarge)?,payload])?>0 {super::replays::mark_dirty(&tx,received_at_us)?;}
+    }
     tx.commit()?;
     Ok(Acceptance {
         accepted,
+        accepted_replay_segments: usize::from(replay.is_some()),
+        accepted_feedback: feedback.len(),
         first_ingest_seq: (accepted > 0).then(|| first.to_string()),
         last_ingest_seq: (accepted > 0).then(|| (next - 1).to_string()),
     })

@@ -90,6 +90,30 @@ pub fn rotation_plan(
     measured_size: Option<u64>,
     now_us: i64,
 ) -> Result<Option<crate::storage::manifest::ShardStats>> {
+    rotation_plan_inner(db, active_id, measured_size, now_us, false)
+}
+
+pub fn replay_backup_rotation(
+    db: &Connection,
+    active_id: &str,
+    now_us: i64,
+) -> Result<Option<crate::storage::manifest::ShardStats>> {
+    rotation_plan_inner(
+        db,
+        active_id,
+        None,
+        now_us,
+        crate::db::replays::backup_due(db, now_us)?,
+    )
+}
+
+fn rotation_plan_inner(
+    db: &Connection,
+    active_id: &str,
+    measured_size: Option<u64>,
+    now_us: i64,
+    force: bool,
+) -> Result<Option<crate::storage::manifest::ShardStats>> {
     let measured_size = measured_size.map(i64::try_from).transpose()?;
     if let Some(size) = measured_size {
         ensure!(
@@ -145,7 +169,7 @@ pub fn rotation_plan(
         .and_then(|first| first.checked_add(ROLLOVER_AGE_US))
         .is_some_and(|deadline| now_us >= deadline);
     let size_due = u64::try_from(catalog_size).is_ok_and(|size| size >= ROLLOVER_BYTES);
-    if row.record_count == 0 || !(age_due || size_due) {
+    if !force && (row.record_count == 0 || !(age_due || size_due)) {
         return Ok(None);
     }
     Ok(Some(crate::storage::manifest::ShardStats {

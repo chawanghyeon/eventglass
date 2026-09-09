@@ -120,7 +120,7 @@ pub fn status(
         "disabled"
     } else if checkpoint.is_none() {
         "no_checkpoint"
-    } else if recoverable == Some(runtime.3) {
+    } else if recoverable == Some(runtime.3) && !crate::db::replays::backup_pending(db)? {
         "current"
     } else {
         "lagging"
@@ -248,6 +248,11 @@ pub fn doctor_connection(db: &Connection, data_dir: &Path) -> Result<DoctorRepor
                 .map_err(|_| anyhow::anyhow!("non-UTF-8 shard entry"))?;
             ensure!(catalog_ids.contains(&id), "unregistered shard entry");
         }
+    }
+    // Verify each immutable recording sequentially, without retaining decoded sessions.
+    for reference in crate::db::replays::blob_references(db)? {
+        crate::storage::replay::read(data_dir, &reference)
+            .with_context(|| format!("invalid Replay blob {}", reference.key))?;
     }
     Ok(DoctorReport {
         ok: true,

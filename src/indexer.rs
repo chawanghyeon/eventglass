@@ -501,8 +501,15 @@ async fn run(
         }
         let now = crate::model::now_us()?;
         let active_id = shard_id.clone();
+        let replay_backup = backup.is_some();
         if let Some(plan) = db
-            .call(move |db| shards::rotation_plan(db, &active_id, None, now))
+            .call(move |db| {
+                if replay_backup {
+                    shards::replay_backup_rotation(db, &active_id, now)
+                } else {
+                    shards::rotation_plan(db, &active_id, None, now)
+                }
+            })
             .await?
         {
             let rotated = rotate(

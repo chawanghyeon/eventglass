@@ -457,6 +457,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/replays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listReplays"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listFeedback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/replay-pages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getReplayMaps"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/replays/{project}/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getReplay"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/replays/{project}/{id}/analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["analyzeReplay"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/replays/{project}/{id}/segments/{segment}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getReplayRecording"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -880,6 +976,128 @@ export interface components {
             took_ms: components["schemas"]["NonNegativeDecimalString"];
             searched_shards: components["schemas"]["NonNegativeDecimalString"];
             hydrated_shards: components["schemas"]["NonNegativeDecimalString"];
+        };
+        FeedbackPage: {
+            items: {
+                [key: string]: unknown;
+            }[];
+        };
+        ReplayMetadata: {
+            replay_id: string;
+            segment_id: number;
+            started_at_ms: number;
+            finished_at_ms: number;
+            user: {
+                [key: string]: unknown;
+            } | null;
+            environment: string | null;
+            release: string | null;
+            browser: {
+                [key: string]: unknown;
+            } | null;
+            os: {
+                [key: string]: unknown;
+            } | null;
+            device: {
+                [key: string]: unknown;
+            } | null;
+            urls: string[];
+            error_ids: string[];
+            trace_ids: string[];
+            sdk_version: string | null;
+            replay_type: string | null;
+        };
+        ReplayFrustration: {
+            slow: number;
+            dead: number;
+            rage: number;
+            multi: number;
+        };
+        ReplaySummary: {
+            project_id: string;
+            metadata: components["schemas"]["ReplayMetadata"];
+            segment_count: number;
+            max_segment_id: number;
+            recording_bytes: number;
+            partial: boolean;
+            frustration: components["schemas"]["ReplayFrustration"];
+        };
+        ReplayCursor: {
+            before_started_ms: number;
+            before_id: string;
+        };
+        ReplayPage: {
+            items: components["schemas"]["ReplaySummary"][];
+            next_cursor: components["schemas"]["ReplayCursor"] | null;
+        };
+        ReplayDetail: {
+            replay: components["schemas"]["ReplaySummary"];
+            segments: {
+                segment_id: number;
+                compressed_bytes: number;
+            }[];
+            associations: {
+                errors: {
+                    event_id: string;
+                    record_id: string;
+                    issue_id: string;
+                }[];
+                feedback: {
+                    [key: string]: unknown;
+                }[];
+            };
+        };
+        ReplayRecording: {
+            events: {
+                [key: string]: unknown;
+            }[];
+        };
+        ReplayMaps: {
+            pages: {
+                [key: string]: components["schemas"]["ReplayPageActivity"];
+            };
+            replays_analyzed: number;
+            truncated: boolean;
+        };
+        ReplayTimelineEvent: {
+            timestamp_ms: number;
+            kind: string;
+            label: string;
+            url: string | null;
+            duration_ms: number | null;
+            event_id: string | null;
+            trace_id: string | null;
+            span_id: string | null;
+        };
+        ReplayVisit: {
+            url: string;
+            started_at_ms: number;
+            duration_ms: number | null;
+        };
+        ReplayPageActivity: {
+            clicks: {
+                [key: string]: number;
+            };
+            movement: {
+                [key: string]: number;
+            };
+            elements: {
+                [key: string]: number;
+            };
+            max_scroll_viewports: number;
+            scroll_samples: number;
+            scroll_reach_replays: {
+                [key: string]: number;
+            };
+        };
+        ReplayAnalysis: {
+            timeline: components["schemas"]["ReplayTimelineEvent"][];
+            journey: components["schemas"]["ReplayVisit"][];
+            pages: {
+                [key: string]: components["schemas"]["ReplayPageActivity"];
+            };
+            truncated: boolean;
+            gaps: number[];
         };
     };
     responses: {
@@ -1802,6 +2020,200 @@ export interface operations {
             429: components["responses"]["Error"];
             503: components["responses"]["Error"];
             504: components["responses"]["Error"];
+        };
+    };
+    listReplays: {
+        parameters: {
+            query: {
+                project_id: number;
+                environment?: string;
+                release?: string;
+                url?: string;
+                user?: string;
+                has_error?: boolean;
+                rage_click?: boolean;
+                dead_click?: boolean;
+                min_duration_ms?: number;
+                max_duration_ms?: number;
+                before_started_ms?: number;
+                before_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ReplayPage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplayPage"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    listFeedback: {
+        parameters: {
+            query: {
+                project_id: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description FeedbackPage */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackPage"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getReplayMaps: {
+        parameters: {
+            query: {
+                project_id: number;
+                environment?: string;
+                release?: string;
+                url?: string;
+                user?: string;
+                has_error?: boolean;
+                rage_click?: boolean;
+                dead_click?: boolean;
+                min_duration_ms?: number;
+                max_duration_ms?: number;
+                before_started_ms?: number;
+                before_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ReplayMaps */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplayMaps"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getReplay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project: number;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ReplayDetail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplayDetail"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    analyzeReplay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project: number;
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ReplayAnalysis */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplayAnalysis"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getReplayRecording: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                project: number;
+                id: string;
+                segment: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description ReplayRecording */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplayRecording"];
+                };
+            };
+            400: components["responses"]["Error"];
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+            429: components["responses"]["Error"];
+            503: components["responses"]["Error"];
         };
     };
 }

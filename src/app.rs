@@ -72,6 +72,11 @@ impl AppState {
             tx.commit()?;
             Ok(())
         }).await?;
+        let replay_root = config.data_dir.clone();
+        db.call(move |connection| {
+            crate::db::replays::expire_at_startup(connection, &replay_root, crate::model::now_us()?)
+        })
+        .await?;
         let token_key = db.call(crate::db::search::token_key).await?;
         let disk_budget = crate::storage::budget::DiskBudget::new(&config.data_dir);
         Ok(Self {

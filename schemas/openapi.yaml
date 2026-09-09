@@ -979,6 +979,304 @@ paths:
           $ref: "#/components/responses/Error"
         "504":
           $ref: "#/components/responses/Error"
+  /api/replays:
+    get:
+      operationId: listReplays
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: integer
+      - name: environment
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: release
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: url
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: user
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: has_error
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: rage_click
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: dead_click
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: min_duration_ms
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: max_duration_ms
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: before_started_ms
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: before_id
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: ReplayPage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayPage'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/feedback:
+    get:
+      operationId: listFeedback
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: FeedbackPage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FeedbackPage'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/replay-pages:
+    get:
+      operationId: getReplayMaps
+      parameters:
+      - name: project_id
+        in: query
+        required: true
+        schema:
+          type: integer
+      - name: environment
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: release
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: url
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: user
+        in: query
+        required: false
+        schema:
+          type: string
+      - name: has_error
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: rage_click
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: dead_click
+        in: query
+        required: false
+        schema:
+          type: boolean
+      - name: min_duration_ms
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: max_duration_ms
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: before_started_ms
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: before_id
+        in: query
+        required: false
+        schema:
+          type: string
+      responses:
+        '200':
+          description: ReplayMaps
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayMaps'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/replays/{project}/{id}:
+    get:
+      operationId: getReplay
+      parameters:
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: ReplayDetail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayDetail'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/replays/{project}/{id}/analysis:
+    get:
+      operationId: analyzeReplay
+      parameters:
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      responses:
+        '200':
+          description: ReplayAnalysis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayAnalysis'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /api/replays/{project}/{id}/segments/{segment}:
+    get:
+      operationId: getReplayRecording
+      parameters:
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: segment
+        in: path
+        required: true
+        schema:
+          type: integer
+      responses:
+        '200':
+          description: ReplayRecording
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayRecording'
+        '400':
+          $ref: '#/components/responses/Error'
+        '401':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '404':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     cookieAuth:
@@ -2205,3 +2503,351 @@ components:
           $ref: "#/components/schemas/NonNegativeDecimalString"
         hydrated_shards:
           $ref: "#/components/schemas/NonNegativeDecimalString"
+    FeedbackPage:
+      type: object
+      required:
+      - items
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      additionalProperties: false
+    ReplayMetadata:
+      type: object
+      required:
+      - replay_id
+      - segment_id
+      - started_at_ms
+      - finished_at_ms
+      - user
+      - environment
+      - release
+      - browser
+      - os
+      - device
+      - urls
+      - error_ids
+      - trace_ids
+      - sdk_version
+      - replay_type
+      properties:
+        replay_id:
+          type: string
+        segment_id:
+          type: integer
+        started_at_ms:
+          type: integer
+        finished_at_ms:
+          type: integer
+        user:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        environment:
+          type:
+          - string
+          - 'null'
+        release:
+          type:
+          - string
+          - 'null'
+        browser:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        os:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        device:
+          type:
+          - object
+          - 'null'
+          additionalProperties: true
+        urls:
+          type: array
+          items:
+            type: string
+        error_ids:
+          type: array
+          items:
+            type: string
+        trace_ids:
+          type: array
+          items:
+            type: string
+        sdk_version:
+          type:
+          - string
+          - 'null'
+        replay_type:
+          type:
+          - string
+          - 'null'
+      additionalProperties: false
+    ReplayFrustration:
+      type: object
+      required:
+      - slow
+      - dead
+      - rage
+      - multi
+      properties:
+        slow:
+          type: integer
+        dead:
+          type: integer
+        rage:
+          type: integer
+        multi:
+          type: integer
+      additionalProperties: false
+    ReplaySummary:
+      type: object
+      required:
+      - project_id
+      - metadata
+      - segment_count
+      - max_segment_id
+      - recording_bytes
+      - partial
+      - frustration
+      properties:
+        project_id:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/ReplayMetadata'
+        segment_count:
+          type: integer
+        max_segment_id:
+          type: integer
+        recording_bytes:
+          type: integer
+        partial:
+          type: boolean
+        frustration:
+          $ref: '#/components/schemas/ReplayFrustration'
+      additionalProperties: false
+    ReplayCursor:
+      type: object
+      required:
+      - before_started_ms
+      - before_id
+      properties:
+        before_started_ms:
+          type: integer
+        before_id:
+          type: string
+      additionalProperties: false
+    ReplayPage:
+      type: object
+      required:
+      - items
+      - next_cursor
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReplaySummary'
+        next_cursor:
+          oneOf:
+          - $ref: '#/components/schemas/ReplayCursor'
+          - type: 'null'
+      additionalProperties: false
+    ReplayDetail:
+      type: object
+      required:
+      - replay
+      - segments
+      - associations
+      properties:
+        replay:
+          $ref: '#/components/schemas/ReplaySummary'
+        segments:
+          type: array
+          items:
+            type: object
+            required:
+            - segment_id
+            - compressed_bytes
+            properties:
+              segment_id:
+                type: integer
+              compressed_bytes:
+                type: integer
+            additionalProperties: false
+        associations:
+          type: object
+          required:
+          - errors
+          - feedback
+          properties:
+            errors:
+              type: array
+              items:
+                type: object
+                required:
+                - event_id
+                - record_id
+                - issue_id
+                properties:
+                  event_id:
+                    type: string
+                  record_id:
+                    type: string
+                  issue_id:
+                    type: string
+                additionalProperties: false
+            feedback:
+              type: array
+              items:
+                type: object
+                additionalProperties: true
+          additionalProperties: false
+      additionalProperties: false
+    ReplayRecording:
+      type: object
+      required:
+      - events
+      properties:
+        events:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      additionalProperties: false
+    ReplayMaps:
+      type: object
+      required:
+      - pages
+      - replays_analyzed
+      - truncated
+      properties:
+        pages:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ReplayPageActivity'
+        replays_analyzed:
+          type: integer
+        truncated:
+          type: boolean
+      additionalProperties: false
+    ReplayTimelineEvent:
+      type: object
+      required:
+      - timestamp_ms
+      - kind
+      - label
+      - url
+      - duration_ms
+      - event_id
+      - trace_id
+      - span_id
+      properties:
+        timestamp_ms:
+          type: integer
+        kind:
+          type: string
+        label:
+          type: string
+        url:
+          type:
+          - string
+          - 'null'
+        duration_ms:
+          type:
+          - number
+          - 'null'
+        event_id:
+          type:
+          - string
+          - 'null'
+        trace_id:
+          type:
+          - string
+          - 'null'
+        span_id:
+          type:
+          - string
+          - 'null'
+      additionalProperties: false
+    ReplayVisit:
+      type: object
+      required:
+      - url
+      - started_at_ms
+      - duration_ms
+      properties:
+        url:
+          type: string
+        started_at_ms:
+          type: integer
+        duration_ms:
+          type:
+          - integer
+          - 'null'
+      additionalProperties: false
+    ReplayPageActivity:
+      type: object
+      required:
+      - clicks
+      - movement
+      - elements
+      - max_scroll_viewports
+      - scroll_samples
+      - scroll_reach_replays
+      properties:
+        clicks:
+          type: object
+          additionalProperties:
+            type: integer
+        movement:
+          type: object
+          additionalProperties:
+            type: integer
+        elements:
+          type: object
+          additionalProperties:
+            type: integer
+        max_scroll_viewports:
+          type: number
+        scroll_samples:
+          type: integer
+        scroll_reach_replays:
+          type: object
+          additionalProperties:
+            type: integer
+      additionalProperties: false
+    ReplayAnalysis:
+      type: object
+      required:
+      - timeline
+      - journey
+      - pages
+      - truncated
+      - gaps
+      properties:
+        timeline:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReplayTimelineEvent'
+        journey:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReplayVisit'
+        pages:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ReplayPageActivity'
+        truncated:
+          type: boolean
+        gaps:
+          type: array
+          items:
+            type: integer
+      additionalProperties: false

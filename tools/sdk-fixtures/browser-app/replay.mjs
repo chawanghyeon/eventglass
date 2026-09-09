@@ -28,6 +28,7 @@ const server = createServer(async (req, res) => {
    const name=`${mode}-${captured.filter(x=>x.mode===mode).length}.envelope`;
    await writeFile(new URL(name,output),bytes); captured.push({mode,name,bytes:bytes.length});
   } else if (bytes.includes(Buffer.from('"type":"feedback"'))) await writeFile(new URL('feedback.envelope',output),bytes);
+  else if (bytes.includes(Buffer.from('\n{"type":"event"}'))) await writeFile(new URL(`${mode}-error.envelope`,output),bytes);
   res.writeHead(200,{'Content-Type':'application/json'}); res.end('{}'); return;
  }
  if (req.url==='/app.js') {res.setHeader('Content-Type','text/javascript');res.end(bundle.outputFiles[0].contents);return;}
@@ -43,7 +44,7 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}/?compressed=${compressed}`);
   await page.waitForFunction(()=>window.fixture);
   await page.mouse.move(100,100);await page.mouse.move(500,250,{steps:12});
-  await page.locator('#dead').click({clickCount:4,delay:80});
+  await page.locator('#dead').click({clickCount:5,delay:80});
   await page.waitForTimeout(8200);
   await page.evaluate(()=>window.fixture.flush());
   await page.locator('#save').click();

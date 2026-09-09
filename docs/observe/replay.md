@@ -47,3 +47,47 @@ Frustration 기준은 [Sentry replay type predicates](https://github.com/getsent
 recording 해제 상한 20 MiB, JSON 노드 200,000, 깊이 64, segment ID 0–10,000. 기존 일반 Event의 20,000 노드 제한은 유지한다. 압축 해제 중 상한을 적용하고 실패한 지원 item은 요청 전체를 거부한다. 과도한 segment는 413이며 ACK 후 버리지 않는다.
 
 SDK의 masked text/input과 blocked node는 그대로 유지한다. 기존 프로젝트 secret scrub도 적용한다. 분석은 input/키 입력/폼 값/DOM 텍스트를 별도 추출하지 않는다. SDK에서 unmask 옵션을 설정한 고객 데이터의 원본을 새로 추측하거나 복원하지 않는다. raw envelope와 recording을 이중 저장하지 않는다.
+
+## 저장·API·운영 계약
+
+SQLite schema 2의 `replays`는 검색용 metadata·파생 count, `replay_segments`는 `(project_id,replay_id,segment_id)` unique reference, `feedback`은 공식 Feedback 메시지를 보관한다. DB에는 recording을 넣지 않는다. canonical scrubbed rrweb 배열을 zlib로 저장한 `replay-blobs/<sha256>.zlib`를 fsync한 후 기존 ingest 트랜잭션이 reference를 커밋한다. 동일 내용 재전송은 no-op, 같은 segment ID의 다른 내용은 409이며 혼합 envelope의 Error/Log도 함께 롤백한다. 도착 순서와 무관하게 segment metadata 집합을 병합한다. 가장 큰 segment ID보다 앞에 빈 번호가 있으면 Partial replay다. 종료 마커가 없으므로 마지막 segment 자체가 도착하지 않은 경우는 탐지할 수 없다.
+
+S3 설정 시 기존 체크포인트가 정확한 Replay blob 집합·hash·size·metadata revision을 함께 포함한다. 복구 후보 하나의 SQLite와 모든 blob이 일치해야 한다. 체크포인트 제어 문서의 기존 4 MiB 한도를 넘으면 완료로 게시하지 않고 backup lag를 유지한다. 최신 포인터는 최적화이며 손상되면 완료 후보 listing으로 복구한다. 이미 완료 체크포인트가 검증한 동일 blob은 재업로드하지 않는다. Replay/Feedback만 들어와도 기존 단일 Indexer가 봉인 경계를 만들어 백업한다. metadata 변경 시 최소 5분 간격으로 시도하며 고정 RPO는 보장하지 않는다. `doctor`도 Replay 파일 무결성을 검사하고 backup 상태는 아직 백업되지 않은 Replay를 반영한다.
+
+조회 가능 기간은 최초 수신부터 30일이다. 만료 metadata와 로컬 미참조 blob의 물리적 삭제는 시작 시 수행하므로 재시작 전에는 디스크에 남을 수 있다. 실행 중 pinned reader/backup과 경쟁하는 GC를 추가하지 않았다. S3의 과거 완료 checkpoint와 blob은 기존 백업 보존 정책을 따르며 자동 영구 삭제하지 않는다. 따라서 30일은 S3 개인정보 영구 삭제 SLA가 아니다. S3 lifecycle은 복구 후보가 참조하는 파일을 임의로 먼저 지우지 않도록 전체 백업 보존 정책으로 운영해야 한다. Replay 파일은 현재 로컬 조회하며 Error shard처럼 S3 cold eviction하지 않는다.
+
+관리자 session과 기존 project 검색 권한을 사용하는 API:
+
+- `GET /api/replays`: project 필수, environment/release/URL/user/error/rage/dead/duration, 50개 cursor 페이지.
+- `GET /api/replays/{project}/{replay}`: metadata, segment 목록, 수신된 Error/Feedback association.
+- `GET /api/replays/{project}/{replay}/segments/{segment}`: rrweb 배열.
+- `GET /api/replays/{project}/{replay}/analysis`: timeline/journey/페이지 활동.
+- `GET /api/replay-pages`: 같은 필터의 최근 최대 20 replay 집계.
+- `GET /api/feedback?project_id=…`: 최근 20개 공식 text Feedback. 첨부 screenshot은 지원하지 않는다.
+
+분석은 동일 query permit으로 직렬 제한하고 요청당 64 MiB/10초, timeline 5,000개, page 500개에서 명시적으로 잘린 결과를 표시한다. 세션 저장 한도는 256 MiB다. 재생 버퍼는 64 MiB/100,000 event이며 segment를 순차 로드한다. 전체 기간·전체 사용자의 통계라고 표시하지 않는다. 좌표는 20×20 viewport grid이며 문서 전체 위치가 아니다. movement는 batched sample의 timeOffset과 당시 viewport/navigation을 사용한다. element 표는 SDK selector label 집계로 DOM identity를 보장하지 않는다. URL은 query/fragment를 제거한 실제 origin/path이며 임의 route template 추론은 없다.
+
+스크롤은 상위 document의 관측 y/viewport 높이와 0/1/2/3/5 화면 높이 이상 도달한 sampled replay 수를 표시한다. iframe/개별 container 스크롤을 문서 스크롤로 합치지 않는다. dynamic layout/resize에 따른 best-effort 값이며 사람 수·문서 백분율이 아니다.
+
+관리 UI `features/replays`는 URL 필터, TanStack 서버 상태, 로컬 재생 상태를 분리하고 OpenAPI 생성 타입을 사용한다. `@sentry/rrweb@2.43.2` replayer는 상세 화면에서만 lazy load한다. scripts 없는 sandbox iframe과 CSP로 원격 이미지·폰트·프레임·폼 제출을 차단한다. canvas render hint는 부모 document image loader를 차단하기 위해 재생 버퍼에서만 제거한다. 이로 인한 외부 asset/canvas 시각 차이는 UI에 표시하며 원본 녹화나 masking을 복원하지 않는다.
+
+schema 2 도입 전 배포한 `ad3cdf1`은 additive schema 2를 checksum 검증 후 읽는 롤백 호환 릴리스다. 이전 릴리스로 돌아가야 한다면 이 버전 이상을 사용한다. 해당 bridge는 Replay 기능을 노출하지 않으며 Replay 참조를 이해하지 못하는 불완전한 checkpoint 생성도 거절한다. schema 1을 schema 2로 자동 업그레이드하는 회귀 검사를 유지한다.
+
+## 고객 설정
+
+```sh
+npm install @sentry/browser
+```
+
+```js
+import * as Sentry from '@sentry/browser';
+
+Sentry.init({
+  dsn: 'https://PUBLIC_KEY@eventglass.uridogu.com/PROJECT_ID',
+  integrations: [Sentry.replayIntegration()],
+  replaysSessionSampleRate: 0.1,
+  replaysOnErrorSampleRate: 1.0,
+});
+```
+
+DSN은 관리 화면에서 발급한 값을 복사한다. 비율은 서비스 트래픽에 맞게 선택한다. React/Vue/Next.js는 각각 공식 프레임워크 SDK의 정상 client 설정에 같은 Replay integration을 추가한다. 별도 recorder/tracker/snippet은 필요하지 않다. Feedback이 필요하면 공식 `Sentry.feedbackIntegration({ enableScreenshot: false })`만 선택적으로 추가한다. Replay sampling 밖의 방문과 iOS mouse movement는 이 서버가 새로 계측하지 않는다.

@@ -1,8 +1,8 @@
 # eventglass
 
-Eventglass: 단일 Rust 프로세스 기반 Error Tracking + Application Log 검색 서버.
+Eventglass: 단일 Rust 프로세스 기반 Error Tracking + Application Log 검색 + Sentry Session Replay 서버.
 
-관리자·프로젝트 관리, Sentry 수신과 durable Inbox, Indexer의 검색 공개·재시작 복구, Issue·검색·집계·Live·Related Logs·경보 API와 UI, S3 checkpoint 복구와 cold hydration을 구현했습니다. 운영 배포 검증은 진행 중입니다. 전체 범위는 [구현 설계](docs/observe/implementation.md)와 [아키텍처](docs/observe/architecture.md), 개발 명령은 [개발 안내](CONTRIBUTING.md)를 확인하세요.
+관리자·프로젝트 관리, Sentry 수신과 durable Inbox, Indexer의 검색 공개·재시작 복구, Issue·검색·집계·Live·Related Logs·경보 API와 UI, S3 checkpoint 복구와 cold hydration을 구현했습니다. 공식 Sentry SDK의 Replay·행동 분석·Feedback은 [지원 계약](docs/observe/replay.md)을 확인하세요. 전체 범위는 [구현 설계](docs/observe/implementation.md)와 [아키텍처](docs/observe/architecture.md), 개발 명령은 [개발 안내](CONTRIBUTING.md)를 확인하세요.
 
 제품명과 실행 파일은 저장소 이름에 맞춰 **Eventglass / `eventglass`**를 사용합니다. 첨부된 원안은 변경하지 않아 원안과 과거 실행 증거에는 이전 이름이 남아 있습니다.
 
@@ -20,7 +20,7 @@ EVENTGLASS_DATA_DIR=./data target/debug/eventglass serve
 
 관리자 비밀번호를 잊었다면 서버를 중지한 뒤 `EVENTGLASS_DATA_DIR=./data target/debug/eventglass admin reset-password admin@example.com`을 실행합니다. 활성 관리자만 복구하며 새 무작위 비밀번호를 stdout에 한 번 출력하고 해당 계정의 기존 세션을 모두 회수합니다. 출력은 비밀번호 관리자에 보관하고 서버를 다시 시작하세요. 비밀번호를 명령 인수나 로그에 넣지 않습니다.
 
-`EVENTGLASS_DATA_DIR=./data target/debug/eventglass doctor`는 서버를 시작하거나 DB를 초기화하지 않고 기존 metadata, catalog, local shard manifest를 읽기 전용으로 검사합니다.
+`EVENTGLASS_DATA_DIR=./data target/debug/eventglass doctor`는 서버를 시작하거나 DB를 초기화하지 않고 기존 metadata, catalog, local shard manifest와 Replay blob 무결성을 읽기 전용으로 검사합니다.
 
 `EVENTGLASS_ADDR`, `EVENTGLASS_DATA_DIR`, `EVENTGLASS_BASE_URL`로 주소·데이터 위치·외부 origin을 설정합니다. 원격 접속용 origin은 HTTPS가 필요합니다. S3 빌드는 `EVENTGLASS_S3_URL=s3://bucket/prefix`를 사용하며 새 빈 prefix는 최초 한 번 `EVENTGLASS_S3_INITIALIZE=true`가 필요합니다. 호환 서버는 loopback `EVENTGLASS_S3_ENDPOINT`로만 지정할 수 있습니다.
 
@@ -34,7 +34,7 @@ Webhook은 HTTPS와 공개 DNS 주소만 허용하고 redirect와 system proxy�
 
 ## 운영과 복구
 
-기준 운영 자원은 1 CPU와 1 GiB RAM이며 swap 없이 실행하는 CI gate가 있습니다. 100K Record PR benchmark는 더 작은 512 MiB 한도에서 실행합니다. 용량과 지연은 데이터 분포·샤드 수·검색 범위에 따라 달라지므로 배포 전 실제 트래픽과 보존 기간으로 측정해야 합니다.
+기준 운영 자원은 1 CPU와 1 GiB RAM이며 swap 없이 실행하는 로컬 Linux 검증 명령 `./scripts/check-resource`가 있습니다. GitHub CI는 로컬에서 검증한 바이너리의 배포 활성화만 수행합니다. 100K Record PR benchmark는 더 작은 512 MiB 한도에서 실행합니다. 용량과 지연은 데이터 분포·샤드 수·검색 범위에 따라 달라지므로 배포 전 실제 트래픽과 보존 기간으로 측정해야 합니다.
 
 `EVENTGLASS_S3_URL`의 bucket/prefix는 설치 하나가 단독으로 사용해야 합니다. 현재 명시적으로 검증한 호환 대상은 loopback endpoint의 MinIO RELEASE.2025-09-07T16-13-09Z입니다. 같은 prefix에 두 Eventglass 프로세스를 동시에 연결하면 안 됩니다. checkpoint는 샤드 봉인 경계에서 만들어지므로 고정된 시간 RPO를 보장하지 않습니다. `/api/system/status`의 복구 가능 경계와 backup lag를 감시해야 합니다.
 

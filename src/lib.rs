@@ -9,6 +9,7 @@ pub mod http;
 pub mod indexer;
 pub mod model;
 pub mod operations;
+pub mod replay;
 pub mod search;
 pub mod sentry;
 pub mod storage;

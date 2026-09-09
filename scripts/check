@@ -94,6 +94,7 @@ run_integration() {
     run_nonempty_test_target "authentication" --test auth
     run_nonempty_test_target "HTTP ingestion" --test ingest_http
     run_nonempty_test_target "SDK replay" --test sdk
+    run_nonempty_test_target "Sentry Session Replay" --test replay
     run_nonempty_test_target "native indexer" --test indexer_native
     run_nonempty_test_target "Indexer coordinator" --test indexer
     run_nonempty_test_target "Indexer SQLite finalization" --test indexer_db

@@ -12,6 +12,7 @@ mod live;
 mod projects;
 mod records;
 mod related;
+mod replays;
 mod search;
 mod system;
 
@@ -131,6 +132,15 @@ impl From<anyhow::Error> for ApiError {
                 }
             };
         }
+        if let Some(error) = error.downcast_ref::<crate::db::replays::ReplayError>() {
+            use crate::db::replays::ReplayError;
+            return match error {
+                ReplayError::Conflict => Self(StatusCode::CONFLICT, "replay_segment_conflict"),
+                ReplayError::TooLarge => Self(StatusCode::PAYLOAD_TOO_LARGE, "replay_too_large"),
+                ReplayError::Forbidden => Self(StatusCode::FORBIDDEN, "replay_access_denied"),
+                ReplayError::NotFound => Self(StatusCode::NOT_FOUND, "replay_not_found"),
+            };
+        }
         // Database/native error strings can contain sensitive input or paths.
         Self(StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable")
     }
@@ -217,6 +227,18 @@ pub fn router(app: AppState) -> Router {
         .route(
             "/api/issues/{id}/events/{record_id}",
             get(issue_detail::get_occurrence_detail),
+        )
+        .route("/api/replays", get(replays::list))
+        .route("/api/replay-pages", get(replays::pages))
+        .route("/api/feedback", get(replays::feedback))
+        .route("/api/replays/{project}/{id}", get(replays::detail))
+        .route(
+            "/api/replays/{project}/{id}/analysis",
+            get(replays::analysis),
+        )
+        .route(
+            "/api/replays/{project}/{id}/segments/{segment}",
+            get(replays::recording),
         )
         .route("/api/projects", get(projects).post(create_project))
         .route("/api/projects/{id}", patch(update_project))
