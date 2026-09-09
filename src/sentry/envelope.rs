@@ -119,3 +119,39 @@ fn json_object(input: &[u8], invalid: &'static str) -> Result<Value, SentryError
     }
     Ok(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn envelope_parser_rejects_header_item_count_length_and_separator_ambiguity() {
+        assert!(matches!(
+            parse(b"{}\n{\"type\":\"event\"}\n{}", 0),
+            Err(SentryError::TooLarge(_))
+        ));
+        let oversized = format!("{{\"{}\":1}}\n", "a".repeat(MAX_HEADER_BYTES));
+        assert!(matches!(
+            parse_header(oversized.as_bytes()),
+            Err(SentryError::TooLarge(_))
+        ));
+        let oversized_item = format!(
+            "{{}}\n{{\"type\":\"event\",\"{}\":1}}\n",
+            "a".repeat(MAX_HEADER_BYTES)
+        );
+        assert!(matches!(
+            parse(oversized_item.as_bytes(), 1),
+            Err(SentryError::TooLarge(_))
+        ));
+        assert!(parse(b"[]\n", 1).is_err());
+        assert!(parse(b"{}\n[]\n", 1).is_err());
+        assert!(parse(b"{}\n{\"type\":1}\n", 1).is_err());
+        assert!(parse(b"{}\n{\"type\":\"event\",\"length\":-1}\n", 1).is_err());
+        assert!(parse(b"{}\n{\"type\":\"event\",\"length\":4}\n{}", 1).is_err());
+        assert!(parse(b"{}\n{\"type\":\"event\",\"length\":2}\n{}x", 1).is_err());
+        let parsed = parse(b"{}\n{\"type\":\"event\",\"length\":2}\n{}\n", 1).unwrap();
+        assert_eq!(parsed.items[0].payload, b"{}");
+        let parsed = parse(b"{}\n{\"type\":\"event\"}\n{}", 1).unwrap();
+        assert_eq!(parsed.items[0].payload, b"{}");
+    }
+}

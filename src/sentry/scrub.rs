@@ -111,3 +111,23 @@ fn scrub_url(input: &str, sensitive: &HashSet<String>) -> String {
         format!("{prefix}{query}#{fragment}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn url_scrubbing_preserves_fragments_and_non_sensitive_values() {
+        let mut value = serde_json::json!({
+            "request_url": "https://example.test/path?password=secret&ok=value#section"
+        });
+        scrub(&mut value, &[]);
+        assert_eq!(
+            value["request_url"],
+            "https://example.test/path?password=%5BFiltered%5D&ok=value#section"
+        );
+        let mut value = serde_json::json!({"url": "https://example.test/no-query"});
+        scrub(&mut value, &[]);
+        assert_eq!(value["url"], "https://example.test/no-query");
+    }
+}

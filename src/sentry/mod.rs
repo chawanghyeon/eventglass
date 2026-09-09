@@ -224,3 +224,117 @@ fn parse_auth_value(header: &serde_json::Value) -> Result<Option<EnvelopeAuth>, 
     };
     Ok(Some(auth))
 }
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+    use flate2::{
+        Compression,
+        write::{GzEncoder, ZlibEncoder},
+    };
+    use std::io::Write;
+
+    #[test]
+    fn content_encodings_and_errors_have_stable_semantics() {
+        assert_eq!(
+            ContentEncoding::parse(None).unwrap(),
+            ContentEncoding::Identity
+        );
+        assert_eq!(
+            ContentEncoding::parse(Some("  GZIP ")).unwrap(),
+            ContentEncoding::Gzip
+        );
+        assert_eq!(
+            ContentEncoding::parse(Some("deflate")).unwrap(),
+            ContentEncoding::Deflate
+        );
+        let unsupported = ContentEncoding::parse(Some("br")).unwrap_err();
+        assert_eq!(unsupported.to_string(), "unsupported content encoding");
+        assert!(!unsupported.is_too_large());
+        assert!(SentryError::TooLarge("limit").is_too_large());
+        assert_eq!(SentryError::Malformed("safe").to_string(), "safe");
+    }
+
+    #[test]
+    fn body_decoder_enforces_wire_and_expanded_limits_for_each_encoding() {
+        let mut limits = Limits {
+            wire_bytes: 4,
+            ..Limits::default()
+        };
+        assert!(matches!(
+            decode_body(b"12345", ContentEncoding::Identity, &limits),
+            Err(SentryError::TooLarge(_))
+        ));
+        limits.wire_bytes = 1024;
+        limits.decoded_bytes = 4;
+        assert!(matches!(
+            decode_body(b"12345", ContentEncoding::Identity, &limits),
+            Err(SentryError::TooLarge(_))
+        ));
+        assert_eq!(
+            decode_body(b"1234", ContentEncoding::Identity, &limits).unwrap(),
+            b"1234"
+        );
+
+        for encoding in [ContentEncoding::Gzip, ContentEncoding::Deflate] {
+            let compressed = match encoding {
+                ContentEncoding::Gzip => {
+                    let mut writer = GzEncoder::new(Vec::new(), Compression::fast());
+                    writer.write_all(b"hello").unwrap();
+                    writer.finish().unwrap()
+                }
+                ContentEncoding::Deflate => {
+                    let mut writer = ZlibEncoder::new(Vec::new(), Compression::fast());
+                    writer.write_all(b"hello").unwrap();
+                    writer.finish().unwrap()
+                }
+                ContentEncoding::Identity => unreachable!(),
+            };
+            limits.decoded_bytes = 5;
+            assert_eq!(
+                decode_body(&compressed, encoding, &limits).unwrap(),
+                b"hello"
+            );
+            limits.decoded_bytes = 4;
+            assert!(matches!(
+                decode_body(&compressed, encoding, &limits),
+                Err(SentryError::TooLarge(_))
+            ));
+            assert!(matches!(
+                decode_body(b"invalid", encoding, &limits),
+                Err(SentryError::Malformed(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn envelope_dsn_parser_rejects_every_credential_and_project_ambiguity() {
+        assert_eq!(parse_auth_value(&serde_json::json!({})).unwrap(), None);
+        assert!(parse_auth_value(&serde_json::json!({"dsn": 1})).is_err());
+        for dsn in [
+            "not a url",
+            "ftp://key@example.test/1",
+            "https://example.test/1",
+            "https://key@example.test",
+            "https://key@example.test/0",
+            "https://key@example.test/not-a-number",
+            "https://key@example.test/a/b",
+            "https://key@example.test/1?query=x",
+            "https://key@example.test/1#fragment",
+        ] {
+            assert!(
+                parse_auth_value(&serde_json::json!({"dsn": dsn})).is_err(),
+                "{dsn}"
+            );
+        }
+        let credentialed = format!("https://key:{}@example.test/1", "password");
+        assert!(parse_auth_value(&serde_json::json!({"dsn": credentialed})).is_err());
+        assert_eq!(
+            parse_auth_value(&serde_json::json!({"dsn":"https://public@example.test/42"})).unwrap(),
+            Some(EnvelopeAuth {
+                project_id: 42,
+                public_key: "public".into()
+            })
+        );
+    }
+}
