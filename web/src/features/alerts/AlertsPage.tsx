@@ -49,6 +49,7 @@ export function AlertsPage() {
   const userId = user?.id ?? "unknown";
   const client = useQueryClient();
   const [form, setForm] = useState<AlertInput>(initial);
+  const [editing, setEditing] = useState<Pick<Alert, "id" | "revision">>();
   const alerts = useQuery({
     ...alertsQuery(userId),
     enabled: user?.role === "admin",
@@ -69,6 +70,18 @@ export function AlertsPage() {
   const create = useMutation({
     mutationFn: (input: AlertInput) => endpoints.createAlert(input),
     onSuccess: async () => {
+      setForm(initial);
+      await refresh();
+    },
+  });
+  const save = useMutation({
+    mutationFn: (input: { id: string; revision: number; form: AlertInput }) =>
+      endpoints.updateAlert(input.id, {
+        ...input.form,
+        revision: input.revision,
+      }),
+    onSuccess: async () => {
+      setEditing(undefined);
       setForm(initial);
       await refresh();
     },
@@ -94,7 +107,9 @@ export function AlertsPage() {
     mutationFn: (id: string) => endpoints.retryAlertDelivery(id),
     onSuccess: refresh,
   });
-  const error = create.error ?? update.error ?? remove.error ?? retry.error;
+  const error =
+    create.error ?? save.error ?? update.error ?? remove.error ?? retry.error;
+  const loadingError = alerts.error ?? deliveries.error ?? projects.error;
 
   function updateThreshold(change: Partial<ThresholdCondition>) {
     setForm((current) =>
@@ -129,13 +144,14 @@ export function AlertsPage() {
         className="panel alert-form"
         onSubmit={(event) => {
           event.preventDefault();
-          create.mutate(form);
+          if (editing) save.mutate({ ...editing, form });
+          else create.mutate(form);
         }}
       >
         <div className="form-heading">
           <div>
-            <p className="eyebrow">새 규칙</p>
-            <h2>경보 추가</h2>
+            <p className="eyebrow">{editing ? "규칙 변경" : "새 규칙"}</p>
+            <h2>{editing ? "경보 수정" : "경보 추가"}</h2>
           </div>
         </div>
         <div className="alert-form__grid">
@@ -274,11 +290,34 @@ export function AlertsPage() {
             </>
           ) : null}
         </div>
-        <Button disabled={create.isPending} type="submit">
-          {create.isPending ? "추가 중…" : "경보 추가"}
-        </Button>
+        <div className="button-row">
+          <Button disabled={create.isPending || save.isPending} type="submit">
+            {create.isPending || save.isPending
+              ? "저장 중…"
+              : editing
+                ? "변경 저장"
+                : "경보 추가"}
+          </Button>
+          {editing ? (
+            <Button
+              type="button"
+              variant="quiet"
+              disabled={save.isPending}
+              onClick={() => {
+                setEditing(undefined);
+                setForm(initial);
+                save.reset();
+              }}
+            >
+              수정 취소
+            </Button>
+          ) : null}
+        </div>
       </form>
 
+      {loadingError ? (
+        <Notice tone="error">{describeApiError(loadingError)}</Notice>
+      ) : null}
       {error ? <Notice tone="error">{describeApiError(error)}</Notice> : null}
       {alerts.isPending ? <Spinner label="경보 불러오는 중" /> : null}
       {alerts.data?.length === 0 ? (
@@ -304,6 +343,24 @@ export function AlertsPage() {
               </Notice>
             ) : null}
             <div className="page-controls">
+              <Button
+                type="button"
+                variant="quiet"
+                disabled={save.isPending}
+                onClick={() => {
+                  setEditing({ id: alert.id, revision: alert.revision });
+                  setForm({
+                    name: alert.name,
+                    project_id: alert.project_id,
+                    condition: alert.condition,
+                    destination: alert.destination,
+                    enabled: alert.enabled,
+                  });
+                  save.reset();
+                }}
+              >
+                수정
+              </Button>
               <Button
                 disabled={update.isPending}
                 onClick={() => update.mutate(alert)}

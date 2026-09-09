@@ -115,6 +115,8 @@ export function useLiveLogs(url?: string): LiveState {
           errorCode = "live_unavailable";
         }
         fail(errorCode);
+      } else if (source.readyState === EventSource.CLOSED) {
+        fail("live_connection_closed");
       } else {
         if (active)
           setState((current) => ({

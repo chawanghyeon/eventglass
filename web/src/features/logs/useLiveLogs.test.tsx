@@ -3,6 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useLiveLogs } from "./useLiveLogs";
 
 class FakeEventSource {
+  static CLOSED = 2;
+  readyState = 0;
   static instances: FakeEventSource[] = [];
   onopen: (() => void) | null = null;
   closed = false;
@@ -80,5 +82,20 @@ it("owns connection cleanup, record dedupe, checkpoints, and resync closure", ()
   expect(result.current.status).toBe("resync_required");
   expect(source.closed).toBe(true);
   unmount();
+  expect(source.closed).toBe(true);
+});
+
+it("reports permanently closed HTTP streams as errors instead of endless reconnecting", () => {
+  const { result } = renderHook(() =>
+    useLiveLogs("/api/logs/live?scope=closed"),
+  );
+  const source = FakeEventSource.instances[0];
+  source.readyState = FakeEventSource.CLOSED;
+  act(() => {
+    for (const listener of source.listeners.get("error") ?? [])
+      listener(new Event("error") as MessageEvent);
+  });
+  expect(result.current.status).toBe("error");
+  expect(result.current.errorCode).toBe("live_connection_closed");
   expect(source.closed).toBe(true);
 });

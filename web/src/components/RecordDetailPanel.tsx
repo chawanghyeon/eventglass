@@ -5,6 +5,7 @@ import { endpoints } from "../api/endpoints";
 import { Button } from "./Button";
 import { Notice } from "./Notice";
 import { Spinner } from "./Spinner";
+import { RecordFields } from "./RecordFields";
 
 type JsonObject = Record<string, unknown>;
 
@@ -118,6 +119,7 @@ export function RecordDetailPanel({
       ) : null}
       {raw !== undefined ? (
         <>
+          <RecordFields raw={raw} />
           <section
             className="record-section"
             aria-labelledby="exception-heading"

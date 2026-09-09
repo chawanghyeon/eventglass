@@ -73,6 +73,7 @@ it("creates rules and exposes failed delivery retry with evaluation state", asyn
   const create = vi
     .spyOn(endpoints, "createAlert")
     .mockResolvedValue({ id: "2" });
+  const update = vi.spyOn(endpoints, "updateAlert").mockResolvedValue(alert);
   const retry = vi
     .spyOn(endpoints, "retryAlertDelivery")
     .mockResolvedValue(undefined);
@@ -98,4 +99,20 @@ it("creates rules and exposes failed delivery retry with evaluation state", asyn
   );
   await user.click(screen.getByRole("button", { name: "같은 ID로 재시도" }));
   expect(retry).toHaveBeenCalledWith(delivery.id);
+  await user.click(screen.getByRole("button", { name: "수정" }));
+  expect(screen.getByLabelText("이름")).toHaveValue("API errors");
+  await user.clear(screen.getByLabelText("이름"));
+  await user.type(screen.getByLabelText("이름"), "Updated errors");
+  await user.click(screen.getByRole("button", { name: "변경 저장" }));
+  await waitFor(() =>
+    expect(update).toHaveBeenCalledWith(
+      alert.id,
+      expect.objectContaining({
+        name: "Updated errors",
+        revision: alert.revision,
+        condition: alert.condition,
+        enabled: true,
+      }),
+    ),
+  );
 });

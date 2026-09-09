@@ -146,7 +146,9 @@ try {
   await page.getByText("1회", { exact: true }).waitFor();
   await page.getByRole("button", { name: "원문 보기" }).click();
   await page.getByText("발생 기록 상세").waitFor();
-  await page.getByText("product-ui-raw-sentinel", { exact: false }).waitFor();
+  await page.locator("pre").filter({ hasText: "product-ui-raw-sentinel" }).waitFor();
+  await page.getByText("선택한 기록의 필드", { exact: true }).click();
+  await page.getByRole("cell", { name: '$["extra"]["detail"]', exact: true }).waitFor();
   await page.getByRole("button", { name: "닫기" }).click();
   await page.getByRole("button", { name: "해결 처리" }).click();
   await page.getByText("해결됨", { exact: true }).waitFor({ timeout: 15_000 });
@@ -167,13 +169,15 @@ try {
   await logTable.getByRole("button", { name: "상세 보기" }).first().click();
   await page.getByRole("heading", { name: "로그 상세" }).waitFor();
   try {
-    await page.getByText("product-ui-raw-sentinel", { exact: false }).waitFor();
+    await page.locator("pre").filter({ hasText: "product-ui-raw-sentinel" }).waitFor();
   } catch (error) {
     throw new Error(
       `Log detail did not render raw JSON: ${JSON.stringify({ browserErrors })}\n${await page.locator("body").innerText()}`,
       { cause: error },
     );
   }
+  await page.getByText("선택한 기록의 필드", { exact: true }).click();
+  await page.getByRole("cell", { name: '$["extra"]["detail"]', exact: true }).waitFor();
   await page.getByRole("button", { name: "닫기" }).click();
 
   await page.getByRole("link", { name: "사용자", exact: true }).click();
