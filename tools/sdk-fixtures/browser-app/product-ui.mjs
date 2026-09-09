@@ -162,7 +162,7 @@ try {
   await page.getByText("2회", { exact: true }).waitFor();
   await page.getByRole("table").getByText("미해결", { exact: true }).waitFor();
 
-  await page.getByRole("link", { name: "로그 검색", exact: true }).click();
+  await page.getByRole("link", { name: "로그 분석", exact: true }).click();
   await page.waitForURL((url) => url.pathname === "/logs", { timeout: 15_000 });
   const logTable = page.getByRole("table");
   await logTable.getByText(issueTitle, { exact: true }).first().waitFor();

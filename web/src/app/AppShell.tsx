@@ -1,8 +1,15 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import {
+  Link,
+  NavLink,
+  Outlet,
+  useLocation,
+  useNavigate,
+} from "react-router-dom";
 import { Button } from "../components/Button";
 import { logoutAndClear, useSession } from "../features/auth";
+import { readLogSearch, writeLogSearch } from "../features/logs";
 import { SystemReadiness } from "../features/system";
 
 export function AppShell() {
@@ -10,6 +17,17 @@ export function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const location = useLocation();
+  const logsSection = ["/logs", "/explore"].includes(location.pathname);
+  const settingsSection = [
+    "/projects",
+    "/alerts",
+    "/users",
+    "/system",
+  ].includes(location.pathname);
+  const searchScope = writeLogSearch(
+    readLogSearch(new URLSearchParams(location.search)),
+  ).toString();
   const logout = useMutation({
     mutationFn: () => logoutAndClear(queryClient),
     onSettled: () => navigate("/login", { replace: true }),
@@ -50,14 +68,14 @@ export function AppShell() {
             <span aria-hidden="true">◫</span>
             전체 현황
           </NavLink>
-          <NavLink to="/explore">
-            <span aria-hidden="true">▥</span>
-            수치 분석
-          </NavLink>
-          <NavLink to="/logs">
+          <Link
+            to="/logs"
+            className={logsSection ? "active" : undefined}
+            aria-current={logsSection ? "page" : undefined}
+          >
             <span aria-hidden="true">≋</span>
-            로그 검색
-          </NavLink>
+            로그 분석
+          </Link>
           <NavLink to="/issues">
             <span aria-hidden="true">◇</span>
             오류 추적
@@ -65,26 +83,14 @@ export function AppShell() {
           <NavLink to="/replays">
             <span aria-hidden="true">▷</span>방문 분석
           </NavLink>
-          <NavLink to="/projects">
+          <Link
+            to="/projects"
+            className={settingsSection ? "active" : undefined}
+            aria-current={settingsSection ? "page" : undefined}
+          >
             <span aria-hidden="true">⌁</span>
-            프로젝트
-          </NavLink>
-          {user.role === "admin" ? (
-            <>
-              <NavLink to="/alerts">
-                <span aria-hidden="true">△</span>
-                알림 규칙
-              </NavLink>
-              <NavLink to="/users">
-                <span aria-hidden="true">◎</span>
-                사용자
-              </NavLink>
-              <NavLink to="/system">
-                <span aria-hidden="true">◉</span>
-                시스템 상태
-              </NavLink>
-            </>
-          ) : null}
+            설정
+          </Link>
         </nav>
         <div className="sidebar__bottom">
           <SystemReadiness admin={user.role === "admin"} userId={user.id} />
@@ -108,6 +114,24 @@ export function AppShell() {
         </div>
       </aside>
       <main className="workspace">
+        {logsSection && (
+          <nav className="section-navigation" aria-label="로그 분석 메뉴">
+            <NavLink to={`/logs?${searchScope}`}>로그 검색</NavLink>
+            <NavLink to={`/explore?${searchScope}`}>수치 분석</NavLink>
+          </nav>
+        )}
+        {settingsSection && (
+          <nav className="section-navigation" aria-label="설정 메뉴">
+            <NavLink to="/projects">프로젝트·SDK 연결</NavLink>
+            {user.role === "admin" && (
+              <>
+                <NavLink to="/alerts">알림 규칙</NavLink>
+                <NavLink to="/users">사용자</NavLink>
+                <NavLink to="/system">시스템 상태</NavLink>
+              </>
+            )}
+          </nav>
+        )}
         <Outlet />
       </main>
     </div>

@@ -1988,3 +1988,36 @@ a.button {
   word-break: keep-all;
   overflow-wrap: anywhere;
 }
+
+.section-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.75rem;
+  margin-bottom: 1.75rem;
+}
+.section-navigation a {
+  padding: 0.65rem 1rem;
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: 0.6rem;
+  font-weight: 650;
+}
+.section-navigation a:hover {
+  background: var(--paper);
+}
+.section-navigation a.active {
+  color: #087755;
+  background: #d8f4e9;
+}
+@media (max-width: 480px) {
+  .section-navigation {
+    gap: 0.2rem;
+    margin-bottom: 1.25rem;
+  }
+  .section-navigation a {
+    padding: 0.6rem 0.7rem;
+    font-size: 0.85rem;
+  }
+}
