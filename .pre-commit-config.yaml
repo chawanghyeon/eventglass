@@ -65,6 +65,14 @@ repos:
         pass_filenames: false
         require_serial: true
         stages: [pre-push]
+      - id: pre-push-deploy-tests
+        name: local deployment transition checks
+        entry: python3 -m unittest discover -s deploy -p 'test_*.py'
+        language: system
+        files: '^deploy/.*\.py$'
+        pass_filenames: false
+        require_serial: true
+        stages: [pre-push]
       - id: pre-push-deploy
         name: stage verified deployment
         entry: ./scripts/deploy

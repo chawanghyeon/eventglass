@@ -13,15 +13,22 @@ OUTPUT=${1:-"$ROOT/.tools/release/eventglass-linux-$ARCH"}
 OUTPUT_DIR=$(dirname -- "$OUTPUT")
 ROOTFS="$OUTPUT_DIR/rootfs-$ARCH"
 mkdir -p "$OUTPUT_DIR"
-cleanup() { rm -rf "$ROOTFS"; }
+SOURCE=$(mktemp -d)
+REVISION=$(git -C "$ROOT" rev-parse "${EVENTGLASS_RELEASE_REVISION:-HEAD}^{commit}")
+cleanup() { rm -rf "$ROOTFS" "$SOURCE"; }
 trap cleanup EXIT HUP INT TERM
+
+# Release bytes must come from the named commit, including when the worktree is dirty.
+git -C "$ROOT" archive --format=tar "$REVISION" > "$SOURCE/source.tar"
+tar -xf "$SOURCE/source.tar" -C "$SOURCE"
+rm "$SOURCE/source.tar"
 
 docker buildx build \
     --platform "$PLATFORM" \
-    --build-arg "EVENTGLASS_REVISION=$(git -C "$ROOT" rev-parse HEAD)" \
+    --build-arg "EVENTGLASS_REVISION=$REVISION" \
     --target artifact \
     --output "type=local,dest=$ROOTFS" \
-    "$ROOT"
+    "$SOURCE"
 cp "$ROOTFS/eventglass" "$OUTPUT"
 chmod 0755 "$OUTPUT"
 case "$ARCH:$(file "$OUTPUT")" in

@@ -43,6 +43,22 @@ def validate(path, revision):
         raise ValueError("candidate revision does not match staged commit")
 
 
+def sync(path):
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def write_active(revision):
+    temporary = ROOT / "active.new"
+    temporary.write_text(revision + "\n")
+    sync(temporary)
+    os.replace(temporary, ROOT / "active")
+    sync(ROOT)
+
+
 def stage(stream, revision, digest):
     ROOT.mkdir(mode=0o711, parents=True, exist_ok=True)
     ROOT.chmod(0o711)
@@ -67,7 +83,11 @@ def stage(stream, revision, digest):
                 raise ValueError("commit is already staged with different bytes")
         else:
             (temporary / "sha256").write_text(digest + "\n")
+            sync(candidate)
+            sync(temporary / "sha256")
+            sync(temporary)
             os.rename(temporary, destination)
+            sync(ROOT)
     print(f"[recv] staged {revision}", flush=True)
 
 
@@ -89,24 +109,31 @@ def activate(revision):
         raise ValueError("staged candidate checksum mismatch")
     validate(candidate, revision)
     installed = Path(f"{BIN}.{revision}")
+    if BIN.is_symlink() and BIN.resolve() == installed.resolve() and installed.is_file():
+        if sha256(installed) == digest.read_text().strip() and healthy():
+            write_active(revision)
+            print(f"[recv] already healthy {revision}", flush=True)
+            return
     shutil.copy2(candidate, f"{installed}.new")
     os.chmod(f"{installed}.new", 0o755)
+    sync(f"{installed}.new")
     os.replace(f"{installed}.new", installed)
+    sync(installed.parent)
     previous = BIN.resolve() if BIN.is_symlink() else None
     replacement = Path(f"{BIN}.next")
     replacement.unlink(missing_ok=True)
     replacement.symlink_to(installed)
     os.replace(replacement, BIN)
+    sync(BIN.parent)
     try:
         subprocess.run(["systemctl", "restart", "eventglass"], check=True, timeout=40)
         for _ in range(30):
             if healthy():
-                (ROOT / "active").write_text(revision + "\n")
-                prune(revision)
-                print(f"[recv] healthy {revision}", flush=True)
-                return
+                write_active(revision)
+                break
             time.sleep(1)
-        raise ValueError("production readiness check failed")
+        else:
+            raise ValueError("production readiness check failed")
     except Exception:
         if previous is not None and previous.is_file():
             replacement.unlink(missing_ok=True)
@@ -117,9 +144,15 @@ def activate(revision):
             BIN.unlink(missing_ok=True)
             subprocess.run(["systemctl", "stop", "eventglass"], check=False, timeout=40)
         raise
+    # Housekeeping failure must not roll back a healthy, recorded deployment.
+    try:
+        prune(revision, previous)
+    except OSError as error:
+        print(f"[recv] cleanup deferred: {error}", file=sys.stderr)
+    print(f"[recv] healthy {revision}", flush=True)
 
 
-def prune(active):
+def prune(active, previous=None):
     releases = sorted(
         (
             path
@@ -130,8 +163,14 @@ def prune(active):
         reverse=True,
     )
     for path in releases[5:]:
-        if path.name != active and time.time() - path.stat().st_mtime > 86400:
+        installed = Path(f"{BIN}.{path.name}")
+        if (
+            path.name != active
+            and installed != previous
+            and time.time() - path.stat().st_mtime > 86400
+        ):
             shutil.rmtree(path)
+            installed.unlink(missing_ok=True)
 
 
 def main():

@@ -7,7 +7,7 @@ ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
 REVISION=$(git -C "$ROOT" rev-parse HEAD)
 BINARY="$ROOT/.tools/release/eventglass-linux-arm64"
 
-"$SCRIPT_DIR/build-release" "$BINARY"
+EVENTGLASS_RELEASE_REVISION="$REVISION" "$SCRIPT_DIR/build-release" "$BINARY"
 case "$(file "$BINARY")" in
     *ELF*ARM\ aarch64*) ;;
     *) printf 'deploy: release is not a Linux AArch64 ELF binary\n' >&2; exit 1 ;;
