@@ -83,7 +83,7 @@ fn metric(input: MetricInput, index: usize) -> ApiResult<MetricSpec> {
     })
 }
 fn histogram(input: HistogramInput, start_us: i64, end_us: i64) -> ApiResult<HistogramSpec> {
-    if input.field != "timestamp" {
+    if input.field != "timestamp" || end_us <= start_us {
         return Err(invalid());
     }
     let span_ms = u64::try_from((i128::from(end_us) - i128::from(start_us) + 999) / 1000)
@@ -248,4 +248,200 @@ pub(super) async fn post_aggregate(
         "buckets":result.buckets.map(buckets),"warnings":result.warnings,"read_token":read_token,"watermark":watermark.to_string(),
         "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":searched_shards.to_string(),"hydrated_shards":hydrated_shards.to_string()}),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::aggregate::{AggregateBucket, BucketDimension};
+
+    fn metric_input(op: MetricOp, field: Option<&str>) -> MetricInput {
+        MetricInput {
+            op,
+            name: None,
+            field: field.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn metric_dto_rejects_ambiguous_fields_and_maps_every_operation() {
+        assert!(
+            matches!(metric(metric_input(MetricOp::Count, None), 2).unwrap(), MetricSpec::Count { ref name } if name == "metric_2")
+        );
+        assert!(metric(metric_input(MetricOp::Count, Some("attributes.ms")), 0).is_err());
+        assert!(metric(metric_input(MetricOp::Sum, None), 0).is_err());
+        assert!(metric(metric_input(MetricOp::Sum, Some("ms")), 0).is_err());
+        assert!(metric(metric_input(MetricOp::Min, Some("attributes.")), 0).is_err());
+        for op in [MetricOp::Sum, MetricOp::Min, MetricOp::Max, MetricOp::Avg] {
+            assert!(metric(metric_input(op, Some("attributes.ms")), 0).is_ok());
+        }
+    }
+
+    #[test]
+    fn histogram_dto_maps_fixed_and_auto_intervals_and_rejects_invalid_input() {
+        for (interval, expected) in [
+            ("10s", 10_000),
+            ("1m", 60_000),
+            ("5m", 300_000),
+            ("1h", 3_600_000),
+            ("6h", 21_600_000),
+            ("1d", 86_400_000),
+        ] {
+            assert_eq!(
+                histogram(
+                    HistogramInput {
+                        field: "timestamp".into(),
+                        interval: interval.into()
+                    },
+                    0,
+                    1
+                )
+                .unwrap()
+                .interval_ms,
+                expected
+            );
+        }
+        for (span_ms, expected) in [
+            (1, 10_000),
+            (3_600_001, 60_000),
+            (21_600_001, 300_000),
+            (86_400_001, 3_600_000),
+            (604_800_001, 21_600_000),
+            (2_592_000_001, 86_400_000),
+        ] {
+            assert_eq!(
+                histogram(
+                    HistogramInput {
+                        field: "timestamp".into(),
+                        interval: "auto".into()
+                    },
+                    0,
+                    span_ms * 1_000
+                )
+                .unwrap()
+                .interval_ms,
+                expected
+            );
+        }
+        assert!(
+            histogram(
+                HistogramInput {
+                    field: "received_at".into(),
+                    interval: "1m".into()
+                },
+                0,
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            histogram(
+                HistogramInput {
+                    field: "timestamp".into(),
+                    interval: "auto".into(),
+                },
+                1,
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            histogram(
+                HistogramInput {
+                    field: "timestamp".into(),
+                    interval: "2m".into()
+                },
+                0,
+                1
+            )
+            .is_err()
+        );
+        assert!(
+            histogram(
+                HistogramInput {
+                    field: "timestamp".into(),
+                    interval: "auto".into()
+                },
+                1,
+                0
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn aggregate_response_mapping_preserves_types_children_and_error_statuses() {
+        let values = [
+            metric_value(MetricValue::Count {
+                name: "count".into(),
+                value: 3,
+            }),
+            metric_value(MetricValue::Number {
+                name: "avg".into(),
+                op: MetricOp::Avg,
+                value: Some(1.5),
+                numeric_value_count: Some(2),
+            }),
+        ];
+        assert_eq!(values[0]["value"], "3");
+        assert_eq!(values[1]["numeric_value_count"], "2");
+        let child = BucketSet {
+            dimension: BucketDimension::Group {
+                field: GroupField::Level,
+            },
+            buckets: vec![],
+            has_more: false,
+        };
+        let value = buckets(BucketSet {
+            dimension: BucketDimension::Histogram { interval_ms: 1_000 },
+            buckets: vec![
+                AggregateBucket {
+                    key: BucketKey::TimestampUs(1),
+                    doc_count: 2,
+                    metrics: vec![],
+                    children: Some(child),
+                },
+                AggregateBucket {
+                    key: BucketKey::String("info".into()),
+                    doc_count: 1,
+                    metrics: vec![],
+                    children: None,
+                },
+            ],
+            has_more: true,
+        });
+        assert_eq!(value["buckets"][0]["key"]["type"], "timestamp");
+        assert_eq!(value["buckets"][1]["key"]["type"], "string");
+
+        for (error, status) in [
+            (
+                AggregateError::InvalidRequest("bad"),
+                StatusCode::BAD_REQUEST,
+            ),
+            (
+                AggregateError::BucketLimitExceeded {
+                    limit: 1,
+                    current: 2,
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                AggregateError::MemoryLimitExceeded {
+                    limit: 1,
+                    current: 2,
+                },
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                AggregateError::NumericOverflow { metric: "x".into() },
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
+            (
+                AggregateError::UnexpectedNativeResult,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ),
+        ] {
+            assert_eq!(native_error(&error).0, status);
+        }
+    }
 }

@@ -312,3 +312,88 @@ async fn receive_inner(
     }
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+
+    #[test]
+    fn wire_errors_have_stable_public_status_and_codes() {
+        for (error, status, code) in [
+            (
+                sentry::SentryError::TooLarge("private"),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "ingest_too_large",
+            ),
+            (
+                sentry::SentryError::UnsupportedEncoding,
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "unsupported_encoding",
+            ),
+            (
+                sentry::SentryError::Malformed("private"),
+                StatusCode::BAD_REQUEST,
+                "invalid_sentry_payload",
+            ),
+        ] {
+            let error = wire_error(error);
+            assert_eq!(error.0, status);
+            assert_eq!(error.1, code);
+        }
+    }
+
+    #[test]
+    fn transport_key_accepts_matching_sources_and_rejects_ambiguity() {
+        let uri: Uri = "/api/1/envelope/?sentry_key=abc".parse().unwrap();
+        assert_eq!(
+            key_from_transport(&uri, &HeaderMap::new())
+                .unwrap()
+                .as_deref(),
+            Some("abc")
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "x-sentry-auth",
+            HeaderValue::from_static("Sentry sentry_version=7, sentry_key=abc"),
+        );
+        assert_eq!(
+            key_from_transport(&uri, &headers).unwrap().as_deref(),
+            Some("abc")
+        );
+        headers.append(
+            "x-sentry-auth",
+            HeaderValue::from_static("Sentry sentry_key=other"),
+        );
+        assert_eq!(
+            key_from_transport(&uri, &headers).unwrap_err().1,
+            "conflicting_ingest_key"
+        );
+
+        for uri in [
+            "/api/1/envelope/?sentry_key=",
+            "/api/1/envelope/?sentry_key=one&sentry_key=two",
+        ] {
+            assert!(key_from_transport(&uri.parse().unwrap(), &HeaderMap::new()).is_err());
+        }
+        let long = format!("/api/1/envelope/?sentry_key={}", "a".repeat(257));
+        assert!(key_from_transport(&long.parse().unwrap(), &HeaderMap::new()).is_err());
+
+        let mut headers = HeaderMap::new();
+        headers.insert("x-sentry-auth", HeaderValue::from_static("invalid"));
+        assert!(key_from_transport(&"/".parse().unwrap(), &headers).is_err());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-sentry-auth",
+            HeaderValue::from_static("Sentry sentry_version=7"),
+        );
+        assert_eq!(
+            key_from_transport(&"/".parse().unwrap(), &headers).unwrap(),
+            None
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("x-sentry-auth", HeaderValue::from_bytes(b"\xff").unwrap());
+        assert!(key_from_transport(&"/".parse().unwrap(), &headers).is_err());
+    }
+}

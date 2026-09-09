@@ -187,3 +187,35 @@ pub(super) async fn retry_delivery(
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(project_id: Option<&str>) -> AlertInput {
+        AlertInput {
+            name: "production errors".into(),
+            project_id: project_id.map(str::to_owned),
+            condition: Condition::NewIssue,
+            destination: Destination::Webhook {
+                url: "https://alerts.example.test/hook".into(),
+            },
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn alert_input_parses_only_positive_decimal_project_ids() {
+        assert_eq!(input(None).configuration().unwrap().project_id, None);
+        assert_eq!(
+            input(Some("42")).configuration().unwrap().project_id,
+            Some(42)
+        );
+        for value in ["", "0", "-1", "+1", "1.0", "abc"] {
+            assert!(input(Some(value)).configuration().is_err(), "{value}");
+        }
+        let mut invalid = input(Some("1"));
+        invalid.name.clear();
+        assert!(invalid.configuration().is_err());
+    }
+}
