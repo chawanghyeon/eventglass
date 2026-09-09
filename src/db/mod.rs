@@ -19,7 +19,11 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use sha2::{Digest, Sha256};
 
 const INITIAL_SCHEMA: &str = include_str!("../../migrations/0001_initial.sql");
+// Compatibility bridge: this release still creates v1, but can safely read/write
+// the unchanged v1 tables alongside the additive Replay extension after rollback.
+const REPLAY_SCHEMA: &str = include_str!("../../migrations/0002_replays.sql");
 pub const SCHEMA_VERSION: i64 = 1;
+const MAX_COMPATIBLE_SCHEMA_VERSION: i64 = 2;
 
 /// Open a database after the caller has acquired the exclusive data-directory lock.
 /// A corrupt or newer database is returned as an error, never replaced.
@@ -58,7 +62,7 @@ pub fn inspect(path: &Path) -> Result<Connection> {
         [],
         |row| row.get(0),
     )?;
-    if version != SCHEMA_VERSION {
+    if !(SCHEMA_VERSION..=MAX_COMPATIBLE_SCHEMA_VERSION).contains(&version) {
         bail!("unsupported metadata schema version {version}");
     }
     let checksum: String = connection.query_row(
@@ -69,6 +73,7 @@ pub fn inspect(path: &Path) -> Result<Connection> {
     if checksum != initial_schema_checksum() {
         bail!("applied migration checksum differs from this binary");
     }
+    verify_replay_extension(&connection, version)?;
     let foreign_key_errors: i64 =
         connection.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
             row.get(0)
@@ -104,9 +109,10 @@ fn migrate(connection: &mut Connection) -> Result<()> {
             [],
             |row| row.get(0),
         )?;
-        if max != SCHEMA_VERSION {
+        if !(SCHEMA_VERSION..=MAX_COMPATIBLE_SCHEMA_VERSION).contains(&max) {
             bail!("unsupported metadata schema version {max}");
         }
+        verify_replay_extension(&tx, max)?;
         let checksum: Option<String> = tx
             .query_row(
                 "SELECT checksum FROM schema_migrations WHERE version=1",
@@ -140,6 +146,26 @@ fn initial_schema_checksum() -> String {
     format!("{:x}", Sha256::digest(INITIAL_SCHEMA.as_bytes()))
 }
 
+/// v2 only adds independent tables/indexes and never changes the v1 contracts.
+/// Unknown or modified extensions remain fail-closed; rollback never drops data.
+fn verify_replay_extension(connection: &Connection, version: i64) -> Result<()> {
+    if version < 2 {
+        return Ok(());
+    }
+    let checksum: Option<String> = connection
+        .query_row(
+            "SELECT checksum FROM schema_migrations WHERE version=2",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let expected = format!("{:x}", Sha256::digest(REPLAY_SCHEMA.as_bytes()));
+    if checksum.as_deref() != Some(&expected) {
+        bail!("unsupported additive schema checksum");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,7 +192,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("meta.db");
         let db = open(&path)?;
-        db.execute("UPDATE schema_migrations SET version=2", [])?;
+        db.execute("UPDATE schema_migrations SET version=99", [])?;
         drop(db);
         assert!(open(&path).unwrap_err().to_string().contains("unsupported"));
         let db = Connection::open(&path)?;
@@ -176,6 +202,50 @@ mod tests {
         )?;
         drop(db);
         assert!(open(&path).unwrap_err().to_string().contains("checksum"));
+        Ok(())
+    }
+
+    #[test]
+    fn additive_replay_schema_can_roll_back_without_dropping_accepted_data() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("meta.db");
+        let mut db = open(&path)?;
+        assert_eq!(
+            db.query_row("SELECT max(version) FROM schema_migrations", [], |r| r
+                .get::<_, i64>(0))?,
+            1
+        );
+        let tx = db.transaction()?;
+        tx.execute_batch(REPLAY_SCHEMA)?;
+        tx.execute(
+            "INSERT INTO schema_migrations(version,checksum,applied_at_us) VALUES(2,?1,0)",
+            [format!("{:x}", Sha256::digest(REPLAY_SCHEMA.as_bytes()))],
+        )?;
+        tx.execute_batch("INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'preserve','Preserve',0,0); INSERT INTO replays(project_id,replay_id,started_at_ms,finished_at_ms,expires_at_us,metadata) VALUES(1,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',0,1,2,'{}');")?;
+        tx.commit()?;
+        drop(db);
+        let db = open(&path)?;
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM replays", [], |r| r.get::<_, i64>(0))?,
+            1
+        );
+        db.execute("UPDATE projects SET name='Still writable' WHERE id=1", [])?;
+        drop(db);
+        drop(inspect(&path)?);
+        assert!(
+            crate::storage::checkpoint::PinnedSnapshot::open(&path)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("feature-capable")
+        );
+        let db = Connection::open(&path)?;
+        db.execute(
+            "UPDATE schema_migrations SET checksum='unknown' WHERE version=2",
+            [],
+        )?;
+        drop(db);
+        assert!(open(&path).is_err());
         Ok(())
     }
 

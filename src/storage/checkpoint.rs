@@ -69,6 +69,16 @@ impl PinnedSnapshot {
     pub fn open(source_path: &Path) -> Result<Self> {
         let source = crate::db::open_reader(source_path)?;
         source.execute_batch("BEGIN")?;
+        let version: i64 =
+            source.query_row("SELECT max(version) FROM schema_migrations", [], |r| {
+                r.get(0)
+            })?;
+        // A rollback reader may preserve newer additive tables, but must not publish
+        // a checkpoint without understanding their external blob references.
+        ensure!(
+            version <= crate::db::SCHEMA_VERSION,
+            "checkpoint requires a feature-capable schema writer"
+        );
         let (installation_id, storage_generation, inbox_id, ingest_seq, active): (
             String,
             String,
