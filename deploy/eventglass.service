@@ -30,7 +30,7 @@ RestrictSUIDSGID=true
 ReadWritePaths=/data/eventglass
 MemoryMax=1G
 MemorySwapMax=0
-CPUQuota=100%
+CPUQuota=25%
 TasksMax=256
 
 [Install]
