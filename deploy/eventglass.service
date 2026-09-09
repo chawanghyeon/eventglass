@@ -28,7 +28,8 @@ LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictSUIDSGID=true
 ReadWritePaths=/data/eventglass
-MemoryMax=768M
+MemoryMax=1G
+MemorySwapMax=0
 CPUQuota=100%
 TasksMax=256
 
