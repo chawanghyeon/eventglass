@@ -8,11 +8,13 @@
 |---|---|---|---|
 | pre-commit | staged 변경 commit 전 | syntax/format/secrets/작은 설정 검사 | warm cache 15초 내외 |
 | pre-push | push 전 | Rust lint/unit, web type/lint/unit | warm cache 3분 내외 |
-| PR required | 모든 PR/main push/merge queue | 아래 필수 job 전체 | 15분 목표, correctness 우선 |
-| nightly | main 일정 실행/수동 실행 | 전체 crash/SDK live/S3-compatible/resource/성능 추세 | 최대 90분 |
-| release candidate | 태그 또는 수동 후보 | 실제 S3/전체 복구/10M benchmark/image/upgrade 검증 | 전용 실행 환경 |
+| PR required | 모든 PR/main push/merge queue | 단일 runner의 quick/web/rust/contracts/integration/crash smoke | 12분 hard timeout |
+| local extended | 배포 후보 준비 | SDK live/E2E/S3-compatible/resource/security/성능 | 개발 머신의 격리 Docker 환경 |
+| release candidate | 배포 후보 | 전체 복구/10M benchmark/multiarch image/upgrade 검증 | 로컬 전용 실행 환경 |
 
-소요 시간은 목표이며 미측정이다. hook에서 E2E·Docker pull·SDK 설치·전체 Cargo build를 매 commit 실행하지 않는다. 로컬 hook은 편의 장치, CI는 제출 결과를 검증하는 필수 장치다.
+2026-09-09 사용자 비용 지시에 따라 GitHub-hosted CI는 단일 required job만 사용한다. 예약·수동 Capacity workflow와 병렬 Docker/SDK/S3/resource/security/release job은 GitHub Actions에서 실행하지 않는다. 무거운 검사는 제품에서 삭제하지 않고 로컬 배포 후보 검증으로 실행한다.
+
+hook에서 E2E·Docker pull·SDK 설치·전체 Cargo build를 매 commit 실행하지 않는다. 로컬 hook은 편의 장치, CI는 제출 결과를 검증하는 필수 장치다.
 
 ## 2. 실행 명령의 단일 진입점
 
@@ -108,24 +110,15 @@ GitHub Actions 기준. P00에 Git remote/provider를 확인하고 실제 reposit
 - concurrency는 workflow + PR 번호 또는 ref, superseded PR cancel-in-progress=true.
 - 각 job timeout-minutes 지정. 실패/취소도 required gate가 실패하도록 처리.
 - checkout action은 persist-credentials=false. 모든 외부 action은 확인한 full commit SHA로 고정하고 주석에 release tag 표기.
-- matrix fail-fast=false로 독립 실패 증거를 수집하되 전체 gate는 하나라도 실패하면 실패.
+- 중복 checkout/setup/compile 비용을 피하려고 단일 `required` job 안에서 핵심 검사를 순서대로 실행한다.
 
-| Job ID | 범위 | 활성화 시점 |
+| Job ID | GitHub-hosted 범위 | 로컬로 분리한 범위 |
 |---|---|---|
-| hygiene | hooks 전체, config/workflow/secret 검사 | P00 |
-| contracts | G01–G08 중 해당 단계 gate, Rust fmt/clippy/unit/doc | P01; G08 자원 상세는 P12 |
-| web | npm ci/type/lint/unit/build/API drift | P02 |
-| integration | auth/ingest/index/search/offline SDK suites | P02부터 구현과 함께 확대 |
-| crash-smoke | durable ACK/commit-finalize/reload/duplicate-only | P04 |
-| e2e | setup→project→ingest→issue/logs→resolve→권한 | P05 |
-| storage | local seal + cold/restore compatible suite | P08 local, P09 compatible 필수 |
-| security | advisory/license/dependency 검증 | P01 |
-| release-smoke | embedded binary/non-root container/local-only | P02 binary, P05 container |
-| required | `if: always()` + 위 job 결과 검증 | 항상 |
+| required | hooks, web, Rust lint/unit/doc, contracts, integration, crash smoke | SDK live/E2E, S3-compatible, resource, benchmark, security, release artifact/container |
 
 P00에서는 gate 이름 `bootstrap-ci`를 사용한다. P01 이후 안정된 최종 이름 `required`로 전환한다. 이후 stage 활성화는 workflow diff와 work-packages evidence를 함께 변경한다. 명시적으로 아직 만들지 않은 미래 job을 가짜 green job으로 만들지 않는다.
 
-최종 required job은 `needs`의 모든 required job 결과가 `success`인지 검사한다. skipped/cancelled/failure를 성공으로 인정하지 않는다. `continue-on-error`로 mandatory 검사 실패를 감추지 않는다. 필수 job을 동적 paths 조건으로 통째로 skip하지 않는다. 장차 최적화가 필요하면 동일 job 안에서 검증된 계획을 출력하되 core 변경은 항상 전체 관련 suite를 실행한다.
+required job은 각 명령을 `set -e`인 step에서 순서대로 실행한다. skipped/cancelled/failure를 성공으로 인정하지 않고 `continue-on-error`를 사용하지 않는다. 필수 job을 동적 paths 조건으로 통째로 skip하지 않는다.
 
 보호 설정: main 직접 push 제한, required 통과, stale approval/branch 최신성 정책은 팀 설정에 맞춰 명시, force push 금지. contributor 수를 모르는 상태에서 존재하지 않는 reviewer 계정을 CODEOWNERS에 적지 않는다. 단독 개발 저장소도 required CI는 유지한다. 외부 설정이 적용되지 않았으면 마지막 인수인계에 별도 표시한다.
 
@@ -195,7 +188,7 @@ disk full/ENOSPC는 제한 크기 테스트 파일시스템 또는 isolated quot
 
 ## 8. 벤치마크와 release 기준
 
-100K는 PR/개발 smoke, 1M은 nightly 추세, 10M은 RC 전용 검증이다. 공유 GitHub runner의 절대 p95를 제품 성능 보장으로 사용하지 않는다. 비교는 같은 고정 runner/image/dataset seed에서 한다.
+100K는 로컬 개발 smoke, 1M은 로컬 추세, 10M은 로컬 RC 전용 검증이다. GitHub-hosted runner는 성능 검증에 사용하지 않는다. 비교는 같은 고정 runner/image/dataset seed에서 한다.
 
 원안 목표: 1 vCPU/512 MiB, 100 logs/sec+5 errors/sec, ACK p95 50ms, 선택적 warm filter 200ms/text 500ms/15분 histogram 500ms. 모두 미달성 상태에서 시작한다.
 

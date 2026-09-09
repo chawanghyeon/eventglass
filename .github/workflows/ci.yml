@@ -14,10 +14,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  hygiene:
-    name: hygiene
+  required:
+    name: required
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 12
     steps:
       - name: Check out repository
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -35,28 +35,6 @@ jobs:
           node-version: 22.22.2
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Install pinned CI tools
-        run: ./scripts/install-ci-tools
-      - name: Add repository tools to PATH
-        run: echo "$GITHUB_WORKSPACE/.tools/bin" >> "$GITHUB_PATH"
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
-      - name: Bootstrap locked dependencies
-        run: ./scripts/bootstrap
-      - name: Run repository hygiene
-        run: ./scripts/check quick
-      - name: Verify checks did not change tracked files
-        run: git diff --exit-code
-
-  contracts:
-    name: contracts
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
       - name: Install pinned Rust toolchain
         run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
       - name: Restore Rust dependency cache
@@ -64,223 +42,18 @@ jobs:
         with:
           shared-key: ci
           cache-bin: 'false'
-      - name: Fetch locked Rust dependencies
-        run: cargo fetch --locked
-      - name: Run Rust lint, unit, and documentation checks
-        run: ./scripts/check rust
-      - name: Compile and test the optional S3 client
-        run: ./scripts/check s3-smoke
-      - name: Run native and SQLite contracts
-        run: ./scripts/check contracts
-
-  web:
-    name: web
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.22.2
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Install locked frontend dependencies
-        run: npm --prefix web ci
-      - name: Run frontend gates
-        run: ./scripts/check web
-
-  integration:
-    name: integration
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
-      - name: Restore Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: ci
-          cache-bin: 'false'
-      - name: Fetch locked Rust dependencies
-        run: cargo fetch --locked
-      - name: Run implemented integration suites
-        run: ./scripts/check integration
-      - name: Run process crash and recovery smoke
-        run: ./scripts/check crash-smoke
-
-  storage:
-    name: storage-s3-compatible
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal
-      - name: Restore Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: ci
-          cache-bin: 'false'
-      - name: Fetch locked Rust dependencies
-        run: cargo fetch --locked
-      - name: Verify checkpoint and restore against pinned MinIO
-        run: ./scripts/check storage
-
-  release-smoke:
-    name: release-smoke
-    runs-on: ubuntu-24.04
-    timeout-minutes: 25
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.22.2
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
-      - name: Restore Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: ci
-          cache-bin: 'false'
-      - name: Install locked frontend dependencies
-        run: npm --prefix web ci
-      - name: Fetch locked Rust dependencies
-        run: cargo fetch --locked
-      - name: Build and test the embedded UI binary
-        run: ./scripts/check embed-smoke
-      - name: Verify the production container
-        env:
-          EVENTGLASS_CONTAINER_PLATFORM: linux/amd64
-        run: ./scripts/check container
-
-  e2e:
-    name: e2e-sdk-live
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.22.2
-          cache: npm
-          cache-dependency-path: |
-            web/package-lock.json
-            tools/sdk-fixtures/node-app/package-lock.json
-            tools/sdk-fixtures/browser-app/package-lock.json
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.26.5'
-          cache-dependency-path: tools/sdk-fixtures/go-app/go.sum
-      - name: Install pinned Rust toolchain
-        run: rustup toolchain install 1.97.1 --profile minimal
-      - name: Restore Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: ci
-          cache-bin: 'false'
-      - name: Bootstrap pinned SDK applications
-        run: ./tools/sdk-fixtures/bootstrap-live.sh
-      - name: Install locked product UI dependencies
-        run: npm --prefix web ci
-      - name: Verify actual SDK ingestion and native persistence
-        run: ./scripts/check sdk-live
-      - name: Verify the embedded product flow in Chromium
-        run: ./scripts/check e2e
-
-  resource:
-    name: resource-1cpu-1g
-    runs-on: ubuntu-24.04
-    timeout-minutes: 45
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Verify Linux runtime under one CPU and one GiB without swap
-        run: ./scripts/check resource
-
-  benchmark:
-    name: benchmark-100k-1cpu-512m
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Verify the seeded 100K workload under one CPU and 512 MiB
-        run: ./scripts/check benchmark-100k
-
-  security:
-    name: security
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: '3.12'
-      - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22.22.2
-      - name: Install pinned security tools
+      - name: Install pinned repository tools and dependencies
         run: |
           ./scripts/install-ci-tools
-          cargo install cargo-deny --version 0.19.0 --locked
-      - name: Install secret scanner
+          echo "$GITHUB_WORKSPACE/.tools/bin" >> "$GITHUB_PATH"
+          PATH="$GITHUB_WORKSPACE/.tools/bin:$PATH" ./scripts/bootstrap
+      - name: Run lightweight required checks
         run: |
-          python -m venv .tools/quality
-          .tools/quality/bin/pip install --requirement requirements/quality.txt
-      - name: Run dependency, license, source, and secret gates
-        run: ./scripts/check security
-
-  required:
-    name: required
-    if: ${{ always() }}
-    needs: [hygiene, contracts, web, integration, storage, release-smoke, e2e, resource, benchmark, security]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    steps:
-      - name: Require every implemented gate
-        run: |
-          test "${{ needs.hygiene.result }}" = success
-          test "${{ needs.contracts.result }}" = success
-          test "${{ needs.web.result }}" = success
-          test "${{ needs.integration.result }}" = success
-          test "${{ needs.storage.result }}" = success
-          test "${{ needs.release-smoke.result }}" = success
-          test "${{ needs.e2e.result }}" = success
-          test "${{ needs.resource.result }}" = success
-          test "${{ needs.benchmark.result }}" = success
-          test "${{ needs.security.result }}" = success
+          ./scripts/check quick
+          ./scripts/check web
+          ./scripts/check rust
+          ./scripts/check contracts
+          ./scripts/check integration
+          ./scripts/check crash-smoke
+      - name: Verify checks did not change tracked files
+        run: git diff --exit-code
