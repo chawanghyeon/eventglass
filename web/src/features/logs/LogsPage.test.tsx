@@ -313,6 +313,20 @@ describe("LogsPage", () => {
     expect(container.querySelector("script")).toBeNull();
   });
 
+  it("waits for record detail before starting its related-record search", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(endpoints, "logs").mockResolvedValue(page());
+    const detail = vi
+      .spyOn(endpoints, "recordDetail")
+      .mockImplementation(() => new Promise(() => undefined));
+    const relatedRequest = vi.mocked(endpoints.relatedRecords);
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "상세 보기" }));
+    await waitFor(() => expect(detail).toHaveBeenCalled());
+    expect(relatedRequest).not.toHaveBeenCalled();
+  });
+
   it("shows the actual correlation strategy and lets the user widen its time window", async () => {
     const user = userEvent.setup();
     vi.spyOn(endpoints, "logs").mockResolvedValue(page());

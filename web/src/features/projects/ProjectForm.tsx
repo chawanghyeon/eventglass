@@ -43,7 +43,7 @@ export function ProjectForm({
             autoCapitalize="none"
             maxLength={64}
             onChange={(event) => setSlug(event.target.value.toLowerCase())}
-            pattern="[a-z0-9-]+"
+            pattern={"[a-z0-9\\-]+"}
             placeholder="payments-api"
             required
             spellCheck={false}

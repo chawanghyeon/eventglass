@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+TARGET_DIR=${CARGO_TARGET_DIR:-"$ROOT/target"}
+case "$TARGET_DIR" in
+    /*) ;;
+    *) TARGET_DIR="$ROOT/$TARGET_DIR" ;;
+esac
+
+cd "$ROOT"
+npm --prefix web run build
+cargo build --locked --features embed-ui --bin eventglass
+EVENTGLASS_E2E_BIN="$TARGET_DIR/debug/eventglass" \
+PLAYWRIGHT_BROWSERS_PATH="$ROOT/tools/sdk-fixtures/.playwright-browsers" \
+    node tools/sdk-fixtures/browser-app/product-ui.mjs

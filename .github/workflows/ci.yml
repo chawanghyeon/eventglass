@@ -170,8 +170,8 @@ jobs:
           EVENTGLASS_CONTAINER_PLATFORM: linux/amd64
         run: ./scripts/check container
 
-  sdk-live:
-    name: sdk-live
+  e2e:
+    name: e2e-sdk-live
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -189,6 +189,7 @@ jobs:
           node-version: 22.22.2
           cache: npm
           cache-dependency-path: |
+            web/package-lock.json
             tools/sdk-fixtures/node-app/package-lock.json
             tools/sdk-fixtures/browser-app/package-lock.json
       - name: Set up Go
@@ -205,8 +206,12 @@ jobs:
           cache-bin: 'false'
       - name: Bootstrap pinned SDK applications
         run: ./tools/sdk-fixtures/bootstrap-live.sh
+      - name: Install locked product UI dependencies
+        run: npm --prefix web ci
       - name: Verify actual SDK ingestion and native persistence
         run: ./scripts/check sdk-live
+      - name: Verify the embedded product flow in Chromium
+        run: ./scripts/check e2e
 
   resource:
     name: resource-1cpu-1g
@@ -263,7 +268,7 @@ jobs:
   required:
     name: required
     if: ${{ always() }}
-    needs: [hygiene, contracts, web, integration, storage, release-smoke, sdk-live, resource, benchmark, security]
+    needs: [hygiene, contracts, web, integration, storage, release-smoke, e2e, resource, benchmark, security]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -275,7 +280,7 @@ jobs:
           test "${{ needs.integration.result }}" = success
           test "${{ needs.storage.result }}" = success
           test "${{ needs.release-smoke.result }}" = success
-          test "${{ needs.sdk-live.result }}" = success
+          test "${{ needs.e2e.result }}" = success
           test "${{ needs.resource.result }}" = success
           test "${{ needs.benchmark.result }}" = success
           test "${{ needs.security.result }}" = success

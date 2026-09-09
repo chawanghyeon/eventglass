@@ -78,7 +78,7 @@ export function RecordDetailPanel({
     queryKey: ["related-records", detailToken ?? "none", relatedWindow],
     queryFn: ({ signal }) =>
       endpoints.relatedRecords(detailToken ?? "", relatedWindow, signal),
-    enabled: Boolean(detailToken),
+    enabled: Boolean(detailToken) && raw !== undefined,
     retry: false,
   });
 
