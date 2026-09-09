@@ -425,7 +425,11 @@ async fn restore_candidate(
         std::fs::remove_file(compressed)?;
     }
     let snapshot_path = snapshot.clone();
-    tokio::task::spawn_blocking(move || secure_restored_snapshot(&snapshot_path)).await??;
+    let restored_document = document.clone();
+    tokio::task::spawn_blocking(move || {
+        secure_restored_snapshot(&snapshot_path, &restored_document)
+    })
+    .await??;
     File::open(&shard_root)?.sync_all()?;
     File::open(attempt)?.sync_all()?;
     Ok(())
@@ -548,7 +552,7 @@ fn validate_snapshot(path: &Path, cut: &CheckpointCut) -> Result<()> {
     Ok(())
 }
 
-fn secure_restored_snapshot(path: &Path) -> Result<()> {
+fn secure_restored_snapshot(path: &Path, document: &CheckpointDocument) -> Result<()> {
     let mut connection = crate::db::open(path)?;
     let transaction = connection.transaction()?;
     transaction.execute("DELETE FROM sessions", [])?;
@@ -559,6 +563,23 @@ fn secure_restored_snapshot(path: &Path) -> Result<()> {
          WHERE singleton=1",
         [uuid::Uuid::new_v4().to_string()],
     )?;
+    for shard in &document.shards {
+        ensure!(
+            transaction.execute(
+                "UPDATE shards
+                 SET state='remote_verified',remote_archive_key=?1,
+                     archive_sha256=?2,recovery_checkpoint_id=?3
+                 WHERE id=?4 AND state IN ('local','remote_verified')",
+                rusqlite::params![
+                    shard.object.key,
+                    shard.object.sha256,
+                    document.checkpoint_id,
+                    shard.id
+                ],
+            )? == 1,
+            "restored checkpoint shard is missing from its SQLite catalog"
+        );
+    }
     transaction.commit()?;
     connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
     File::open(path)?.sync_all()?;
