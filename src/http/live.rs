@@ -206,7 +206,7 @@ async fn produce(
         }
         if target > session.scan_seq {
             if matches!(
-                catch_up(&state, &indexer, &mut session, target, sender).await?,
+                catch_up(&state, &headers, &indexer, &mut session, target, sender).await?,
                 CatchUp::ResyncRequired
             ) {
                 return Ok(());
@@ -215,6 +215,7 @@ async fn produce(
             checkpoint(&state, &session, target, sender).await?;
         }
         tokio::select! {
+            _ = sender.closed() => return Ok(()),
             update = updates.recv() => match update {
                 Ok(_) => {},
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
@@ -230,6 +231,7 @@ async fn produce(
 
 async fn catch_up(
     state: &HttpState,
+    headers: &HeaderMap,
     indexer: &crate::indexer::Indexer,
     session: &mut LiveSession,
     target: i64,
@@ -278,6 +280,9 @@ async fn catch_up(
             super::NativeTaskFailure::Join => "live_unavailable",
         })?
         .map_err(|_| "live_unavailable")?;
+        super::search::revalidate_read(state, headers, &session.auth)
+            .await
+            .map_err(|_| "live_authorization_changed")?;
         for row in page.rows {
             if delivered >= MAX_CATCH_UP_RECORDS || started.elapsed() > Duration::from_secs(10) {
                 send_json(sender, "resync_required", None, "{}").await?;

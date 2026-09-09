@@ -16,7 +16,10 @@ export function ProtectedRoute() {
       </main>
     );
   }
-  if (session.error instanceof ApiError && session.error.status === 401) {
+  if (
+    (session.isSuccess && !session.data) ||
+    (session.error instanceof ApiError && session.error.status === 401)
+  ) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
   if (session.isError) {

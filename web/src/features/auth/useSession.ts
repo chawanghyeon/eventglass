@@ -7,5 +7,7 @@ export function useSession() {
     queryFn: ({ signal }) => loadSession(signal),
     retry: false,
     staleTime: 30_000,
+    refetchOnWindowFocus: true,
+    refetchInterval: 60_000,
   });
 }

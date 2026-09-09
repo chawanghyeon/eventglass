@@ -2,13 +2,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { FormEvent } from "react";
 import { useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
-import { describeApiError, setCsrfToken } from "../../api/client";
+import { describeApiError } from "../../api/client";
 import { endpoints } from "../../api/endpoints";
 import type { Credentials } from "../../api/types";
 import { Button } from "../../components/Button";
 import { Notice } from "../../components/Notice";
 import { AuthLayout } from "./AuthLayout";
-import { sessionQueryKey } from "./api";
+import { finishLogin } from "./api";
 import { useSession } from "./useSession";
 
 export function LoginPage() {
@@ -20,13 +20,12 @@ export function LoginPage() {
   const login = useMutation({
     mutationFn: (input: Credentials) => endpoints.login(input),
     onSuccess: async (response) => {
-      setCsrfToken(response.csrf_token);
-      await queryClient.invalidateQueries({ queryKey: sessionQueryKey });
+      await finishLogin(queryClient, response.csrf_token);
       navigate("/projects", { replace: true });
     },
   });
 
-  if (session.isSuccess) {
+  if (session.isSuccess && session.data) {
     return <Navigate to="/projects" replace />;
   }
 

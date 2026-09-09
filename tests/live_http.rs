@@ -225,6 +225,29 @@ async fn next_event(stream: &mut BodyDataStream, pending: &mut String) -> anyhow
 }
 
 #[tokio::test]
+async fn disconnected_idle_live_stream_releases_its_connection_slot() -> anyhow::Result<()> {
+    let (_directory, app, router, cookie) = fixture().await?;
+    ingest(&app, 1, "idle stream").await?;
+    let mut stream = subscribe(&router, &cookie, None).await?;
+    let mut pending = String::new();
+    assert_eq!(next_event(&mut stream, &mut pending).await?.event, "record");
+    assert_eq!(
+        next_event(&mut stream, &mut pending).await?.event,
+        "checkpoint"
+    );
+    assert_eq!(app.live_permit.available_permits(), 31);
+    drop(stream);
+    let slots = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        app.live_permit.acquire_many(32),
+    )
+    .await??;
+    drop(slots);
+    app.indexer.as_ref().unwrap().shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn live_checkpoints_zero_matches_resumes_and_closes_after_revoke() -> anyhow::Result<()> {
     let (_directory, app, router, cookie) = fixture().await?;
     let mut stream = subscribe(&router, &cookie, None).await?;
