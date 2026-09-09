@@ -317,26 +317,15 @@ pub fn search_lazy<G: AsRef<SearchShard>>(
             ));
         let native_hits = shard.searcher.search(query.as_ref(), &collector)?;
         for ((time, sequence), address) in native_hits {
-            let time = time.ok_or_else(|| SearchError::CorruptDocument {
-                shard_id: shard.id.clone(),
-                field: time_field,
-            })?;
-            let sequence = sequence.ok_or_else(|| SearchError::CorruptDocument {
-                shard_id: shard.id.clone(),
-                field: "ingest_seq",
-            })?;
+            let time = required_fast_value(time, shard, time_field)?;
+            let sequence = required_fast_value(sequence, shard, "ingest_seq")?;
             let candidate = Candidate {
                 time_us: time.into_timestamp_micros(),
                 ingest_seq: sequence,
                 shard_index,
                 address,
             };
-            if selected.len() < candidate_limit {
-                selected.push(Reverse(candidate));
-            } else if selected.peek().is_some_and(|worst| candidate > worst.0) {
-                selected.pop();
-                selected.push(Reverse(candidate));
-            }
+            keep_smallest(&mut selected, Reverse(candidate), candidate_limit);
         }
     }
 
@@ -351,16 +340,7 @@ pub fn search_lazy<G: AsRef<SearchShard>>(
     for candidate in selected.into_iter().take(request.limit) {
         let guard = load(candidate.shard_index)?;
         let row = load_row(guard.as_ref(), candidate.address)?;
-        row_string_bytes = row_string_bytes.checked_add(row.string_bytes()).ok_or(
-            SearchError::ResultTooLarge {
-                limit_bytes: MAX_ROW_STRING_BYTES,
-            },
-        )?;
-        if row_string_bytes > MAX_ROW_STRING_BYTES {
-            return Err(SearchError::ResultTooLarge {
-                limit_bytes: MAX_ROW_STRING_BYTES,
-            });
-        }
+        row_string_bytes = checked_row_string_bytes(row_string_bytes, row.string_bytes())?;
         rows.push(row);
     }
     Ok(SearchPage { rows, has_more })
@@ -431,21 +411,13 @@ pub fn search_live_lazy<G: AsRef<SearchShard>>(
         let collector = TopDocs::with_limit(candidate_limit)
             .order_by::<Option<i64>>((SortByStaticFastValue::for_field("ingest_seq"), Order::Asc));
         for (sequence, address) in shard.searcher.search(query.as_ref(), &collector)? {
-            let sequence = sequence.ok_or_else(|| SearchError::CorruptDocument {
-                shard_id: shard.id.clone(),
-                field: "ingest_seq",
-            })?;
+            let sequence = required_fast_value(sequence, shard, "ingest_seq")?;
             let candidate = LiveCandidate {
                 ingest_seq: sequence,
                 shard_index,
                 address,
             };
-            if selected.len() < candidate_limit {
-                selected.push(candidate);
-            } else if selected.peek().is_some_and(|worst| candidate < *worst) {
-                selected.pop();
-                selected.push(candidate);
-            }
+            keep_smallest(&mut selected, candidate, candidate_limit);
         }
     }
     let mut selected = selected.into_vec();
@@ -456,16 +428,7 @@ pub fn search_live_lazy<G: AsRef<SearchShard>>(
     for candidate in selected.into_iter().take(request.limit) {
         let guard = load(candidate.shard_index)?;
         let row = load_row(guard.as_ref(), candidate.address)?;
-        row_string_bytes = row_string_bytes.checked_add(row.string_bytes()).ok_or(
-            SearchError::ResultTooLarge {
-                limit_bytes: MAX_ROW_STRING_BYTES,
-            },
-        )?;
-        if row_string_bytes > MAX_ROW_STRING_BYTES {
-            return Err(SearchError::ResultTooLarge {
-                limit_bytes: MAX_ROW_STRING_BYTES,
-            });
-        }
+        row_string_bytes = checked_row_string_bytes(row_string_bytes, row.string_bytes())?;
         rows.push(row);
     }
     Ok(SearchPage { rows, has_more })
@@ -812,6 +775,35 @@ struct LiveCandidate {
     ingest_seq: i64,
     shard_index: usize,
     address: DocAddress,
+}
+
+fn required_fast_value<T>(value: Option<T>, shard: &SearchShard, field: &'static str) -> Result<T> {
+    value.ok_or_else(|| SearchError::CorruptDocument {
+        shard_id: shard.id.clone(),
+        field,
+    })
+}
+
+fn keep_smallest<T: Ord>(selected: &mut BinaryHeap<T>, candidate: T, limit: usize) {
+    if selected.len() < limit {
+        selected.push(candidate);
+    } else if selected.peek().is_some_and(|worst| candidate < *worst) {
+        selected.pop();
+        selected.push(candidate);
+    }
+}
+
+fn checked_row_string_bytes(total: usize, next: usize) -> Result<usize> {
+    let total = total.checked_add(next).ok_or(SearchError::ResultTooLarge {
+        limit_bytes: MAX_ROW_STRING_BYTES,
+    })?;
+    if total > MAX_ROW_STRING_BYTES {
+        Err(SearchError::ResultTooLarge {
+            limit_bytes: MAX_ROW_STRING_BYTES,
+        })
+    } else {
+        Ok(total)
+    }
 }
 
 impl LogRow {
@@ -1285,10 +1277,13 @@ mod tests {
     #[test]
     fn row_loading_reports_a_missing_schema_field_as_native_failure() {
         let directory = tempfile::tempdir().unwrap();
-        let index =
-            tantivy::Index::create_in_dir(directory.path(), Schema::builder().build()).unwrap();
+        let mut builder = Schema::builder();
+        let dummy = builder.add_text_field("dummy", tantivy::schema::STORED);
+        let index = tantivy::Index::create_in_dir(directory.path(), builder.build()).unwrap();
         let mut writer = index.writer_with_num_threads(1, 15_000_000).unwrap();
-        writer.add_document(TantivyDocument::default()).unwrap();
+        let mut document = TantivyDocument::default();
+        document.add_text(dummy, "stored");
+        writer.add_document(document).unwrap();
         writer.commit().unwrap();
         drop(writer);
         let searcher = index.reader().unwrap().searcher();
@@ -1304,5 +1299,37 @@ mod tests {
             load_row(&shard, address),
             Err(SearchError::Native(_))
         ));
+    }
+
+    #[test]
+    fn bounded_selection_and_row_byte_accounting_cover_every_outcome() {
+        let mut values = BinaryHeap::new();
+        keep_smallest(&mut values, 2, 2);
+        keep_smallest(&mut values, 3, 2);
+        keep_smallest(&mut values, 4, 2);
+        keep_smallest(&mut values, 1, 2);
+        assert_eq!(values.into_sorted_vec(), vec![1, 2]);
+
+        assert_eq!(checked_row_string_bytes(1, 2).unwrap(), 3);
+        assert!(checked_row_string_bytes(MAX_ROW_STRING_BYTES, 1).is_err());
+        assert!(checked_row_string_bytes(usize::MAX, 1).is_err());
+
+        let directory = tempfile::tempdir().unwrap();
+        let index = tantivy::Index::create_in_dir(directory.path(), schema::build()).unwrap();
+        let shard = SearchShard {
+            id: "missing-fast-value".into(),
+            searcher: index.reader().unwrap().searcher(),
+        };
+        assert!(matches!(
+            required_fast_value::<i64>(None, &shard, "ingest_seq"),
+            Err(SearchError::CorruptDocument {
+                field: "ingest_seq",
+                ..
+            })
+        ));
+        assert_eq!(
+            required_fast_value(Some(7), &shard, "ingest_seq").unwrap(),
+            7
+        );
     }
 }
