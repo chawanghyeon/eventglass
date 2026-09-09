@@ -1,0 +1,44 @@
+name: Capacity
+
+on:
+  schedule:
+    - cron: '17 18 * * *'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Dataset size
+        required: true
+        default: 1m
+        type: choice
+        options:
+          - 1m
+          - 10m
+
+permissions:
+  contents: read
+
+concurrency:
+  group: capacity-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: benchmark-${{ github.event.inputs.profile || '1m' }}-1cpu-512m
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      PROFILE: ${{ github.event.inputs.profile || '1m' }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Run the bounded capacity profile
+        run: ./scripts/check-benchmark "$PROFILE"
+      - name: Upload the structured benchmark report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: benchmark-${{ env.PROFILE }}-${{ github.sha }}
+          path: .tools/benchmark/${{ env.PROFILE }}.json
+          if-no-files-found: error
+          retention-days: 14
