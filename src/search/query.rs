@@ -931,3 +931,242 @@ fn load_row(shard: &SearchShard, address: DocAddress) -> Result<LogRow> {
         user_email: optional_str("user_email")?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request() -> SearchRequest {
+        SearchRequest {
+            query: String::new(),
+            scope: QueryScope {
+                project_ids: vec![1],
+                start_us: 0,
+                end_us: 1,
+                watermark: 1,
+                time_field: TimeField::Timestamp,
+            },
+            filters: vec![],
+            cursor: None,
+            limit: 10,
+        }
+    }
+
+    #[test]
+    fn field_and_bound_mappings_cover_every_supported_variant() {
+        assert_eq!(TimeField::Timestamp.field_name(), "timestamp");
+        assert_eq!(TimeField::ReceivedAt.field_name(), "received_at");
+        for (field, name) in [
+            (KeywordField::RecordId, "record_id"),
+            (KeywordField::Kind, "kind"),
+            (KeywordField::Service, "service"),
+            (KeywordField::Level, "level"),
+            (KeywordField::Environment, "environment"),
+            (KeywordField::Release, "release"),
+            (KeywordField::Logger, "logger"),
+            (KeywordField::IssueId, "issue_id"),
+            (KeywordField::Fingerprint, "fingerprint"),
+            (KeywordField::TraceId, "trace_id"),
+            (KeywordField::SpanId, "span_id"),
+            (KeywordField::RequestId, "request_id"),
+            (KeywordField::UserId, "user_id"),
+            (KeywordField::UserEmail, "user_email"),
+        ] {
+            assert_eq!(field.field_name(), name);
+        }
+        assert_eq!(bound_value(I64Bound::Unbounded), None);
+        assert_eq!(bound_value(I64Bound::Included(1)), Some(1));
+        assert_eq!(bound_value(I64Bound::Excluded(2)), Some(2));
+    }
+
+    #[test]
+    fn search_errors_are_classified_and_formatted_without_request_values() {
+        let errors = [
+            SearchError::ShardUnavailable,
+            SearchError::InvalidRequest("invalid_limit"),
+            SearchError::InvalidQuery,
+            SearchError::SchemaMismatch {
+                shard_id: "one".into(),
+            },
+            SearchError::CorruptDocument {
+                shard_id: "one".into(),
+                field: "kind",
+            },
+            SearchError::ResultTooLarge { limit_bytes: 10 },
+        ];
+        for error in &errors {
+            assert!(!error.to_string().is_empty());
+            assert!(error.source().is_none());
+        }
+        assert!(errors[1].is_bad_request());
+        assert!(errors[2].is_bad_request());
+        assert!(errors[5].is_unprocessable());
+        assert!(!errors[0].is_bad_request());
+    }
+
+    #[test]
+    fn request_validation_rejects_every_bounded_input_dimension() {
+        let mut cases = Vec::new();
+        let mut value = request();
+        value.query = "x".repeat(MAX_QUERY_BYTES + 1);
+        cases.push(value);
+        let mut value = request();
+        value.limit = 0;
+        cases.push(value);
+        let mut value = request();
+        value.limit = MAX_SEARCH_LIMIT + 1;
+        cases.push(value);
+        let mut value = request();
+        value.scope.project_ids = vec![0];
+        cases.push(value);
+        let mut value = request();
+        value.scope.project_ids = vec![1; MAX_PROJECTS + 1];
+        cases.push(value);
+        let mut value = request();
+        value.scope.end_us = 0;
+        cases.push(value);
+        let mut value = request();
+        value.scope.start_us = i64::MAX;
+        value.scope.end_us = i64::MAX;
+        cases.push(value);
+        let mut value = request();
+        value.scope.start_us = i64::MIN;
+        cases.push(value);
+        let mut value = request();
+        value.scope.watermark = -1;
+        cases.push(value);
+        let mut value = request();
+        value.cursor = Some(RowCursor {
+            timestamp_us: 0,
+            ingest_seq: 0,
+            record_id: String::new(),
+        });
+        cases.push(value);
+        let mut value = request();
+        value.cursor = Some(RowCursor {
+            timestamp_us: 0,
+            ingest_seq: 1,
+            record_id: "x".repeat(MAX_FILTER_STRING_BYTES + 1),
+        });
+        cases.push(value);
+        let mut value = request();
+        value.filters = vec![TypedFilter::KeywordAny {
+            field: KeywordField::Level,
+            values: vec![],
+        }];
+        cases.push(value);
+        let mut value = request();
+        value.filters = vec![TypedFilter::KeywordAny {
+            field: KeywordField::Level,
+            values: vec!["x".into(); MAX_FILTER_VALUES + 1],
+        }];
+        cases.push(value);
+        let mut value = request();
+        value.filters = vec![TypedFilter::JsonEq {
+            path: String::new(),
+            value: JsonScalar::Bool(true),
+        }];
+        cases.push(value);
+        let mut value = request();
+        value.filters = vec![TypedFilter::JsonEq {
+            path: "bad\\".into(),
+            value: JsonScalar::Bool(true),
+        }];
+        cases.push(value);
+        let mut value = request();
+        value.filters = vec![TypedFilter::JsonEq {
+            path: "x".into(),
+            value: JsonScalar::F64(f64::NAN),
+        }];
+        cases.push(value);
+        let mut value = request();
+        value.filters = vec![TypedFilter::JsonI64Range {
+            path: "x".into(),
+            lower: I64Bound::Included(2),
+            upper: I64Bound::Excluded(1),
+        }];
+        cases.push(value);
+        let mut value = request();
+        value.filters = vec![
+            TypedFilter::KeywordAny {
+                field: KeywordField::Level,
+                values: vec!["x".into()]
+            };
+            MAX_FILTERS + 1
+        ];
+        cases.push(value);
+        for value in cases {
+            assert!(validate_request(&value).is_err());
+        }
+    }
+
+    #[test]
+    fn query_validation_and_building_cover_typed_filters_and_empty_scopes() {
+        assert!(validate_query_text("").is_ok());
+        assert!(validate_query_text("(").is_err());
+        let clauses = (0..=MAX_QUERY_CLAUSES)
+            .map(|index| format!("term{index}"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        assert!(validate_query_text(&clauses).is_err());
+        let mut nested = tantivy::query_grammar::parse_query("x").unwrap();
+        for _ in 0..=MAX_QUERY_DEPTH {
+            nested = UserInputAst::Boost(Box::new(nested), 1.0.into());
+        }
+        assert!(ast_cost(&nested, 1).1 > MAX_QUERY_DEPTH);
+
+        let schema = schema::build();
+        for scalar in [
+            JsonScalar::String("x".into()),
+            JsonScalar::I64(-1),
+            JsonScalar::U64(1),
+            JsonScalar::F64(1.5),
+            JsonScalar::Bool(true),
+        ] {
+            assert!(
+                filter_query(
+                    &schema,
+                    &TypedFilter::JsonEq {
+                        path: "duration".into(),
+                        value: scalar
+                    }
+                )
+                .is_ok()
+            );
+        }
+        for bound in [
+            I64Bound::Unbounded,
+            I64Bound::Included(1),
+            I64Bound::Excluded(1),
+        ] {
+            assert!(
+                filter_query(
+                    &schema,
+                    &TypedFilter::JsonI64Range {
+                        path: "duration".into(),
+                        lower: bound,
+                        upper: I64Bound::Unbounded
+                    }
+                )
+                .is_ok()
+            );
+        }
+        assert!(
+            filter_query(
+                &schema,
+                &TypedFilter::KeywordAny {
+                    field: KeywordField::Service,
+                    values: vec!["api".into()]
+                }
+            )
+            .is_ok()
+        );
+        assert!(scoped_query(&schema, "", &request().scope, &[]).is_ok());
+        let mut empty = request();
+        empty.scope.project_ids.clear();
+        assert!(search(&[], &empty).unwrap().rows.is_empty());
+        empty.scope.time_field = TimeField::ReceivedAt;
+        assert!(search_live(&[], &empty, 0).unwrap().rows.is_empty());
+        assert!(search_live(&[], &empty, -1).is_err());
+    }
+}
