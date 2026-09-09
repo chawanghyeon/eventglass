@@ -1,6 +1,6 @@
 # 품질·CI·pre-commit 실행 설계
 
-이 문서는 품질 기준과 아직 완료되지 않은 RC 검증 요구사항이다. 실제 검사 명령은 scripts/check, CI 구성은 .github/workflows/ci.yml을 따른다. 단계별 검증 결과는 커밋 메시지·CI·자원 검사 JSON에 기록한다.
+이 문서는 품질 기준과 아직 완료되지 않은 RC 검증 요구사항이다. 실제 검사 명령은 scripts/check, 배포 workflow는 .github/workflows/deploy.yml을 따른다. 단계별 검증 결과는 커밋 메시지와 로컬 자원 검사 JSON에 기록한다.
 
 ## 1. 검사 계층
 
@@ -8,17 +8,18 @@
 |---|---|---|---|
 | pre-commit | staged 변경 commit 전 | syntax/format/secrets/작은 설정 검사 | warm cache 15초 내외 |
 | pre-push | push 전 | Rust lint/unit, web type/lint/unit | warm cache 3분 내외 |
-| PR required | 모든 PR/main push/merge queue | 단일 runner의 quick/web/rust/contracts/integration/crash smoke | 12분 hard timeout |
-| local extended | 배포 후보 준비 | SDK live/E2E/S3-compatible/resource/security/성능 | 개발 머신의 격리 Docker 환경 |
+| pre-push release | main push 직전 | 변경 관련 hook 검사와 정확한 ARM64 artifact staging | 로컬 머신 |
+| GitHub deploy | main push | 미리 staging된 commit SHA 활성화와 readiness 확인 | 3분 hard timeout |
+| local extended | 필요 시 배포 후보 준비 | SDK live/E2E/S3-compatible/resource/security/성능 | 개발 머신의 격리 Docker 환경 |
 | release candidate | 배포 후보 | 전체 복구/10M benchmark/multiarch image/upgrade 검증 | 로컬 전용 실행 환경 |
 
-2026-09-09 사용자 비용 지시에 따라 GitHub-hosted CI는 단일 required job만 사용한다. 예약·수동 Capacity workflow와 병렬 Docker/SDK/S3/resource/security/release job은 GitHub Actions에서 실행하지 않는다. 무거운 검사는 제품에서 삭제하지 않고 로컬 배포 후보 검증으로 실행한다.
+2026-09-09 사용자 비용 지시에 따라 GitHub Actions는 로컬에서 검증하고 staging한 commit을 활성화하는 배포만 담당한다. 예약·수동 Capacity workflow와 test/build job은 GitHub Actions에서 실행하지 않는다. 무거운 검사는 제품에서 삭제하지 않고 필요할 때만 로컬 배포 후보 검증으로 실행한다.
 
-hook에서 E2E·Docker pull·SDK 설치·전체 Cargo build를 매 commit 실행하지 않는다. 로컬 hook은 편의 장치, CI는 제출 결과를 검증하는 필수 장치다.
+hook에서 E2E·Docker pull·SDK 설치·전체 Cargo build를 매 commit 실행하지 않는다. 변경 파일에 맞는 빠른 로컬 hook이 push를 막고, GitHub Actions는 검증을 반복하지 않고 정확한 commit만 활성화한다.
 
 ## 2. 실행 명령의 단일 진입점
 
-POSIX shell script는 repo root를 직접 찾고 `set -eu`를 쓴다. pipefail이 필요하면 Bash를 명시한다. CI와 로컬은 동일 script를 호출한다. CI에서만 test selector를 바꾸지 않는다. Python helper는 stdlib 우선이며 필요 도구는 버전 고정한다.
+POSIX shell script는 repo root를 직접 찾고 `set -eu`를 쓴다. pipefail이 필요하면 Bash를 명시한다. 검사와 build는 로컬 script를 단일 진입점으로 사용한다. Python helper는 stdlib 우선이며 필요 도구는 버전 고정한다.
 
 | 명령 | 책임 |
 |---|---|
@@ -38,7 +39,7 @@ POSIX shell script는 repo root를 직접 찾고 `set -eu`를 쓴다. pipefail�
 
 `bootstrap`은 .git hook 설치 여부를 명시적으로 출력하며 의존성 lock을 바꾸지 않는다. 사용자 global git config를 변경하지 않는다. 도구가 없거나 버전이 다르면 설치할 정확한 명령을 알려주고 실패한다. 네트워크 설치 실패를 무시하지 않는다.
 
-P00에서 없는 제품 target을 `if exists then test else success`로 처리하지 않는다. P00은 `bootstrap-ci`만 정의하고 P01부터 required jobs를 실제 target과 같이 추가한다. P02부터 `all`은 frontend test 부재를 허용하지 않는다. 후속 기능의 검증은 구현 PR에 함께 추가한다.
+없는 제품 target을 `if exists then test else success`로 처리하지 않는다. P02부터 `all`은 frontend test 부재를 허용하지 않는다. 후속 기능의 검증은 구현 변경과 함께 추가하되 GitHub runner가 아니라 로컬 검사 계층에 연결한다.
 
 Rust 기본 명령:
 
@@ -55,7 +56,7 @@ cargo test --locked --test sdk
 
 crash 전용 명령은 `cargo test --locked --features failpoints --test crash`다. PR selector는 crash test module `smoke::`로 고정하고 runner가 실행 테스트 수를 확인한다. `cargo test` 필터가 0건이어도 exit 0일 수 있으므로 0 test를 통과로 인정하지 않는다.
 
-`--all-features`를 production build에 무조건 쓰지 않는다. CI에는 default, failpoints, embed-ui, S3 각각의 check/test build가 있으며 feature 조합 충돌을 확인한다. release binary는 `--features embed-ui,s3`로 만들고 failpoints를 포함하지 않는다.
+`--all-features`를 production build에 무조건 쓰지 않는다. default, failpoints, embed-ui, S3 조합은 필요할 때 로컬 확장 검사에서 확인한다. release binary는 `--features embed-ui,s3`로 만들고 failpoints를 포함하지 않는다.
 
 Frontend npm scripts 계약:
 
@@ -70,7 +71,7 @@ Frontend npm scripts 계약:
 }
 ```
 
-Vitest no-tests pass 옵션 금지. OpenAPI codegen은 임시 출력에 재생성해 tracked generated.ts와 비교한다. CI에서 `npm install`/`cargo update`/format --write로 lock/source를 고치지 않는다. 검사 전후 tracked tree와 생성되어야 할 untracked 결과를 확인한다.
+Vitest no-tests pass 옵션 금지. OpenAPI codegen은 임시 출력에 재생성해 tracked generated.ts와 비교한다. 검사 중 `npm install`/`cargo update`/format --write로 lock/source를 고치지 않는다. 검사 전후 tracked tree와 생성되어야 할 untracked 결과를 확인한다.
 
 ## 3. pre-commit 구성
 
@@ -97,30 +98,27 @@ pre-commit run --all-files --hook-stage pre-push
 
 외부 hook은 실제 검증한 immutable revision에 고정한다. local `language: system`은 bootstrap의 도구 버전 검사와 짝지어 사용한다. Node hook에서 `npx`가 누락 패키지를 인터넷에서 자동 설치하게 하지 않는다. local binary 또는 npm script만 사용한다.
 
-CI는 전체 파일 범위로 hook을 다시 실행한다. `SKIP`, `--no-verify`로 로컬에서 건너뛰어도 CI를 우회하지 못한다. 에이전트는 검사 실패를 숨기려고 이런 옵션을 사용하지 않는다. 예외가 필요하면 원인·범위·만료일을 기록하고 필수 불변조건 테스트를 제외하지 않는다.
+에이전트는 검사 실패를 숨기려고 `SKIP`이나 `--no-verify`를 사용하지 않는다. 예외가 필요하면 원인·범위·만료일을 기록하고 필수 불변조건 테스트를 제외하지 않는다. pre-push 마지막 단계는 현재 commit의 ARM64 artifact를 root-owned 원격 수신기에 staging하며, 이 단계가 실패하면 push도 실패한다.
 
-## 4. PR workflow와 필수 gate
+## 4. GitHub 배포 workflow
 
-GitHub Actions 기준. P00에 Git remote/provider를 확인하고 실제 repository settings 권한이 없다면 required-check 설정은 미적용으로 보고한다. YAML 파일 추가만으로 branch protection이 켜졌다고 주장하지 않는다.
+GitHub Actions는 main에 push된 commit을 배포하는 최소 제어면이다. 로컬 pre-push가 현재 commit의 검사와 artifact staging을 완료하지 못하면 push 자체를 실패시킨다.
 
-최종 `.github/workflows/ci.yml` 계약:
+최종 `.github/workflows/deploy.yml` 계약:
 
-- events: pull_request, main push, merge_group. PR 필수 workflow 자체에 paths-ignore를 넣지 않는다.
+- event는 main push와 명시적 재실행만 허용한다.
 - permissions 기본 `contents: read`. 불필요한 write/id-token/secrets 권한 없음.
-- concurrency는 workflow + PR 번호 또는 ref, superseded PR cancel-in-progress=true.
-- 각 job timeout-minutes 지정. 실패/취소도 required gate가 실패하도록 처리.
-- checkout action은 persist-credentials=false. 모든 외부 action은 확인한 full commit SHA로 고정하고 주석에 release tag 표기.
-- 중복 checkout/setup/compile 비용을 피하려고 단일 `required` job 안에서 핵심 검사를 순서대로 실행한다.
+- production concurrency는 직렬화하고 실행 중 배포를 취소하지 않는다.
+- checkout, toolchain setup, dependency install, test, build, artifact upload를 수행하지 않는다.
+- 3분 timeout 안에서 제한된 SSH key로 `activate <commit>`만 전송한다.
 
-| Job ID | GitHub-hosted 범위 | 로컬로 분리한 범위 |
+| Job ID | GitHub-hosted 범위 | 로컬 범위 |
 |---|---|---|
-| required | hooks, web, Rust lint/unit/doc, contracts, integration, crash smoke | SDK live/E2E, S3-compatible, resource, benchmark, security, release artifact/container |
+| deploy | staging된 정확한 SHA 활성화와 서버 readiness | 모든 검사, build, immutable artifact staging |
 
-P00에서는 gate 이름 `bootstrap-ci`를 사용한다. P01 이후 안정된 최종 이름 `required`로 전환한다. 이후 stage 활성화는 workflow diff와 work-packages evidence를 함께 변경한다. 명시적으로 아직 만들지 않은 미래 job을 가짜 green job으로 만들지 않는다.
+배포 수신기는 commit별 immutable bytes와 SHA-256을 확인하고, binary 내장 revision이 요청 SHA와 일치할 때만 staging한다. 활성화 실패 시 직전 binary로 되돌리고 readiness 실패를 성공으로 처리하지 않는다.
 
-required job은 각 명령을 `set -e`인 step에서 순서대로 실행한다. skipped/cancelled/failure를 성공으로 인정하지 않고 `continue-on-error`를 사용하지 않는다. 필수 job을 동적 paths 조건으로 통째로 skip하지 않는다.
-
-보호 설정: main 직접 push 제한, required 통과, stale approval/branch 최신성 정책은 팀 설정에 맞춰 명시, force push 금지. contributor 수를 모르는 상태에서 존재하지 않는 reviewer 계정을 CODEOWNERS에 적지 않는다. 단독 개발 저장소도 required CI는 유지한다. 외부 설정이 적용되지 않았으면 마지막 인수인계에 별도 표시한다.
+현재 운영 방식은 main 직접 push다. force push 없이 pre-push 검증과 staging을 통과한 commit만 올리고, 배포 workflow 실패는 운영 반영 실패로 취급한다.
 
 ### CI 보안과 공급망
 
@@ -152,13 +150,13 @@ failpoint names는 `inbox.before_commit`, `inbox.after_commit`, `index.after_add
 
 환경변수로 production binary에서 crash를 일으킬 수 없어야 한다. feature compile-time 제거, release 기능 목록 검사, production에서 failpoint 인자가 거절/무시되는 smoke를 함께 둔다.
 
-PR은 대표 지점 각 1회, nightly는 모든 지점 seed 5개, RC는 seed 20개를 기본으로 한다. 반복 실패를 자동 재시도 후 green으로 덮지 않는다. flaky test는 원인/격리 기간/대체 증거가 필요하며 durability/security 핵심 gate는 격리할 수 없다.
+일상 변경은 관련 대표 지점만 실행하고, 로컬 확장 검사는 모든 지점 seed 5개, RC는 seed 20개를 기본으로 한다. 반복 실패를 자동 재시도 후 green으로 덮지 않는다. flaky test는 원인/격리 기간/대체 증거가 필요하며 durability/security 핵심 gate는 격리할 수 없다.
 
-test artifacts는 JUnit 또는 구조화 result JSON, sanitized server log, test seed, version manifest, Playwright 실패 trace/screenshot이다. 실제 secret/원본 사용자 payload는 artifact로 올리지 않는다. CI 보관 14일, benchmark/evidence 보고는 release별 보존. 성공 로그를 불필요하게 수백 MiB 업로드하지 않는다.
+test artifacts는 JUnit 또는 구조화 result JSON, sanitized server log, test seed, version manifest, Playwright 실패 trace/screenshot이다. 실제 secret/원본 사용자 payload는 저장하지 않는다. benchmark/evidence 보고는 release별로 로컬 보존한다.
 
 ## 6. SDK 실전 검증
 
-오프라인 fixture replay와 실제 SDK 송신을 분리한다. PR fixture replay는 네트워크/SDK 설치 없이 실행한다. nightly와 RC는 고정 SDK의 최소 앱을 실제 실행하여 Eventglass HTTP endpoint로 보낸다.
+오프라인 fixture replay와 실제 SDK 송신을 분리한다. fixture replay는 네트워크/SDK 설치 없이 실행한다. 로컬 확장 검사와 RC는 고정 SDK의 최소 앱을 실제 실행하여 Eventglass HTTP endpoint로 보낸다.
 
 | 앱 | 실제 검증할 흐름 |
 |---|---|

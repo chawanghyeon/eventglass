@@ -65,3 +65,11 @@ repos:
         pass_filenames: false
         require_serial: true
         stages: [pre-push]
+      - id: pre-push-deploy
+        name: stage verified deployment
+        entry: ./scripts/deploy
+        language: system
+        pass_filenames: false
+        require_serial: true
+        always_run: true
+        stages: [pre-push]

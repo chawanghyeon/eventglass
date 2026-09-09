@@ -1,0 +1,57 @@
+#!/bin/sh
+# Install the root-owned deployment boundary and a restricted GitHub deploy key.
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
+HOST=${DEPLOY_HOST_ALIAS:-oracle}
+PUBLIC_KEY=${1:?usage: scripts/provision-deploy path-to-github-deploy-key.pub}
+
+ssh-keygen -lf "$PUBLIC_KEY" >/dev/null
+scp "$ROOT/deploy/receiver.py" "$ROOT/deploy/recv.sh" \
+    "$ROOT/deploy/eventglass.service" "$ROOT/deploy/eventglass.env" \
+    "$ROOT/deploy/eventglass.caddy" "$PUBLIC_KEY" "$HOST:/tmp/"
+ssh -o BatchMode=yes "$HOST" /bin/sh -s -- "$(basename "$PUBLIC_KEY")" <<'REMOTE'
+set -eu
+public_key_file=$1
+deploy_user=$(id -un)
+
+sudo -n id -u eventglass >/dev/null 2>&1 || \
+    sudo -n useradd --system --home /data/eventglass --shell /usr/sbin/nologin eventglass
+sudo -n install -d -m 0700 -o eventglass -g eventglass /data/eventglass
+sudo -n install -d -m 0711 -o root -g root /data/eventglass-deploy
+sudo -n install -d -m 0755 -o root -g root /usr/local/lib/eventglass-deploy /etc/eventglass /etc/caddy/sites
+sudo -n install -o root -g root -m 0644 /tmp/receiver.py /usr/local/lib/eventglass-deploy/receiver.py
+sudo -n install -o root -g root -m 0755 /tmp/recv.sh /usr/local/sbin/eventglass-deploy-recv
+sudo -n install -o root -g root -m 0644 /tmp/eventglass.service /etc/systemd/system/eventglass.service
+sudo -n install -o root -g eventglass -m 0640 /tmp/eventglass.env /etc/eventglass/eventglass.env
+sudo -n install -o root -g root -m 0644 /tmp/eventglass.caddy /etc/caddy/sites/eventglass.caddy
+grep -Fqx 'import /etc/caddy/sites/*.caddy' /etc/caddy/Caddyfile || \
+    printf '\nimport /etc/caddy/sites/*.caddy\n' | sudo -n tee -a /etc/caddy/Caddyfile >/dev/null
+sudo -n caddy validate --config /etc/caddy/Caddyfile
+
+printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/eventglass-deploy-recv\n' "$deploy_user" \
+    > /tmp/eventglass-deploy.sudoers
+printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/eventglass-deploy-recv activate\n' "$deploy_user" \
+    >> /tmp/eventglass-deploy.sudoers
+sudo -n visudo -cqf /tmp/eventglass-deploy.sudoers
+sudo -n install -o root -g root -m 0440 /tmp/eventglass-deploy.sudoers /etc/sudoers.d/eventglass-deploy
+
+key=$(awk 'NR==1 && $1=="ssh-ed25519" {print $1 " " $2}' "/tmp/$public_key_file")
+[ -n "$key" ]
+mkdir -p "$HOME/.ssh"
+chmod 700 "$HOME/.ssh"
+touch "$HOME/.ssh/authorized_keys"
+awk '!/eventglass-github-actions$/' "$HOME/.ssh/authorized_keys" > "$HOME/.ssh/authorized_keys.new"
+printf 'restrict,command="sudo -n /usr/local/sbin/eventglass-deploy-recv activate" %s eventglass-github-actions\n' "$key" \
+    >> "$HOME/.ssh/authorized_keys.new"
+mv "$HOME/.ssh/authorized_keys.new" "$HOME/.ssh/authorized_keys"
+chmod 600 "$HOME/.ssh/authorized_keys"
+
+sudo -n systemctl daemon-reload
+sudo -n systemctl enable eventglass >/dev/null
+sudo -n systemctl reload caddy
+rm -f /tmp/receiver.py /tmp/recv.sh /tmp/eventglass.service /tmp/eventglass.env \
+    /tmp/eventglass.caddy "/tmp/$public_key_file" /tmp/eventglass-deploy.sudoers
+REMOTE
+printf 'provision-deploy: installed receiver and restricted key on %s\n' "$HOST"

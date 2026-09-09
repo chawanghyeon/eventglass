@@ -23,7 +23,7 @@ G01–G06은 자동 Rust contracts target로 남긴다. G07의 캡처 결과는 
 
 선행: 이 인수인계 문서 전체.
 
-산출물: rust-toolchain.toml, Cargo.toml/Cargo.lock, 최소 src/lib.rs/main.rs, scripts/check/bootstrap, .pre-commit-config.yaml, 도구 lock, .github/workflows/ci.yml bootstrap-ci, PR template, CONTRIBUTING.md, .gitignore 보완. dependency가 없는 placeholder CI를 만들지 말고 최소 executable/version 테스트를 포함한다.
+산출물: rust-toolchain.toml, Cargo.toml/Cargo.lock, 최소 src/lib.rs/main.rs, scripts/check/bootstrap, .pre-commit-config.yaml, 도구 lock, 로컬 검사와 배포 전용 .github/workflows/deploy.yml, PR template, CONTRIBUTING.md, .gitignore 보완. GitHub Actions에서는 test/build를 반복하지 않는다.
 
 검증: clean checkout에서 bootstrap → hooks → fmt/check/clippy/test. script/tool 누락을 의도적으로 만들어 비정상 exit 확인. workflow 문법 검사. git hook 설치 결과와 remote branch protection 적용 여부를 별도로 기록한다.
 
@@ -133,7 +133,7 @@ G01–G06은 자동 Rust contracts target로 남긴다. G07의 캡처 결과는 
 
 선행: P03–P10.
 
-산출물: FastAPI/Celery/Browser/Node/Go 실제 SDK app, 고정 버전/lock/fixture 생성기, nightly workflow, auth/privacy/archive/security regression, upgrade fixtures.
+산출물: FastAPI/Celery/Browser/Node/Go 실제 SDK app, 고정 버전/lock/fixture 생성기, 로컬 확장 검사, auth/privacy/archive/security regression, upgrade fixtures.
 
 검증: 로그 레벨·DEBUG 기본/opt-in·ERROR Event+Log·flush/fork·CORS·Unicode; DB/WAL/snapshot/native store/log scrub; production failpoints 제거.
 
@@ -153,17 +153,17 @@ G01–G06은 자동 Rust contracts target로 남긴다. G07의 캡처 결과는 
 
 | Test ID | 원안 요구 | 구현 | 필수 증거/실행 |
 |---|---|---|---|
-| T01 | §5/8 SDK protocol/atomic ACK | P03/P11 | sdk replay PR, actual SDK nightly/RC |
+| T01 | §5/8 SDK protocol/atomic ACK | P03/P11 | sdk replay, actual SDK local extended/RC |
 | T02 | §6/7 identity/privacy | P03 | golden IDs + DB/WAL/store/log sentinel PR |
-| T03 | §9–11 durability/dedupe | P04 | file-backed recovery PR + full SIGKILL nightly |
+| T03 | §9–11 durability/dedupe | P04 | file-backed recovery + full SIGKILL local extended |
 | T04 | §12 grouping/lifecycle | P05 | resolve/backlog/concurrent finalize PR |
 | T05 | §13–17 native search/auth/paging | P06 | single dataset oracle + W pagination PR |
 | T06 | §18 exact aggregation | P07 | global winner + 20,001 bucket PR |
 | T07 | §19 Live/correlation | P10 | disconnect/late/lag/scope E2E PR |
-| T08 | §20/21/24 seal/startup | P08 | manifest/active fault matrix nightly |
+| T08 | §20/21/24 seal/startup | P08 | manifest/active fault matrix local extended |
 | T09 | §22–24 checkpoint/full loss | P09 | local+compatible PR, actual S3 RC |
-| T10 | §25/26 disk/pin/timeout | P08/P12 | race unit PR, isolated quota/cgroup nightly |
-| T11 | §27 alert/outbox | P10 | send-crash/retry/revision/SSRF PR/nightly |
+| T10 | §25/26 disk/pin/timeout | P08/P12 | race unit, isolated quota/cgroup local extended |
+| T11 | §27 alert/outbox | P10 | send-crash/retry/revision/SSRF local extended |
 | T12 | §28/29 UI/auth | P02/P05/P10 | admin/member E2E, XSS/CSRF PR |
 | T13 | §30/31 operation/format | P02/P12 | doctor nonmutation/upgrade/release image RC |
 | T14 | §34–36 low resource/DoD | P12 | 100K/1M/10M versioned report RC |
