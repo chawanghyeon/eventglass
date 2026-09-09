@@ -25,7 +25,7 @@ G01–G06은 자동 Rust contracts target로 남긴다. G07의 캡처 결과는 
 
 산출물: rust-toolchain.toml, Cargo.toml/Cargo.lock, 최소 src/lib.rs/main.rs, scripts/check/bootstrap, .pre-commit-config.yaml, 도구 lock, 로컬 검사와 배포 전용 .github/workflows/deploy.yml, PR template, CONTRIBUTING.md, .gitignore 보완. GitHub Actions에서는 test/build를 반복하지 않는다.
 
-검증: clean checkout에서 bootstrap → hooks → fmt/check/clippy/test. script/tool 누락을 의도적으로 만들어 비정상 exit 확인. workflow 문법 검사. git hook 설치 결과와 remote branch protection 적용 여부를 별도로 기록한다.
+검증: clean checkout에서 bootstrap → hooks → fmt/check/clippy/test. script/tool 누락을 의도적으로 만들어 비정상 exit 확인. workflow 문법과 git hook 설치 결과를 확인한다.
 
 완료: 새 개발자가 문서 명령으로 같은 도구 버전과 최소 바이너리를 재현한다. 실제 설치하지 못한 외부 repository 설정은 미적용으로 표시.
 

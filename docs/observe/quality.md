@@ -128,7 +128,7 @@ Rust advisory/license는 cargo-deny, npm은 npm audit의 machine-readable 결과
 
 `deny.toml`은 licenses allowlist와 source 정책을 기록한다. 프로젝트 배포 license는 소유자의 선택 사항이므로 임의 MIT/Apache license를 선언하지 않는다. 의존성 license 목록과 notice 산출물은 만들어 검토 가능하게 한다.
 
-cache key는 OS/arch/toolchain/lock hash를 포함한다. 비신뢰 PR cache가 trusted release 산출물을 덮지 못하게 scope를 분리한다. 캐시 hit가 없어도 모든 job이 통과해야 한다. release는 PR 업로드 binary를 그대로 승격하지 않고 trusted commit에서 빌드한다.
+GitHub workflow는 cache와 artifact upload를 사용하지 않는다. 배포 binary는 push 직전 로컬에서 현재 commit을 넣어 빌드하고 서버 수신기가 내장 revision과 checksum을 검증한다.
 
 ## 5. 실패 재현과 테스트 산출물
 
@@ -174,9 +174,9 @@ SDK가 기능을 지원하지 않으면 버전 표에 unsupported/이유를 남�
 
 ## 7. S3·디스크·자원 검사
 
-PR storage job은 고정 digest의 검증 가능한 S3-compatible test server를 격리 실행한다. localhost ephemeral credential만 사용한다. AWS S3 실제 계약은 RC의 OIDC+전용 bucket/prefix에서 별도로 검사한다. 권한/예산이 없으면 AWS 검증은 BLOCKED이며 release 완료로 표시하지 않는다.
+로컬 storage 검사는 고정 digest의 검증 가능한 S3-compatible test server를 격리 실행한다. localhost ephemeral credential만 사용한다. AWS S3 실제 계약은 RC의 전용 bucket/prefix에서 별도로 검사한다. 권한/예산이 없으면 AWS 검증은 BLOCKED이며 release 완료로 표시하지 않는다.
 
-AWS job은 trusted branch + protected environment에서만 실행한다. 고유 run prefix와 installation ID를 사용하고 생성한 테스트 객체만 cleanup한다. bucket 전체 삭제 금지. checksum/multipart/conditional create/list pagination/abort/restore 검사를 실제 SDK로 실행한다. 비용과 artifact에는 object bytes와 요청 수를 기록한다.
+AWS 검사는 로컬의 명시적 RC 명령에서만 실행한다. 고유 run prefix와 installation ID를 사용하고 생성한 테스트 객체만 cleanup한다. bucket 전체 삭제 금지. checksum/multipart/conditional create/list pagination/abort/restore 검사를 실제 SDK로 실행하며 object bytes와 요청 수를 기록한다.
 
 Full-loss test는 **harness가 만든 임시 data_dir**임을 marker와 경로로 확인한 뒤 제거한다. 개발자의 `EVENTGLASS_DATA_DIR`, 홈, repo data 디렉터리를 지우는 명령을 재사용하지 않는다.
 

@@ -1,6 +1,6 @@
 # Eventglass 구현 계약
 
-상태: 구현 전 설계. 원안 §1–39의 v1 기능을 모두 유지한다. 아래 수치 중 원안에 없던 것은 이번 설계의 초기 정책이며, 성능 측정 결과와 함께 변경할 수 있다. 내구성·권한·정확성은 튜닝 대상이 아니다.
+상태: 구현 기준. 원안 §1–39의 v1 기능을 모두 유지한다. 아래 수치 중 원안에 없던 것은 이번 설계의 초기 정책이며, 성능 측정 결과와 함께 변경할 수 있다. 내구성·권한·정확성은 튜닝 대상이 아니다.
 
 ## 1. 먼저 닫아야 할 설계 공백
 
@@ -15,7 +15,7 @@
 | D07 | 모든 bucket 보존은 API 이름만으로 증명 안 됨 | 초기 spike의 20,001 bucket·다중 segment 반례 테스트를 기능 선행조건으로 둠 |
 | D08 | 20 MiB JSON을 64 MiB 메모리에서 처리 가능하다는 추정 | streaming decode/제한된 Record DOM과 전송 버퍼 소유권으로 설계하고 실제 메모리 gate 적용 |
 | D09 | S3가 켜진 첫 설치와 복구 대상 부재 혼동 | 빈 prefix 확인 후 installation을 조건부 생성. 접근 실패/기존 설치의 checkpoint 부재는 자동 초기화 금지 |
-| D10 | CI가 아직 없는 단계에서 존재하지 않는 검사 성공 처리 | P00은 명시적 bootstrap 단계. P01부터 manifest/test target 부재는 오류 |
+| D10 | 존재하지 않는 검사 성공 처리 | P00은 명시적 bootstrap 단계. P01부터 manifest/test target 부재는 로컬 검사 오류 |
 
 ## 2. 구현 형태와 소유권
 
@@ -61,7 +61,7 @@ rusqlite connection을 Tokio worker에서 긴 동기 호출에 쓰지 않는다.
 
 ## 3. 버전·타입·스키마
 
-Rust는 P00에서 사용 가능한 stable의 **숫자 버전**을 `rust-toolchain.toml`에 기록한다. 로컬 확인값은 1.97.1이며 CI Linux와 의존성 호환성은 아직 미검증이다. Tantivy는 원안 기준 `=0.26.1`을 먼저 검증한다. 변경하면 G01–G08, native format 호환성과 ADR를 함께 갱신한다. 나머지 라이브러리도 P00/P01에서 실제 resolve 후 Cargo.lock을 commit한다. AWS SDK MSRV 때문에 임의 구버전 Rust를 먼저 고정하지 않는다.
+Rust는 P00에서 사용 가능한 stable의 **숫자 버전**을 `rust-toolchain.toml`에 기록한다. 현재 1.97.1을 고정하고 Linux release container와 실제 ARM64 artifact에서 검증한다. Tantivy는 원안 기준 `=0.26.1`을 검증한다. 변경하면 G01–G08, native format 호환성과 ADR를 함께 갱신한다. 나머지 라이브러리도 실제 resolve 후 Cargo.lock을 commit한다. AWS SDK MSRV 때문에 임의 구버전 Rust를 먼저 고정하지 않는다.
 
 Node/npm/Python/Go/SDK/브라우저 버전은 실제 사용 버전과 lockfile을 기록한다. `latest`, 미확인 SHA, placeholder를 출시 manifest에 남기지 않는다. 검증하지 않은 SDK 버전을 지금 임의로 호환 표에 넣지 않는다.
 

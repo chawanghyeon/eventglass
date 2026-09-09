@@ -23,6 +23,6 @@ Rust 1.97.1, Node 22.22.2/npm 10.9.7, Python 3.12를 사용합니다. `./scripts
 
 Hook은 check-only입니다. 필요할 때 `cargo fmt --all`과 `npm --prefix web exec prettier -- --write .`을 실행하고 diff를 검토합니다. `SKIP`·`--no-verify`로 실패를 숨기지 않습니다.
 
-완료하고 검증한 단위로 `main`에 직접 커밋하고 즉시 `git push origin main`을 실행합니다. 커밋 제목은 game-uridogu-com처럼 `feat: 한국어 변경 요약` 형식을 사용하며, 변경에 맞게 `fix`, `perf`, `test`, `docs`, `chore`를 선택합니다. 범위가 필요한 경우 `chore(deploy): …`처럼 붙입니다. 본문에는 필요한 문제 설명, 실제 변경, 실행한 검사와 남은 제한을 간결하게 기록합니다. 이미 공개한 커밋을 메시지 통일만을 위해 재작성하거나, 과거 단계를 소급한 가짜 커밋이나 단계별 Markdown 실행 일지를 만들지 않습니다. CI의 최종 `required` job과 저장소 branch protection 설정은 별개이며 후자는 적용 여부를 확인해야 합니다.
+완료하고 검증한 단위로 `main`에 직접 커밋하고 즉시 `git push origin main`을 실행합니다. 커밋 제목은 game-uridogu-com처럼 `feat: 한국어 변경 요약` 형식을 사용하며, 변경에 맞게 `fix`, `perf`, `test`, `docs`, `chore`를 선택합니다. 범위가 필요한 경우 `chore(deploy): …`처럼 붙입니다. 본문에는 필요한 문제 설명, 실제 변경, 실행한 검사와 남은 제한을 간결하게 기록합니다. 이미 공개한 커밋을 메시지 통일만을 위해 재작성하거나, 과거 단계를 소급한 가짜 커밋이나 단계별 Markdown 실행 일지를 만들지 않습니다. pre-push가 검사와 artifact staging을 담당하고 GitHub의 `Deploy` workflow는 해당 commit 활성화만 담당합니다.
 
 설계 기준은 [원안](docs/observe/source-design.md), [구현 계약](docs/observe/implementation.md), [아키텍처](docs/observe/architecture.md), [검증 기준](docs/observe/quality.md), [단계별 완료 조건](docs/observe/work-packages.md)에 있습니다. 첨부 원안은 그대로 보존합니다.
