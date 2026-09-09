@@ -301,8 +301,7 @@ async fn execute(
     };
     let indexer = state.app.indexer.clone().ok_or_else(unavailable)?;
     let searched_shards = candidate_ids.len();
-    let task = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+    let page = super::run_native(permit, std::time::Duration::from_secs(10), move || {
         let pins = indexer.pin_shards(&candidate_ids)?;
         let shards = pins
             .iter()
@@ -312,26 +311,27 @@ async fn execute(
             })
             .collect::<Vec<_>>();
         query::search(&shards, &request).map_err(anyhow::Error::from)
-    });
-    let page = tokio::time::timeout(std::time::Duration::from_secs(10), task)
-        .await
-        .map_err(|_| ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"))?
-        .map_err(|_| unavailable())?
-        .map_err(|error| {
-            if error
-                .downcast_ref::<query::SearchError>()
-                .is_some_and(query::SearchError::is_bad_request)
-            {
-                invalid()
-            } else if error
-                .downcast_ref::<query::SearchError>()
-                .is_some_and(query::SearchError::is_unprocessable)
-            {
-                ApiError(StatusCode::UNPROCESSABLE_ENTITY, "search_result_too_large")
-            } else {
-                unavailable()
-            }
-        })?;
+    })
+    .await
+    .map_err(|failure| match failure {
+        super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
+        super::NativeTaskFailure::Join => unavailable(),
+    })?
+    .map_err(|error| {
+        if error
+            .downcast_ref::<query::SearchError>()
+            .is_some_and(query::SearchError::is_bad_request)
+        {
+            invalid()
+        } else if error
+            .downcast_ref::<query::SearchError>()
+            .is_some_and(query::SearchError::is_unprocessable)
+        {
+            ApiError(StatusCode::UNPROCESSABLE_ENTITY, "search_result_too_large")
+        } else {
+            unavailable()
+        }
+    })?;
     revalidate_read(&state, &headers, &auth).await?;
     let now = crate::model::now_us()?;
     let next_cursor = if page.has_more {

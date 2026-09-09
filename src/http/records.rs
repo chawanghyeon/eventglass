@@ -149,8 +149,7 @@ pub(super) async fn load_native(
         .try_acquire_owned()
         .map_err(|_| ApiError(StatusCode::TOO_MANY_REQUESTS, "query_busy"))?;
     let indexer = state.app.indexer.clone().ok_or_else(unavailable)?;
-    let task = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+    super::run_native(permit, std::time::Duration::from_secs(10), move || {
         let pins = indexer.pin_shards(&[shard_id])?;
         let published = pins
             .first()
@@ -168,12 +167,13 @@ pub(super) async fn load_native(
                 ingest_seq,
             } => detail::load_occurrence(published, project_id, &record_id, ingest_seq),
         }
-    });
-    tokio::time::timeout(std::time::Duration::from_secs(10), task)
-        .await
-        .map_err(|_| ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"))?
-        .map_err(|_| unavailable())?
-        .map_err(|_| unavailable())
+    })
+    .await
+    .map_err(|failure| match failure {
+        super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
+        super::NativeTaskFailure::Join => unavailable(),
+    })?
+    .map_err(|_| unavailable())
 }
 
 pub(super) fn detail_response(detail: RecordDetail) -> Response {

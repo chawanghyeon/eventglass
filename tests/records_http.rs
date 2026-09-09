@@ -116,12 +116,22 @@ async fn fixture() -> anyhow::Result<(tempfile::TempDir, AppState, Router, Strin
 }
 
 async fn ingest_record(app: &AppState) -> anyhow::Result<()> {
-    let raw = serde_json::to_vec(&json!({
-        "event_id": "01010101010101010101010101010101",
-        "timestamp": "2026-09-08T00:00:00.000001Z",
-        "message": "stored detail",
-        "extra": {"password": SENTINEL, "safe": "retained"}
-    }))?;
+    ingest_value(
+        app,
+        json!({
+            "event_id": "01010101010101010101010101010101",
+            "timestamp": "2026-09-08T00:00:00.000001Z",
+            "message": "stored detail",
+            "extra": {"password": SENTINEL, "safe": "retained"}
+        }),
+        "record-detail-acceptance",
+    )
+    .await
+}
+
+async fn ingest_value(app: &AppState, raw: Value, acceptance_id: &str) -> anyhow::Result<()> {
+    let raw = serde_json::to_vec(&raw)?;
+    let acceptance_id = acceptance_id.to_owned();
     let records = sentry::normalize_store(
         &raw,
         &ProjectContext {
@@ -144,7 +154,7 @@ async fn ingest_record(app: &AppState) -> anyhow::Result<()> {
                     slug: "detail".into(),
                     public_key: "detail-public".into(),
                 },
-                "record-detail-acceptance",
+                &acceptance_id,
                 records,
                 &Default::default(),
             )
@@ -451,6 +461,42 @@ async fn detail_is_exact_scrubbed_and_fails_closed() -> anyhow::Result<()> {
         .await?
         .0,
         StatusCode::FORBIDDEN
+    );
+
+    app.indexer.as_ref().unwrap().shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn large_json_detail_is_returned_complete() -> anyhow::Result<()> {
+    let (_dir, app, router, cookie) = fixture().await?;
+    let payload = "x".repeat(384 * 1024);
+    ingest_value(
+        &app,
+        json!({
+            "event_id": "04040404040404040404040404040404",
+            "timestamp": "2026-09-08T00:00:00.000001Z",
+            "message": "large stored detail",
+            "extra": {"payload": payload}
+        }),
+        "large-record-detail-acceptance",
+    )
+    .await?;
+    let page = search(&router, &cookie).await?;
+    let detail_token = page["rows"][0]["detail_token"].as_str().unwrap();
+
+    let (status, detail) = request(
+        &router,
+        "GET",
+        &format!("/api/records/{detail_token}"),
+        &cookie,
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["raw"]["extra"]["payload"].as_str().unwrap().len(),
+        384 * 1024
     );
 
     app.indexer.as_ref().unwrap().shutdown().await?;

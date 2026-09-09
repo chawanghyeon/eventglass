@@ -269,24 +269,22 @@ async fn catch_up(
             .clone()
             .try_acquire_owned()
             .map_err(|_| "live_query_busy")?;
-        let page = tokio::time::timeout(
-            Duration::from_secs(10),
-            tokio::task::spawn_blocking(move || {
-                let _permit = permit;
-                let pins = indexer.pin_shards(&candidate_ids)?;
-                let shards = pins
-                    .iter()
-                    .map(|pin| SearchShard {
-                        id: pin.published().shard_id.clone(),
-                        searcher: pin.published().searcher.clone(),
-                    })
-                    .collect::<Vec<_>>();
-                query::search_live(&shards, &request, after).map_err(anyhow::Error::from)
-            }),
-        )
+        let page = super::run_native(permit, Duration::from_secs(10), move || {
+            let pins = indexer.pin_shards(&candidate_ids)?;
+            let shards = pins
+                .iter()
+                .map(|pin| SearchShard {
+                    id: pin.published().shard_id.clone(),
+                    searcher: pin.published().searcher.clone(),
+                })
+                .collect::<Vec<_>>();
+            query::search_live(&shards, &request, after).map_err(anyhow::Error::from)
+        })
         .await
-        .map_err(|_| "live_query_timeout")?
-        .map_err(|_| "live_unavailable")?
+        .map_err(|failure| match failure {
+            super::NativeTaskFailure::Timeout => "live_query_timeout",
+            super::NativeTaskFailure::Join => "live_unavailable",
+        })?
         .map_err(|_| "live_unavailable")?;
         for row in page.rows {
             if delivered >= MAX_CATCH_UP_RECORDS || started.elapsed() > Duration::from_secs(10) {
@@ -382,6 +380,16 @@ async fn send_json(
     id: Option<String>,
     data: &str,
 ) -> Result<(), &'static str> {
+    send_json_with_timeout(sender, event_name, id, data, Duration::from_secs(10)).await
+}
+
+async fn send_json_with_timeout(
+    sender: &mpsc::Sender<Result<Event, Infallible>>,
+    event_name: &'static str,
+    id: Option<String>,
+    data: &str,
+    max_wait: Duration,
+) -> Result<(), &'static str> {
     let encoded_bytes = event_name
         .len()
         .checked_add(id.as_ref().map_or(0, String::len))
@@ -395,8 +403,26 @@ async fn send_json(
     if let Some(id) = id {
         event = event.id(id);
     }
-    tokio::time::timeout(Duration::from_secs(10), sender.send(Ok(event)))
+    tokio::time::timeout(max_wait, sender.send(Ok(event)))
         .await
         .map_err(|_| "live_client_too_slow")?
         .map_err(|_| "live_client_closed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Event, Infallible, send_json_with_timeout};
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+
+    #[tokio::test]
+    async fn slow_client_is_bounded_when_the_sse_queue_stays_full() {
+        let (sender, _receiver) = mpsc::channel::<Result<Event, Infallible>>(1);
+        sender.send(Ok(Event::default())).await.unwrap();
+
+        assert_eq!(
+            send_json_with_timeout(&sender, "record", None, "{}", Duration::from_millis(20),).await,
+            Err("live_client_too_slow")
+        );
+    }
 }

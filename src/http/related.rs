@@ -185,8 +185,7 @@ pub(super) async fn related(
         StatusCode::SERVICE_UNAVAILABLE,
         "search_unavailable",
     ))?;
-    let task = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+    let page = super::run_native(permit, std::time::Duration::from_secs(10), move || {
         let pins = indexer.pin_shards(&candidate_ids)?;
         let shards = pins
             .iter()
@@ -196,12 +195,15 @@ pub(super) async fn related(
             })
             .collect::<Vec<_>>();
         search(&shards, &request).map_err(anyhow::Error::from)
-    });
-    let page = tokio::time::timeout(std::time::Duration::from_secs(10), task)
-        .await
-        .map_err(|_| ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"))?
-        .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "search_unavailable"))?
-        .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "search_unavailable"))?;
+    })
+    .await
+    .map_err(|failure| match failure {
+        super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
+        super::NativeTaskFailure::Join => {
+            ApiError(StatusCode::SERVICE_UNAVAILABLE, "search_unavailable")
+        }
+    })?
+    .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "search_unavailable"))?;
     let selected_auth = state
         .app
         .db

@@ -16,6 +16,7 @@ mod search;
 mod system;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use alerts::{
     create as create_alert, delete_alert, deliveries as alert_deliveries, list as alerts,
@@ -110,6 +111,32 @@ impl From<anyhow::Error> for ApiError {
 
 pub(super) type ApiResult<T> = Result<T, ApiError>;
 
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum NativeTaskFailure {
+    Timeout,
+    Join,
+}
+
+pub(super) async fn run_native<T, E, F>(
+    permit: tokio::sync::OwnedSemaphorePermit,
+    timeout: Duration,
+    operation: F,
+) -> Result<Result<T, E>, NativeTaskFailure>
+where
+    T: Send + 'static,
+    E: Send + 'static,
+    F: FnOnce() -> Result<T, E> + Send + 'static,
+{
+    let task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        operation()
+    });
+    tokio::time::timeout(timeout, task)
+        .await
+        .map_err(|_| NativeTaskFailure::Timeout)?
+        .map_err(|_| NativeTaskFailure::Join)
+}
+
 async fn no_store(mut response: Response) -> Response {
     response
         .headers_mut()
@@ -180,4 +207,40 @@ pub fn router(app: AppState) -> Router {
     #[cfg(feature = "embed-ui")]
     let router = router.fallback(assets::serve);
     router
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NativeTaskFailure, run_native};
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::Semaphore;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_timeout_keeps_permit_until_blocking_work_finishes() {
+        let semaphore = Arc::new(Semaphore::new(1));
+        let permit = semaphore.clone().acquire_owned().await.unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let operation = tokio::spawn(run_native(permit, Duration::from_millis(20), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok::<_, ()>(())
+        }));
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(operation.await.unwrap(), Err(NativeTaskFailure::Timeout));
+        assert!(semaphore.clone().try_acquire_owned().is_err());
+
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if semaphore.available_permits() == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 }
