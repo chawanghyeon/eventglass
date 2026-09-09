@@ -119,6 +119,8 @@ mod tests {
             ("https://eventglass.example.test", true),
             ("https://user@example.test", false),
             ("https://example.test/path", false),
+            ("https://example.test/?query=value", false),
+            ("https://example.test/#fragment", false),
         ] {
             let config = Config {
                 addr: "127.0.0.1:0".parse().unwrap(),
@@ -130,6 +132,16 @@ mod tests {
             };
             assert_eq!(config.validate().is_ok(), accepted, "{origin}");
         }
+        let credentialed = format!("https://user:{}@example.test", "password");
+        let config = Config {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            data_dir: PathBuf::from("unused"),
+            base_url: credentialed.parse().unwrap(),
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        };
+        assert!(config.validate().is_err());
     }
 
     #[test]
@@ -163,6 +175,66 @@ mod tests {
             Config {
                 s3_endpoint: Some("http://minio.example.test".parse().unwrap()),
                 ..base
+            }
+            .validate()
+            .is_err()
+        );
+
+        for endpoint in [
+            "ftp://127.0.0.1",
+            "https://user@example.test",
+            "https://example.test/?query=value",
+            "https://example.test/#fragment",
+        ] {
+            assert!(
+                Config {
+                    addr: "127.0.0.1:0".parse().unwrap(),
+                    data_dir: PathBuf::from("unused"),
+                    base_url: "https://eventglass.example.test".parse().unwrap(),
+                    s3_url: Some("s3://eventglass/tenant".into()),
+                    s3_endpoint: Some(endpoint.parse().unwrap()),
+                    s3_initialize: false,
+                }
+                .validate()
+                .is_err(),
+                "{endpoint}"
+            );
+        }
+
+        let credentialed = format!("https://user:{}@example.test", "password");
+        assert!(
+            Config {
+                addr: "127.0.0.1:0".parse().unwrap(),
+                data_dir: PathBuf::from("unused"),
+                base_url: "https://eventglass.example.test".parse().unwrap(),
+                s3_url: Some("s3://eventglass/tenant".into()),
+                s3_endpoint: Some(credentialed.parse().unwrap()),
+                s3_initialize: false,
+            }
+            .validate()
+            .is_err()
+        );
+
+        assert!(
+            Config {
+                addr: "127.0.0.1:0".parse().unwrap(),
+                data_dir: PathBuf::from("unused"),
+                base_url: "https://eventglass.example.test".parse().unwrap(),
+                s3_url: None,
+                s3_endpoint: Some("https://example.test".parse().unwrap()),
+                s3_initialize: false,
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            Config {
+                addr: "127.0.0.1:0".parse().unwrap(),
+                data_dir: PathBuf::from("unused"),
+                base_url: "https://eventglass.example.test".parse().unwrap(),
+                s3_url: None,
+                s3_endpoint: None,
+                s3_initialize: true,
             }
             .validate()
             .is_err()

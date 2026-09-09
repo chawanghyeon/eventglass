@@ -231,6 +231,26 @@ mod tests {
     }
 
     #[test]
+    fn expired_attempts_are_removed_before_enforcing_the_limit() {
+        let limiter = AttemptLimiter {
+            login: Mutex::new(VecDeque::from([Instant::now()])),
+            setup: Mutex::new(VecDeque::new()),
+            limit: 1,
+            window: Duration::ZERO,
+        };
+
+        assert!(limiter.record(AttemptKind::Login).is_ok());
+        assert_eq!(limiter.login.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn password_work_error_has_a_stable_non_sensitive_message() {
+        let error = PasswordWorkError;
+        assert_eq!(error.to_string(), "password work failed");
+        assert_eq!(format!("{error:?}"), "PasswordWorkError");
+    }
+
+    #[test]
     fn token_equality_checks_length_and_content() {
         assert!(secure_eq("same", "same"));
         assert!(!secure_eq("same", "different"));
