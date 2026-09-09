@@ -303,7 +303,7 @@ pub async fn prepare_restore(
         }
         std::fs::rename(&attempt, destination)?;
         File::open(parent)?.sync_all()?;
-        std::mem::forget(guard);
+        drop(guard);
         return Ok(PreparedRestore {
             document,
             directory: destination.to_owned(),

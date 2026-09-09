@@ -227,7 +227,7 @@ impl PinnedSnapshot {
         self.source.execute_batch("ROLLBACK")?;
         fs::rename(&temporary, destination)?;
         File::open(parent)?.sync_all()?;
-        std::mem::forget(guard);
+        drop(guard);
         Ok(SnapshotArtifact {
             cut: self.cut.clone(),
             size,

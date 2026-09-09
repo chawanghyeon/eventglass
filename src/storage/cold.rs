@@ -131,19 +131,24 @@ impl ColdStorage {
     }
 
     pub async fn ensure_local(&self, shard_ids: &[String]) -> Result<usize> {
-        let _permit = self
-            .gate
-            .acquire()
-            .await
-            .context("cold storage is closed")?;
+        let permit = Arc::new(
+            Arc::clone(&self.gate)
+                .acquire_owned()
+                .await
+                .context("cold storage is closed")?,
+        );
         let mut hydrated = 0usize;
         for shard_id in shard_ids {
-            hydrated += usize::from(self.ensure_one(shard_id).await?);
+            hydrated += usize::from(self.ensure_one(shard_id, &permit).await?);
         }
         Ok(hydrated)
     }
 
-    async fn ensure_one(&self, shard_id: &str) -> Result<bool> {
+    async fn ensure_one(
+        &self,
+        shard_id: &str,
+        permit: &Arc<tokio::sync::OwnedSemaphorePermit>,
+    ) -> Result<bool> {
         uuid::Uuid::parse_str(shard_id).context("invalid cold shard ID")?;
         let id = shard_id.to_owned();
         let remote = self
@@ -186,7 +191,7 @@ impl ColdStorage {
             .max(1024 * 1024)
             .checked_mul(2)
             .context("cold shard reservation overflow")?;
-        let _disk_reservation = self.disk.reserve(reservation_bytes)?;
+        let disk_reservation = Arc::new(self.disk.reserve(reservation_bytes)?);
 
         let root = self.data_dir.join("shards");
         std::fs::create_dir_all(&root)?;
@@ -195,7 +200,9 @@ impl ColdStorage {
             let path = existing.clone();
             let installation = self.installation_id.clone();
             let id = shard_id.to_owned();
+            let resources = (Arc::clone(permit), Arc::clone(&disk_reservation));
             let size = tokio::task::spawn_blocking(move || {
+                let _resources = resources;
                 let manifest = super::manifest::verify(&path, &installation, &id)?;
                 super::manifest::local_size(&path, &manifest)
             })
@@ -208,7 +215,7 @@ impl ColdStorage {
             shard_id,
             uuid::Uuid::new_v4()
         ));
-        let cleanup = RemoveFile(compressed.clone());
+        let cleanup = Arc::new(RemoveFile(compressed.clone()));
         let limits = RestoreLimits::default();
         let metadata = self
             .store
@@ -220,7 +227,16 @@ impl ColdStorage {
         );
         let archive_path = compressed.clone();
         let expected_hash = remote.sha256.clone();
-        tokio::task::spawn_blocking(move || verify_file(&archive_path, &expected_hash)).await??;
+        let resources = (
+            Arc::clone(permit),
+            Arc::clone(&disk_reservation),
+            Arc::clone(&cleanup),
+        );
+        tokio::task::spawn_blocking(move || {
+            let _resources = resources;
+            verify_file(&archive_path, &expected_hash)
+        })
+        .await??;
 
         let archive_path = compressed.clone();
         let destination = root.join(shard_id);
@@ -228,7 +244,13 @@ impl ColdStorage {
         let id = shard_id.to_owned();
         let mut cancellation = Cancellation::new();
         let task_cancelled = Arc::clone(&cancellation.flag);
+        let resources = (
+            Arc::clone(permit),
+            Arc::clone(&disk_reservation),
+            Arc::clone(&cleanup),
+        );
         let hydration = tokio::task::spawn_blocking(move || {
+            let _resources = resources;
             archive::hydrate(
                 &archive_path,
                 &destination,

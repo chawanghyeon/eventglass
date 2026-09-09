@@ -63,7 +63,7 @@ pub fn create(
     let artifact = hash_file(&temporary, &mut cancelled)?;
     fs::rename(&temporary, destination)?;
     File::open(parent)?.sync_all()?;
-    std::mem::forget(guard);
+    drop(guard);
     Ok(artifact)
 }
 
@@ -129,7 +129,7 @@ pub fn hydrate(
     File::open(&staging)?.sync_all()?;
     fs::rename(&staging, destination)?;
     File::open(parent)?.sync_all()?;
-    std::mem::forget(guard);
+    drop(guard);
     Ok(verified)
 }
 

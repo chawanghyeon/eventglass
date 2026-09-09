@@ -441,6 +441,20 @@ fn reconcile_empty_orphans(
         if registered.contains(&id) {
             continue;
         }
+        // Hydration publishes only after an atomic rename to a catalog shard ID.
+        // A UUID-named staging directory can never contain the authoritative shard.
+        if id
+            .strip_prefix(".hydrate-")
+            .and_then(|name| name.strip_suffix(".tmp"))
+            .is_some_and(|name| uuid::Uuid::parse_str(name).is_ok())
+        {
+            ensure!(
+                entry.file_type()?.is_dir(),
+                "hydrate staging is not a directory"
+            );
+            std::fs::remove_dir_all(entry.path())?;
+            continue;
+        }
         ensure!(
             entry.file_type()?.is_dir(),
             "unregistered shard entry is not a directory"

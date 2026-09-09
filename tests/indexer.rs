@@ -319,3 +319,21 @@ async fn startup_preserves_an_unregistered_nonempty_native_index_and_fails() -> 
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn interrupted_hydration_staging_does_not_block_startup() -> Result<()> {
+    let (directory, app) = app().await?;
+    let root = directory.path().join("shards");
+    std::fs::create_dir_all(&root)?;
+    let temporary = root.join(format!(".hydrate-{}.tmp", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&temporary)?;
+    std::fs::write(temporary.join("partial-index"), b"interrupted download")?;
+    let app = app.start_core().await?;
+    ensure!(!temporary.exists(), "abandoned hydration was not reclaimed");
+    ensure!(
+        app.indexer.as_ref().unwrap().ready(),
+        "startup did not recover"
+    );
+    app.indexer.as_ref().unwrap().shutdown().await?;
+    Ok(())
+}
