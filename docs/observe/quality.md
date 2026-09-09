@@ -53,7 +53,7 @@ cargo test --locked --test sdk
 
 crash 전용 명령은 `cargo test --locked --features failpoints --test crash`다. PR selector는 crash test module `smoke::`로 고정하고 runner가 실행 테스트 수를 확인한다. `cargo test` 필터가 0건이어도 exit 0일 수 있으므로 0 test를 통과로 인정하지 않는다.
 
-`--all-features`를 production build에 무조건 쓰지 않는다. CI에는 default, failpoints, embed-ui 각각의 check/test build가 있으며 feature 조합 충돌을 확인한다. release binary는 `--features embed-ui`만 추가한다.
+`--all-features`를 production build에 무조건 쓰지 않는다. CI에는 default, failpoints, embed-ui, S3 각각의 check/test build가 있으며 feature 조합 충돌을 확인한다. release binary는 `--features embed-ui,s3`로 만들고 failpoints를 포함하지 않는다.
 
 Frontend npm scripts 계약:
 

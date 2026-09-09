@@ -144,6 +144,7 @@ case "${1:-}" in
     resource) "$REPO_ROOT/scripts/check-resource" ;;
     benchmark-100k) "$REPO_ROOT/scripts/check-benchmark" 100k ;;
     container) "$REPO_ROOT/scripts/check-container" ;;
+    release) "$REPO_ROOT/scripts/release-check" ;;
     security) "$REPO_ROOT/scripts/check-security" ;;
-    *) fail "usage: ./scripts/check {quick|rust|s3-smoke|storage|contracts|web|integration|crash-smoke|embed-smoke|sdk-live|resource|benchmark-100k|container|security}" ;;
+    *) fail "usage: ./scripts/check {quick|rust|s3-smoke|storage|contracts|web|integration|crash-smoke|embed-smoke|sdk-live|resource|benchmark-100k|container|release|security}" ;;
 esac

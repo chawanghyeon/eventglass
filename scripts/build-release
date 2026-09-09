@@ -3,22 +3,30 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
-OUTPUT=${1:-"$ROOT/.tools/release/eventglass-linux-arm64"}
+PLATFORM=${EVENTGLASS_RELEASE_PLATFORM:-linux/arm64}
+case "$PLATFORM" in
+    linux/amd64) ARCH=amd64 ;;
+    linux/arm64) ARCH=arm64 ;;
+    *) printf 'build-release: unsupported platform: %s\n' "$PLATFORM" >&2; exit 1 ;;
+esac
+OUTPUT=${1:-"$ROOT/.tools/release/eventglass-linux-$ARCH"}
 OUTPUT_DIR=$(dirname -- "$OUTPUT")
+ROOTFS="$OUTPUT_DIR/rootfs-$ARCH"
 mkdir -p "$OUTPUT_DIR"
+cleanup() { rm -rf "$ROOTFS"; }
+trap cleanup EXIT HUP INT TERM
 
 docker buildx build \
-    --platform linux/arm64 \
+    --platform "$PLATFORM" \
     --build-arg "EVENTGLASS_REVISION=$(git -C "$ROOT" rev-parse HEAD)" \
     --target artifact \
-    --output "type=local,dest=$OUTPUT_DIR/rootfs" \
+    --output "type=local,dest=$ROOTFS" \
     "$ROOT"
-cp "$OUTPUT_DIR/rootfs/eventglass" "$OUTPUT"
-rm -rf "$OUTPUT_DIR/rootfs"
+cp "$ROOTFS/eventglass" "$OUTPUT"
 chmod 0755 "$OUTPUT"
-case "$(file "$OUTPUT")" in
-    *ELF*ARM\ aarch64*) ;;
-    *) printf 'build-release: output is not a Linux AArch64 ELF binary\n' >&2; exit 1 ;;
+case "$ARCH:$(file "$OUTPUT")" in
+    amd64:*ELF*x86-64* | arm64:*ELF*ARM\ aarch64*) ;;
+    *) printf 'build-release: output does not match %s\n' "$PLATFORM" >&2; exit 1 ;;
 esac
 if command -v sha256sum >/dev/null 2>&1; then
     sha256sum "$OUTPUT"

@@ -29,3 +29,22 @@ Webhook은 HTTPS와 공개 DNS 주소만 허용하고 redirect와 system proxy�
 작업 이력과 단계별 검증 결과는 Git 커밋과 CI에 기록합니다. 별도 단계별 실행 일지는 만들지 않습니다.
 
 실제 SDK 호환성 게이트는 Python Sentry SDK 2.69.0의 기본 로깅·DEBUG opt-in·FastAPI·Celery fork, Node SDK 10.73.0의 Error·Message·structured logs, Browser SDK 10.73.0의 Error·Message·console log와 Chromium cross-origin CORS, Go SDK 0.49.0의 Error·Message를 localhost의 실제 Eventglass 프로세스에 보냅니다. S3-compatible 게이트는 MinIO RELEASE.2025-09-07T16-13-09Z에서 conditional create, pagination, checksum/multipart abort, checkpoint fallback과 전체 로컬 데이터 유실 복구를 검증합니다. 실제 AWS S3 계약은 RC 전 검증 대상이며 현재 지원 완료로 표시하지 않습니다.
+
+## 운영과 복구
+
+기준 운영 자원은 1 CPU와 1 GiB RAM이며 swap 없이 실행하는 CI gate가 있습니다. 100K Record PR benchmark는 더 작은 512 MiB 한도에서 실행합니다. 용량과 지연은 데이터 분포·샤드 수·검색 범위에 따라 달라지므로 배포 전 실제 트래픽과 보존 기간으로 측정해야 합니다.
+
+`EVENTGLASS_S3_URL`의 bucket/prefix는 설치 하나가 단독으로 사용해야 합니다. 현재 명시적으로 검증한 호환 대상은 loopback endpoint의 MinIO RELEASE.2025-09-07T16-13-09Z입니다. 같은 prefix에 두 Eventglass 프로세스를 동시에 연결하면 안 됩니다. checkpoint는 샤드 봉인 경계에서 만들어지므로 고정된 시간 RPO를 보장하지 않습니다. `/api/system/status`의 복구 가능 경계와 backup lag를 감시해야 합니다.
+
+전체 로컬 손실 복구 절차는 다음과 같습니다.
+
+1. 원래 프로세스를 정지하고 다시 시작되지 않게 합니다. 남은 `/data`는 조사와 rollback을 위해 별도 위치에 보존합니다.
+2. 빈 데이터 디렉터리에 기존과 같은 S3 bucket/prefix 및 자격 증명을 설정하고 Eventglass를 시작합니다. 로컬 `meta.db`가 없으면 완료된 최신 checkpoint부터 검증하며, 손상되거나 불완전한 후보는 건너뜁니다.
+3. `/readyz`와 `eventglass doctor`를 확인한 뒤 프로젝트·수신 키·이슈 수와 상태·대표 검색·과거 상세 조회를 대조합니다. 복구 시점보다 나중의 사용자, 이슈 상태 변경, key revoke는 checkpoint로 되돌아갈 수 있습니다.
+4. 복구는 모든 기존 session과 검색 token secret을 무효화합니다. 관리자는 다시 로그인하고 관리자 인증 정보와 프로젝트 수신 키의 회전 필요성을 검토해야 합니다.
+
+업그레이드 전에는 완료 checkpoint와 `/data` 사본을 확보하고 현재 바이너리 경로를 기록합니다. 새 바이너리를 설치한 뒤 서버를 띄우기 전에 `eventglass doctor`로 기존 SQLite schema와 native shard format을 검사하고, 시작 후 `/readyz`와 실제 수신·검색을 확인합니다. 호환하지 않는 native format에는 자동 background reindex가 없으므로 시작 거절 시 이전 바이너리로 돌아가 명시적인 migration 경로를 준비해야 합니다. 새 바이너리가 DB migration을 적용한 뒤에는 이전 바이너리가 해당 schema를 읽는다는 검증 없이 rollback하면 안 됩니다.
+
+## 릴리스 산출물
+
+`./scripts/release-check`는 신뢰한 현재 commit에서 embedded UI와 S3가 포함되고 failpoints가 빠진 Linux amd64/arm64 바이너리를 각각 빌드합니다. `.tools/release/`에 두 ELF 바이너리, SPDX 2.3 dependency inventory, third-party license notice, `SHA256SUMS`를 만들고 모든 checksum과 architecture를 다시 검증합니다. 이 명령은 산출물을 게시하거나 배포하지 않습니다.
