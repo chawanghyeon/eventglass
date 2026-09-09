@@ -299,6 +299,12 @@ paths:
           required: true
           schema:
             $ref: "#/components/schemas/PositiveDecimalString"
+        - name: query
+          in: query
+          description: Literal title substring. ASCII case-insensitive; percent and underscore are literal characters.
+          schema:
+            type: string
+            maxLength: 256
         - name: status
           in: query
           schema:

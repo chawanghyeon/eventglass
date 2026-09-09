@@ -152,6 +152,7 @@ pub fn list(
     actor: i64,
     project_id: i64,
     status: Option<&str>,
+    query: Option<&str>,
     limit: usize,
     cursor: Option<(i64, &str)>,
 ) -> Result<IssuePage> {
@@ -167,6 +168,7 @@ pub fn list(
          FROM issues i
          WHERE i.project_id=?1
            AND (?2 IS NULL OR i.status=?2)
+           AND (?6 IS NULL OR instr(lower(i.title), lower(?6)) > 0)
            AND (?3 IS NULL OR i.last_seen_us<?3 OR (i.last_seen_us=?3 AND i.id>?4))
          ORDER BY i.last_seen_us DESC,i.id ASC
          LIMIT ?5"
@@ -174,7 +176,14 @@ pub fn list(
     let mut statement = db.prepare(&sql)?;
     let mut items = statement
         .query_map(
-            params![project_id, status, cursor_time, cursor_id, fetch_limit],
+            params![
+                project_id,
+                status,
+                cursor_time,
+                cursor_id,
+                fetch_limit,
+                query
+            ],
             issue_from_row,
         )?
         .collect::<std::result::Result<Vec<_>, _>>()?;

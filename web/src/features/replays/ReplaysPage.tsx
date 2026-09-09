@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { FeedbackPanel } from "./FeedbackPanel";
 import { PageMaps } from "./PageMaps";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,6 +20,26 @@ export function ReplaysPage() {
     enabled: !!user,
   });
   const [params, setParams] = useSearchParams();
+  const [draftState, setDraftState] = useState(() => ({
+    source: params.toString(),
+    values: new URLSearchParams(params),
+  }));
+  if (draftState.source !== params.toString()) {
+    setDraftState({
+      source: params.toString(),
+      values: new URLSearchParams(params),
+    });
+  }
+  const draft =
+    draftState.source === params.toString() ? draftState.values : params;
+  function editFilter(name: string, value: string) {
+    const next = new URLSearchParams(draft);
+    if (value) next.set(name, value);
+    else next.delete(name);
+    next.delete("before_started_ms");
+    next.delete("before_id");
+    setDraftState({ source: params.toString(), values: next });
+  }
   const location = useLocation();
   const active = projects.data?.filter((p) => p.is_active) ?? [];
   const selected = params.get("project");
@@ -175,130 +196,175 @@ export function ReplaysPage() {
       {projects.isError && (
         <Notice tone="error">{describeApiError(projects.error)}</Notice>
       )}
-      <div className="replay-filters">
-        <label>
-          프로젝트
-          <select
-            value={project?.id ?? ""}
-            onChange={(e) => change("project", e.target.value)}
-          >
-            <option value="">선택</option>
-            {active.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        {!showFeedback && (
-          <>
-            <label>
-              URL
-              <input
-                placeholder="/products/…"
-                value={params.get("url") ?? ""}
-                onChange={(e) => change("url", e.target.value)}
-              />
-            </label>
-            <label>
-              오류 포함
-              <select
-                value={params.get("has_error") ?? ""}
-                onChange={(e) => change("has_error", e.target.value)}
-              >
-                <option value="">전체</option>
-                <option value="true">있음</option>
-                <option value="false">없음</option>
-              </select>
-            </label>
-          </>
-        )}
-      </div>
-      {!showFeedback && (
-        <details
-          className="disclosure"
-          open={activeFilterCount > 0 || undefined}
-        >
-          <summary>
-            추가 필터
-            {activeFilterCount ? ` · ${activeFilterCount}개 적용 중` : ""}
-          </summary>
-          <div className="replay-filters">
-            {[
-              ["environment", "환경"],
-              ["release", "릴리스"],
-              ["user", "사용자"],
-            ].map(([name, label]) => (
-              <label key={name}>
-                {label}
+      <form
+        className="replay-search-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          setParams(new URLSearchParams(draft));
+        }}
+      >
+        <div className="replay-filters search-toolbar">
+          <label>
+            프로젝트
+            <select
+              value={project?.id ?? ""}
+              onChange={(e) => change("project", e.target.value)}
+            >
+              <option value="">선택</option>
+              {active.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {!showFeedback && (
+            <>
+              <label className="replay-url-search">
+                페이지 검색
                 <input
-                  value={params.get(name) ?? ""}
-                  onChange={(e) => change(name, e.target.value)}
+                  placeholder="/products/…"
+                  value={draft.get("url") ?? ""}
+                  onChange={(event) => editFilter("url", event.target.value)}
                 />
               </label>
-            ))}
-            {[
-              ["rage_click", "Rage click"],
-              ["dead_click", "Dead click"],
-            ].map(([name, label]) => (
-              <label key={name}>
-                {label}
+
+              <label>
+                오류 포함
                 <select
-                  value={params.get(name) ?? ""}
-                  onChange={(e) => change(name, e.target.value)}
+                  value={draft.get("has_error") ?? ""}
+                  onChange={(e) => editFilter("has_error", e.target.value)}
                 >
                   <option value="">전체</option>
                   <option value="true">있음</option>
                   <option value="false">없음</option>
                 </select>
               </label>
-            ))}
-            {[
-              ["started_after_ms", "세션 시작 이후"],
-              ["started_before_ms", "세션 시작 이전"],
-            ].map(([name, label]) => (
-              <label key={name}>
-                {label} (현지 시간)
+            </>
+          )}
+          {!showFeedback && <Button type="submit">검색</Button>}
+        </div>
+        {!showFeedback && (
+          <details className="disclosure">
+            <summary>
+              추가 필터
+              {activeFilterCount ? ` · ${activeFilterCount}개 적용 중` : ""}
+            </summary>
+            <div className="replay-filters">
+              {[
+                ["environment", "환경"],
+                ["release", "릴리스"],
+                ["user", "사용자"],
+              ].map(([name, label]) => (
+                <label key={name}>
+                  {label}
+                  <input
+                    value={draft.get(name) ?? ""}
+                    onChange={(e) => editFilter(name, e.target.value)}
+                  />
+                </label>
+              ))}
+              {[
+                ["rage_click", "Rage click"],
+                ["dead_click", "Dead click"],
+              ].map(([name, label]) => (
+                <label key={name}>
+                  {label}
+                  <select
+                    value={draft.get(name) ?? ""}
+                    onChange={(e) => editFilter(name, e.target.value)}
+                  >
+                    <option value="">전체</option>
+                    <option value="true">있음</option>
+                    <option value="false">없음</option>
+                  </select>
+                </label>
+              ))}
+              {[
+                ["started_after_ms", "세션 시작 이후"],
+                ["started_before_ms", "세션 시작 이전"],
+              ].map(([name, label]) => (
+                <label key={name}>
+                  {label} (현지 시간)
+                  <input
+                    type="datetime-local"
+                    value={localInput(draft.get(name))}
+                    onChange={(event) =>
+                      editFilter(
+                        name,
+                        event.target.value
+                          ? String(new Date(event.target.value).getTime())
+                          : "",
+                      )
+                    }
+                  />
+                </label>
+              ))}
+              <label>
+                최소 시간 (초)
                 <input
-                  type="datetime-local"
-                  value={localInput(params.get(name))}
-                  onChange={(event) =>
-                    change(
-                      name,
-                      event.target.value
-                        ? String(new Date(event.target.value).getTime())
+                  type="number"
+                  min="0"
+                  value={
+                    draft.has("min_duration_ms")
+                      ? Number(draft.get("min_duration_ms")) / 1000
+                      : ""
+                  }
+                  onChange={(e) =>
+                    editFilter(
+                      "min_duration_ms",
+                      e.target.value
+                        ? String(Number(e.target.value) * 1000)
                         : "",
                     )
                   }
                 />
               </label>
-            ))}
-            <label>
-              최소 시간 (초)
-              <input
-                type="number"
-                min="0"
-                value={
-                  params.has("min_duration_ms")
-                    ? Number(params.get("min_duration_ms")) / 1000
-                    : ""
-                }
-                onChange={(e) =>
-                  change(
-                    "min_duration_ms",
-                    e.target.value ? String(Number(e.target.value) * 1000) : "",
-                  )
-                }
-              />
-            </label>
-          </div>
-        </details>
-      )}
+            </div>
+          </details>
+        )}
+      </form>
       {Array.from(params.keys()).some(
         (key) => !["project", "view", "viewport"].includes(key),
       ) && (
         <div className="button-row">
-          <span className="muted">필터가 적용되어 있습니다.</span>
+          <div className="filter-chips" aria-label="적용된 필터">
+            {[
+              ["url", "페이지"],
+              ["has_error", "오류"],
+              ["environment", "환경"],
+              ["release", "릴리스"],
+              ["user", "사용자"],
+              ["rage_click", "Rage click"],
+              ["dead_click", "Dead click"],
+              ["started_after_ms", "시작 이후"],
+              ["started_before_ms", "시작 이전"],
+              ["min_duration_ms", "최소 시간"],
+            ]
+              .filter(([key]) => params.has(key))
+              .map(([key, label]) => (
+                <button
+                  type="button"
+                  key={key}
+                  aria-label={`${label} 조건 삭제`}
+                  onClick={() => change(key, "")}
+                >
+                  {label}:{" "}
+                  {params.get(key) === "true"
+                    ? "있음"
+                    : params.get(key) === "false"
+                      ? "없음"
+                      : key === "min_duration_ms"
+                        ? `${Number(params.get(key)) / 1000}초`
+                        : key.startsWith("started_")
+                          ? new Date(Number(params.get(key))).toLocaleString(
+                              "ko-KR",
+                            )
+                          : params.get(key)}{" "}
+                  ×
+                </button>
+              ))}
+          </div>
           <Button
             variant="quiet"
             onClick={() => {

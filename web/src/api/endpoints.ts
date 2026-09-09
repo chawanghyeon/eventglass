@@ -89,6 +89,7 @@ export const endpoints = {
     input: {
       projectId: string;
       status?: IssueStatus;
+      query?: string;
       cursorLastSeenUs?: string;
       cursorId?: string;
       limit?: number;
@@ -97,6 +98,7 @@ export const endpoints = {
   ) => {
     const query = new URLSearchParams({ project_id: input.projectId });
     if (input.status) query.set("status", input.status);
+    if (input.query) query.set("query", input.query);
     if (input.cursorLastSeenUs)
       query.set("cursor_last_seen_us", input.cursorLastSeenUs);
     if (input.cursorId) query.set("cursor_id", input.cursorId);

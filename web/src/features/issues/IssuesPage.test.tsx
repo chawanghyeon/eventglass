@@ -99,6 +99,7 @@ describe("IssuesPage", () => {
         {
           projectId: projects[0].id,
           status: "resolved",
+          query: "",
           cursorLastSeenUs: "1788800001000000",
           cursorId: "d".repeat(64),
         },
@@ -126,7 +127,7 @@ describe("IssuesPage", () => {
     });
     await waitFor(() =>
       expect(list).toHaveBeenCalledWith(
-        { projectId: projects[0].id, status: "ignored" },
+        { projectId: projects[0].id, status: "ignored", query: "" },
         expect.anything(),
       ),
     );
@@ -137,10 +138,44 @@ describe("IssuesPage", () => {
         {
           projectId: projects[0].id,
           status: "ignored",
+          query: "",
           cursorLastSeenUs: page.next_cursor?.last_seen_us,
           cursorId: page.next_cursor?.id,
         },
         expect.anything(),
+      ),
+    );
+  });
+
+  it("submits title search on Enter, resets pagination, and removes its chip", async () => {
+    const user = userEvent.setup();
+    const list = vi
+      .spyOn(endpoints, "issues")
+      .mockResolvedValue({ items: [makeIssue()], next_cursor: null });
+    renderPage(
+      `/issues?project=${projects[0].id}&cursor_last_seen_us=100&cursor_id=${"d".repeat(64)}`,
+    );
+    await screen.findByText("database failed");
+    const calls = list.mock.calls.length;
+    await user.type(
+      screen.getByRole("textbox", { name: "오류 검색" }),
+      "database",
+    );
+    expect(list).toHaveBeenCalledTimes(calls);
+    await user.keyboard("{Enter}");
+    await waitFor(() =>
+      expect(list).toHaveBeenLastCalledWith(
+        expect.objectContaining({ query: "database", cursorId: undefined }),
+        expect.anything(),
+      ),
+    );
+    expect(screen.getByTestId("location")).not.toHaveTextContent("cursor_id");
+    await user.click(
+      screen.getByRole("button", { name: "오류 검색 조건 삭제" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "오류 검색" })).toHaveValue(
+        "",
       ),
     );
   });

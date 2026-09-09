@@ -36,6 +36,7 @@ export function IssuesPage() {
   const filters = {
     projectId: project?.id ?? "unknown",
     status,
+    query: searchParams.get("query") ?? "",
     cursorLastSeenUs: hasCursor ? cursorLastSeenUs : undefined,
     cursorId: hasCursor ? cursorId : undefined,
   };
@@ -44,9 +45,10 @@ export function IssuesPage() {
     enabled: Boolean(user && project),
   });
 
-  function setFilter(name: "project" | "status", value: string) {
+  function setFilter(name: "project" | "status" | "query", value: string) {
     const next = new URLSearchParams(searchParams);
-    next.set(name, value);
+    if (value) next.set(name, value);
+    else next.delete(name);
     next.delete("cursor_last_seen_us");
     next.delete("cursor_id");
     setSearchParams(next);
@@ -77,7 +79,6 @@ export function IssuesPage() {
     <div className="page-stack">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">오류 추적</p>
           <h1>오류 추적</h1>
           <p>같은 원인의 오류를 묶어 발생 횟수와 상태를 확인합니다.</p>
         </div>
@@ -86,7 +87,31 @@ export function IssuesPage() {
         ) : null}
       </header>
 
-      <div className="issue-filters" aria-label="Issue 필터">
+      <div className="issue-filters search-toolbar" aria-label="Issue 필터">
+        <form
+          className="table-search"
+          key={filters.query}
+          onSubmit={(event) => {
+            event.preventDefault();
+            setFilter(
+              "query",
+              String(
+                new FormData(event.currentTarget).get("query") ?? "",
+              ).trim(),
+            );
+          }}
+        >
+          <label>
+            오류 검색
+            <input
+              name="query"
+              maxLength={256}
+              defaultValue={filters.query}
+              placeholder="오류 제목 검색"
+            />
+          </label>
+          <Button type="submit">검색</Button>
+        </form>
         <label>
           프로젝트
           <select
@@ -124,6 +149,17 @@ export function IssuesPage() {
         </label>
       </div>
 
+      {filters.query && (
+        <div className="filter-chips" aria-label="적용된 필터">
+          <button
+            type="button"
+            onClick={() => setFilter("query", "")}
+            aria-label="오류 검색 조건 삭제"
+          >
+            검색: {filters.query} ×
+          </button>
+        </div>
+      )}
       {projects.isPending ? <Spinner label="프로젝트 불러오는 중" /> : null}
       {projects.isError ? (
         <Notice tone="error">
@@ -170,7 +206,11 @@ export function IssuesPage() {
           <span className="empty-state__mark" aria-hidden="true">
             00
           </span>
-          <h2>{issueStatusLabels[status]} Issue가 없습니다.</h2>
+          <h2>
+            {filters.query
+              ? "검색 조건에 맞는 오류가 없습니다."
+              : `${issueStatusLabels[status]} Issue가 없습니다.`}
+          </h2>
           <p>다른 상태나 프로젝트를 선택해 보세요.</p>
         </div>
       ) : null}

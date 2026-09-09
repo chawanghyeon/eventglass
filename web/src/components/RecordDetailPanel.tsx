@@ -83,7 +83,7 @@ export function RecordDetailPanel({
     retry: false,
   });
 
-  useEffect(() => closeButton.current?.focus(), []);
+  useEffect(() => closeButton.current?.focus({ preventScroll: true }), []);
 
   return (
     <section

@@ -48,7 +48,7 @@ export function LogFilters({
   }
 
   return (
-    <form className="log-filters" onSubmit={submit}>
+    <form className="log-filters search-toolbar" onSubmit={submit}>
       <div className="log-filters__primary">
         <label className="log-filters__query">
           검색어
@@ -59,115 +59,150 @@ export function LogFilters({
             value={query}
           />
         </label>
-        <Button type="submit">검색 적용</Button>
+        <Button type="submit">검색</Button>
       </div>
-      <div className="search-periods" aria-label="빠른 기간">
-        <span>기간</span>
-        {[
-          [15, "15분"],
-          [60, "1시간"],
-          [360, "6시간"],
-          [1440, "24시간"],
-          [10080, "7일"],
-        ].map(([minutes, label]) => (
-          <Button
-            key={minutes}
-            type="button"
-            variant="quiet"
-            onClick={() => {
+      <div className="search-toolbar__options">
+        <label className="period-select">
+          빠른 기간
+          <select
+            aria-label="빠른 기간"
+            value=""
+            onChange={(event) => {
               const now = new Date();
               setStart(
-                new Date(now.getTime() - Number(minutes) * 60000).toISOString(),
+                new Date(
+                  now.getTime() - Number(event.target.value) * 60000,
+                ).toISOString(),
               );
               setEnd(now.toISOString());
             }}
           >
-            {label}
-          </Button>
-        ))}
-      </div>
-      <details className="search-time">
-        <summary>
-          시간 범위 · {formatTime(start)} – {formatTime(end)}
-        </summary>
-        <div className="log-filters__vectors">
-          <label>
-            시작 (RFC3339)
-            <input
-              onChange={(event) => setStart(event.target.value)}
-              required
-              value={start}
-            />
-          </label>
-          <label>
-            종료 (RFC3339)
-            <input
-              onChange={(event) => setEnd(event.target.value)}
-              required
-              value={end}
-            />
-          </label>
-        </div>
-      </details>
-      <details>
-        <summary>
-          프로젝트 ·{" "}
-          {selectedProjects.length
-            ? `${selectedProjects.length}개 선택`
-            : "전체"}
-        </summary>
-        <fieldset className="log-projects">
-          <legend>프로젝트</legend>
-          <span className="muted">
-            {selectedProjects.length
-              ? `${selectedProjects.length}개 선택`
-              : "전체 프로젝트"}
-          </span>
-          <div>
-            {projects
-              .filter((project) => project.is_active)
-              .map((project) => (
-                <label key={project.id}>
-                  <input
-                    checked={selectedProjects.includes(project.id)}
-                    onChange={(event) =>
-                      setSelectedProjects((current) =>
-                        event.target.checked
-                          ? [...current, project.id]
-                          : current.filter((id) => id !== project.id),
-                      )
-                    }
-                    type="checkbox"
-                  />
-                  {project.name}
-                </label>
-              ))}
-          </div>
-        </fieldset>
-      </details>
-      <details>
-        <summary>
-          메타데이터 필터
-          {Object.values(filters).some(Boolean) ? " · 적용 조건 있음" : ""}
-        </summary>
-        <div className="log-filters__vectors">
-          {filterFields.map((field) => (
-            <label key={field}>
-              {labels[field]}
+            <option value="" disabled>
+              기간 선택
+            </option>
+            <option value="15">최근 15분</option>
+            <option value="60">최근 1시간</option>
+            <option value="360">최근 6시간</option>
+            <option value="1440">최근 24시간</option>
+            <option value="10080">최근 7일</option>
+          </select>
+        </label>
+        <details className="search-time">
+          <summary>
+            시간 범위 · {formatTime(start)} – {formatTime(end)}
+          </summary>
+          <div className="log-filters__vectors">
+            <label>
+              시작 (RFC3339)
               <input
-                onChange={(event) =>
-                  setFilters((current) => ({
-                    ...current,
-                    [field]: event.target.value,
-                  }))
-                }
-                placeholder="쉼표로 여러 값 구분"
-                value={filters[field] ?? ""}
+                onChange={(event) => setStart(event.target.value)}
+                required
+                value={start}
               />
             </label>
-          ))}
-        </div>
-      </details>
+            <label>
+              종료 (RFC3339)
+              <input
+                onChange={(event) => setEnd(event.target.value)}
+                required
+                value={end}
+              />
+            </label>
+          </div>
+        </details>
+        <details>
+          <summary>
+            프로젝트 ·{" "}
+            {selectedProjects.length
+              ? `${selectedProjects.length}개 선택`
+              : "전체"}
+          </summary>
+          <fieldset className="log-projects">
+            <legend>프로젝트</legend>
+            <span className="muted">
+              {selectedProjects.length
+                ? `${selectedProjects.length}개 선택`
+                : "전체 프로젝트"}
+            </span>
+            <div>
+              {projects
+                .filter((project) => project.is_active)
+                .map((project) => (
+                  <label key={project.id}>
+                    <input
+                      checked={selectedProjects.includes(project.id)}
+                      onChange={(event) =>
+                        setSelectedProjects((current) =>
+                          event.target.checked
+                            ? [...current, project.id]
+                            : current.filter((id) => id !== project.id),
+                        )
+                      }
+                      type="checkbox"
+                    />
+                    {project.name}
+                  </label>
+                ))}
+            </div>
+          </fieldset>
+        </details>
+        <details>
+          <summary>
+            메타데이터 필터
+            {Object.values(filters).some(Boolean) ? " · 적용 조건 있음" : ""}
+          </summary>
+          <div className="log-filters__vectors">
+            {filterFields.map((field) => (
+              <label key={field}>
+                {labels[field]}
+                <input
+                  onChange={(event) =>
+                    setFilters((current) => ({
+                      ...current,
+                      [field]: event.target.value,
+                    }))
+                  }
+                  placeholder="쉼표로 여러 값 구분"
+                  value={filters[field] ?? ""}
+                />
+              </label>
+            ))}
+          </div>
+        </details>
+      </div>
+      <div className="filter-chips" aria-label="적용된 필터">
+        {committed.query && (
+          <button
+            type="button"
+            aria-label="검색어 조건 삭제"
+            onClick={() => onApply({ ...committed, query: "" })}
+          >
+            검색: {committed.query} ×
+          </button>
+        )}
+        {filterFields.flatMap((field) =>
+          (committed.filters[field] ?? []).map((value) => (
+            <button
+              type="button"
+              key={`${field}:${value}`}
+              aria-label={`${labels[field]} ${value} 조건 삭제`}
+              onClick={() =>
+                onApply({
+                  ...committed,
+                  filters: {
+                    ...committed.filters,
+                    [field]: committed.filters[field]?.filter(
+                      (item) => item !== value,
+                    ),
+                  },
+                })
+              }
+            >
+              {labels[field]}: {value} ×
+            </button>
+          )),
+        )}
+      </div>
     </form>
   );
 }

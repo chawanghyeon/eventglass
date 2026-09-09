@@ -82,6 +82,7 @@ fn status(value: Option<&str>) -> ApiResult<Option<&str>> {
 pub(super) struct IssueListQuery {
     project_id: String,
     status: Option<String>,
+    query: Option<String>,
     limit: Option<usize>,
     cursor_last_seen_us: Option<String>,
     cursor_id: Option<String>,
@@ -96,6 +97,15 @@ pub(super) async fn list_issues(
     let project_id = project_id(&query.project_id)?;
     let limit = page_limit(query.limit)?;
     let status = status(query.status.as_deref())?.map(str::to_owned);
+    let title_query = query
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty());
+    if title_query.is_some_and(|q| q.chars().count() > 256) {
+        return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_issue_query"));
+    }
+    let title_query = title_query.map(str::to_owned);
     let cursor = match (query.cursor_last_seen_us, query.cursor_id) {
         (None, None) => None,
         (Some(time), Some(id)) => {
@@ -117,6 +127,7 @@ pub(super) async fn list_issues(
                 principal.id,
                 project_id,
                 status.as_deref(),
+                title_query.as_deref(),
                 limit,
                 cursor.as_ref().map(|(time, id)| (*time, id.as_str())),
             )

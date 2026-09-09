@@ -1504,6 +1504,8 @@ export interface operations {
         parameters: {
             query: {
                 project_id: components["schemas"]["PositiveDecimalString"];
+                /** @description Literal title substring. ASCII case-insensitive; percent and underscore are literal characters. */
+                query?: string;
                 status?: components["schemas"]["IssueStatus"];
                 limit?: number;
                 /** @description Must be paired with cursor_id. */

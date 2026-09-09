@@ -37,6 +37,8 @@ export function LogsPage() {
   const user = session.data;
   const [searchParams, setSearchParams] = useSearchParams();
   const [initialBounds] = useState(defaultBounds);
+  const [wrapMessages, setWrapMessages] = useState(false);
+  const [showMetadata, setShowMetadata] = useState(true);
   const [selected, setSelected] = useState<SearchRow>();
   const [liveStart, setLiveStart] = useState<string>();
   const selectedTrigger = useRef<HTMLButtonElement>(null);
@@ -144,14 +146,13 @@ export function LogsPage() {
 
   function closeDetail() {
     setSelected(undefined);
-    selectedTrigger.current?.focus();
+    selectedTrigger.current?.focus({ preventScroll: true });
   }
 
   return (
     <div className="page-stack logs-page">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">검색</p>
           <h1>로그 검색</h1>
           <p>메시지를 검색하고 오류의 원인을 확인하세요.</p>
         </div>
@@ -304,7 +305,27 @@ export function LogsPage() {
         </div>
       ) : null}
       {logs.data && logs.data.rows.length > 0 ? (
-        <div className="log-table-wrap">
+        <div
+          className={`log-table-wrap ${wrapMessages ? "" : "log-table--compact"} ${showMetadata ? "" : "log-table--hide-metadata"}`}
+        >
+          <div className="table-options" aria-label="표 표시 설정">
+            <label>
+              <input
+                type="checkbox"
+                checked={wrapMessages}
+                onChange={(e) => setWrapMessages(e.target.checked)}
+              />
+              메시지 줄바꿈
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={showMetadata}
+                onChange={(e) => setShowMetadata(e.target.checked)}
+              />
+              메타데이터 열
+            </label>
+          </div>
           <table className="log-table">
             <thead>
               <tr>
@@ -316,7 +337,14 @@ export function LogsPage() {
             </thead>
             <tbody>
               {logs.data.rows.map((row) => (
-                <tr key={row.record_id}>
+                <tr
+                  key={row.record_id}
+                  className={
+                    selected?.record_id === row.record_id
+                      ? "is-selected"
+                      : undefined
+                  }
+                >
                   <td className="log-time">
                     <strong>
                       {new Date(row.timestamp).toLocaleString("ko-KR")}
@@ -331,7 +359,34 @@ export function LogsPage() {
                       {row.message || "(빈 메시지)"}
                     </strong>
                     <span className="log-service">
-                      {row.service} · {row.level}
+                      {(
+                        [
+                          ["services", row.service],
+                          ["levels", row.level],
+                        ] as const
+                      )
+                        .filter(([, value]) => value)
+                        .map(([field, value]) => (
+                          <button
+                            className="cell-filter"
+                            key={field}
+                            type="button"
+                            title={`${value} 값으로 필터`}
+                            onClick={() =>
+                              setSearchParams(
+                                writeLogSearch({
+                                  ...state,
+                                  filters: {
+                                    ...state.filters,
+                                    [field]: [value],
+                                  },
+                                }),
+                              )
+                            }
+                          >
+                            {value}
+                          </button>
+                        ))}
                     </span>
                   </th>
                   <td className="log-metadata">

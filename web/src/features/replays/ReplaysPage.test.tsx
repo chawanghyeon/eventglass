@@ -40,7 +40,16 @@ it("switches views without mixing results or sending view state to the API", asy
   ).toBeInTheDocument();
   expect(
     screen.getByText("추가 필터 · 1개 적용 중").closest("details"),
-  ).toHaveAttribute("open");
+  ).not.toHaveAttribute("open");
+  const keyboard = userEvent.setup();
+  await keyboard.type(
+    screen.getByRole("textbox", { name: "페이지 검색" }),
+    "/products",
+  );
+  expect(list.mock.calls).toHaveLength(1);
+  await keyboard.keyboard("{Enter}");
+  await waitFor(() => expect(list.mock.calls).toHaveLength(2));
+  expect(list.mock.calls[1][0]).toContain("url=%2Fproducts");
   await userEvent
     .setup()
     .click(screen.getByRole("button", { name: "페이지 분석" }));
@@ -54,7 +63,7 @@ it("switches views without mixing results or sending view state to the API", asy
   );
   expect(maps.mock.calls[0][0]).toContain("environment=qa");
   expect(maps.mock.calls[0][0]).not.toContain("view=");
-  expect(list.mock.calls).toHaveLength(1);
+  expect(list.mock.calls).toHaveLength(2);
 });
 
 it("guides a first-time admin to setup instead of showing unusable replay filters", () => {

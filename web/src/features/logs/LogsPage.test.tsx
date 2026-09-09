@@ -165,9 +165,12 @@ describe("LogsPage", () => {
     vi.spyOn(endpoints, "logs").mockResolvedValue(page());
     renderPage();
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: "15분" }));
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "빠른 기간" }),
+      "15",
+    );
     expect(screen.getByTestId("location")).toHaveTextContent("2026-09-07");
-    await user.click(screen.getByRole("button", { name: "검색 적용" }));
+    await user.click(screen.getByRole("button", { name: "검색" }));
     await waitFor(() => {
       const params = new URLSearchParams(
         screen.getByTestId("location").textContent ?? "",
@@ -313,7 +316,7 @@ describe("LogsPage", () => {
     expect(screen.getByTestId("location")).not.toHaveTextContent("database");
     await user.click(screen.getByText("프로젝트 · 전체"));
     await user.click(screen.getByLabelText("Primary"));
-    await user.click(screen.getByRole("button", { name: "검색 적용" }));
+    await user.click(screen.getByRole("button", { name: "검색" }));
 
     await waitFor(() => {
       const location = screen.getByTestId("location").textContent ?? "";

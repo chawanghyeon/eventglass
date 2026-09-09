@@ -5,6 +5,7 @@ import type { IssueStatus } from "../../api/types";
 export interface IssueListFilters {
   projectId: string;
   status: IssueStatus;
+  query?: string;
   cursorLastSeenUs?: string;
   cursorId?: string;
 }
@@ -17,6 +18,7 @@ export const issueKeys = {
       ...issueKeys.project(userId, filters.projectId),
       "list",
       filters.status,
+      filters.query ?? "",
       filters.cursorLastSeenUs ?? null,
       filters.cursorId ?? null,
     ] as const,

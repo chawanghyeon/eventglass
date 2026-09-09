@@ -530,3 +530,112 @@ async fn issue_and_occurrence_pages_keep_stable_ties_and_late_event_order() -> a
     assert!(occurrence_two["next_cursor"].is_null());
     Ok(())
 }
+
+#[tokio::test]
+async fn title_search_is_literal_scoped_and_keeps_pagination() -> anyhow::Result<()> {
+    let fixture = fixture().await?;
+    let admin = setup(&fixture).await?;
+    let project_id = create_project(&fixture, &admin).await?;
+    seed_issues(
+        &fixture,
+        project_id,
+        vec![
+            SeedIssue {
+                id: digest('1'),
+                fingerprint: digest('a'),
+                title: "Checkout 50%_ failed".into(),
+                last_seen_us: 300,
+                occurrence_count: 1,
+            },
+            SeedIssue {
+                id: digest('2'),
+                fingerprint: digest('b'),
+                title: "checkout timeout".into(),
+                last_seen_us: 200,
+                occurrence_count: 1,
+            },
+            SeedIssue {
+                id: digest('3'),
+                fingerprint: digest('c'),
+                title: "Login failed".into(),
+                last_seen_us: 100,
+                occurrence_count: 1,
+            },
+        ],
+    )
+    .await?;
+    let base = format!("/api/issues?project_id={project_id}&status=unresolved");
+    for (query, expected) in [("CHECKOUT", 2), ("%25_", 1), ("missing", 0)] {
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("{base}&query={query}"),
+                Value::Null,
+                Some(&admin),
+            ))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            body(response).await?["items"].as_array().unwrap().len(),
+            expected
+        );
+    }
+    let first = body(
+        fixture
+            .router
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("{base}&query=checkout&limit=1"),
+                Value::Null,
+                Some(&admin),
+            ))
+            .await?,
+    )
+    .await?;
+    let cursor = &first["next_cursor"];
+    let second = body(
+        fixture
+            .router
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!(
+                    "{base}&query=checkout&limit=1&cursor_last_seen_us={}&cursor_id={}",
+                    cursor["last_seen_us"].as_str().unwrap(),
+                    cursor["id"].as_str().unwrap()
+                ),
+                Value::Null,
+                Some(&admin),
+            ))
+            .await?,
+    )
+    .await?;
+    assert_eq!(second["items"][0]["id"], digest('2'));
+    assert!(second["next_cursor"].is_null());
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("{base}&query={}", "a".repeat(257)),
+            Value::Null,
+            Some(&admin),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("{base}&query=checkout"),
+            Value::Null,
+            None,
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    Ok(())
+}
