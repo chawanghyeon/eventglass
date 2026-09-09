@@ -936,6 +936,57 @@ fn load_row(shard: &SearchShard, address: DocAddress) -> Result<LogRow> {
 mod tests {
     use super::*;
 
+    fn stored_row(
+        missing: Option<&str>,
+        kind: &str,
+    ) -> (tempfile::TempDir, SearchShard, DocAddress) {
+        let directory = tempfile::tempdir().unwrap();
+        let schema = schema::build();
+        let index = tantivy::Index::create_in_dir(directory.path(), schema.clone()).unwrap();
+        let mut document = TantivyDocument::default();
+        for (name, value) in [
+            ("kind", kind),
+            ("record_id", "record"),
+            ("service", "api"),
+            ("level", "error"),
+            ("message", "message"),
+        ] {
+            if missing != Some(name) {
+                document.add_text(schema.get_field(name).unwrap(), value);
+            }
+        }
+        for (name, value) in [("project_id", 1), ("ingest_seq", 1)] {
+            if missing != Some(name) {
+                document.add_i64(schema.get_field(name).unwrap(), value);
+            }
+        }
+        for name in ["timestamp", "received_at"] {
+            if missing != Some(name) {
+                document.add_date(
+                    schema.get_field(name).unwrap(),
+                    DateTime::from_timestamp_micros(1),
+                );
+            }
+        }
+        let mut writer = index.writer_with_num_threads(1, 15_000_000).unwrap();
+        writer.add_document(document).unwrap();
+        writer.commit().unwrap();
+        drop(writer);
+        let searcher = index.reader().unwrap().searcher();
+        let address = searcher
+            .search(&AllQuery, &TopDocs::with_limit(1).order_by_score())
+            .unwrap()[0]
+            .1;
+        (
+            directory,
+            SearchShard {
+                id: "stored-row".into(),
+                searcher,
+            },
+            address,
+        )
+    }
+
     fn request() -> SearchRequest {
         SearchRequest {
             query: String::new(),
@@ -1002,6 +1053,13 @@ mod tests {
         assert!(errors[2].is_bad_request());
         assert!(errors[5].is_unprocessable());
         assert!(!errors[0].is_bad_request());
+
+        let native: SearchError = tantivy::TantivyError::InvalidArgument("test-only".into()).into();
+        assert_eq!(
+            native.to_string(),
+            "native search failed: An invalid argument was passed: 'test-only'"
+        );
+        assert!(native.source().is_some());
     }
 
     #[test]
@@ -1104,6 +1162,7 @@ mod tests {
     fn query_validation_and_building_cover_typed_filters_and_empty_scopes() {
         assert!(validate_query_text("").is_ok());
         assert!(validate_query_text("(").is_err());
+        assert!(validate_query_text(&"x".repeat(MAX_QUERY_BYTES + 1)).is_err());
         let clauses = (0..=MAX_QUERY_CLAUSES)
             .map(|index| format!("term{index}"))
             .collect::<Vec<_>>()
@@ -1114,6 +1173,11 @@ mod tests {
             nested = UserInputAst::Boost(Box::new(nested), 1.0.into());
         }
         assert!(ast_cost(&nested, 1).1 > MAX_QUERY_DEPTH);
+        let set = UserInputAst::Leaf(Box::new(UserInputLeaf::Set {
+            field: None,
+            elements: vec!["one".into(), "two".into()],
+        }));
+        assert_eq!(ast_cost(&set, 1), (2, 1));
 
         let schema = schema::build();
         for scalar in [
@@ -1168,5 +1232,77 @@ mod tests {
         empty.scope.time_field = TimeField::ReceivedAt;
         assert!(search_live(&[], &empty, 0).unwrap().rows.is_empty());
         assert!(search_live(&[], &empty, -1).is_err());
+    }
+
+    #[test]
+    fn row_and_live_search_reject_an_incompatible_shard_schema() {
+        let directory = tempfile::tempdir().unwrap();
+        let index =
+            tantivy::Index::create_in_dir(directory.path(), Schema::builder().build()).unwrap();
+        let shard = SearchShard {
+            id: "wrong-schema".into(),
+            searcher: index.reader().unwrap().searcher(),
+        };
+
+        assert!(matches!(
+            search(std::slice::from_ref(&shard), &request()),
+            Err(SearchError::SchemaMismatch { shard_id }) if shard_id == "wrong-schema"
+        ));
+        let mut live = request();
+        live.scope.time_field = TimeField::ReceivedAt;
+        assert!(matches!(
+            search_live(std::slice::from_ref(&shard), &live, 0),
+            Err(SearchError::SchemaMismatch { shard_id }) if shard_id == "wrong-schema"
+        ));
+    }
+
+    #[test]
+    fn row_loading_rejects_missing_required_fields_and_unknown_kinds() {
+        for field in [
+            "kind",
+            "record_id",
+            "project_id",
+            "ingest_seq",
+            "timestamp",
+            "received_at",
+            "service",
+            "level",
+            "message",
+        ] {
+            let (_directory, shard, address) = stored_row(Some(field), "log");
+            assert!(matches!(
+                load_row(&shard, address),
+                Err(SearchError::CorruptDocument { field: actual, .. }) if actual == field
+            ));
+        }
+        let (_directory, shard, address) = stored_row(None, "unexpected");
+        assert!(matches!(
+            load_row(&shard, address),
+            Err(SearchError::CorruptDocument { field: "kind", .. })
+        ));
+    }
+
+    #[test]
+    fn row_loading_reports_a_missing_schema_field_as_native_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let index =
+            tantivy::Index::create_in_dir(directory.path(), Schema::builder().build()).unwrap();
+        let mut writer = index.writer_with_num_threads(1, 15_000_000).unwrap();
+        writer.add_document(TantivyDocument::default()).unwrap();
+        writer.commit().unwrap();
+        drop(writer);
+        let searcher = index.reader().unwrap().searcher();
+        let address = searcher
+            .search(&AllQuery, &TopDocs::with_limit(1).order_by_score())
+            .unwrap()[0]
+            .1;
+        let shard = SearchShard {
+            id: "missing-schema".into(),
+            searcher,
+        };
+        assert!(matches!(
+            load_row(&shard, address),
+            Err(SearchError::Native(_))
+        ));
     }
 }
