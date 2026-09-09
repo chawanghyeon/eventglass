@@ -113,8 +113,10 @@ impl PinnedSnapshot {
         drop(statement);
         ensure!(
             shards.iter().all(|shard| {
-                matches!(shard.state.as_str(), "local" | "remote_verified")
-                    && shard.last_applied_inbox_id <= inbox_id
+                matches!(
+                    shard.state.as_str(),
+                    "local" | "remote_verified" | "remote_only"
+                ) && shard.last_applied_inbox_id <= inbox_id
             }),
             "checkpoint catalog contains an unavailable shard"
         );
@@ -136,6 +138,17 @@ impl PinnedSnapshot {
 
     pub fn cut(&self) -> &CheckpointCut {
         &self.cut
+    }
+
+    /// Read recovery provenance from the same pinned snapshot as the catalog.
+    pub fn recovery_checkpoints(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let mut statement = self.source.prepare(
+            "SELECT id,recovery_checkpoint_id FROM shards
+             WHERE state IN ('remote_verified','remote_only')",
+        )?;
+        Ok(statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     pub fn backup_to(

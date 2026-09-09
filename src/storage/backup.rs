@@ -110,6 +110,7 @@ impl BackupJob {
         std::fs::create_dir(&root)?;
         let guard = RemoveDirectory(root.clone());
         let snapshot_path = root.join("snapshot.db");
+        let recovery_checkpoints = self.snapshot.recovery_checkpoints()?;
         let snapshot = self.snapshot;
         let snapshot_output = snapshot_path.clone();
         let artifact = tokio::task::spawn_blocking(move || {
@@ -119,7 +120,31 @@ impl BackupJob {
 
         let mut shards = Vec::with_capacity(artifact.cut.shards.len());
         let mut shard_archives = Vec::with_capacity(artifact.cut.shards.len());
+        let mut previous = std::collections::BTreeMap::new();
         for shard in &artifact.cut.shards {
+            if let Some(checkpoint_id) = recovery_checkpoints.get(&shard.id) {
+                if !previous.contains_key(checkpoint_id) {
+                    let document = super::remote::read_checkpoint(
+                        self.coordinator.inner.store.as_ref(),
+                        checkpoint_id,
+                        &artifact.cut.installation_id,
+                    )
+                    .await?;
+                    previous.insert(checkpoint_id.clone(), document);
+                }
+                let reference = previous[checkpoint_id]
+                    .shards
+                    .iter()
+                    .find(|reference| reference.id == shard.id)
+                    .ok_or_else(|| anyhow::anyhow!("recovery checkpoint omits catalog shard"))?;
+                ensure!(
+                    shard.remote_archive_key.as_ref() == Some(&reference.object.key)
+                        && shard.archive_sha256.as_ref() == Some(&reference.object.sha256),
+                    "recovery checkpoint differs from catalog archive"
+                );
+                shards.push(reference.clone());
+                continue;
+            }
             let source = self
                 .coordinator
                 .inner
@@ -175,9 +200,9 @@ impl BackupJob {
                     ensure!(
                         transaction.execute(
                             "UPDATE shards
-                             SET state='remote_verified',remote_archive_key=?1,
+                             SET state=CASE WHEN state='remote_only' THEN 'remote_only' ELSE 'remote_verified' END,remote_archive_key=?1,
                                  archive_sha256=?2,recovery_checkpoint_id=?3
-                             WHERE id=?4 AND state IN ('local','remote_verified')",
+                             WHERE id=?4 AND state IN ('local','remote_verified','remote_only')",
                             rusqlite::params![
                                 shard.object.key,
                                 shard.object.sha256,
@@ -237,7 +262,17 @@ mod tests {
     impl ObjectStore for MemoryStore {
         async fn list(&self, _continuation: Option<String>) -> Result<ObjectPage> {
             Ok(ObjectPage {
-                objects: Vec::new(),
+                objects: self
+                    .0
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(key, bytes)| ObjectMetadata {
+                        key: key.clone(),
+                        size: bytes.len() as u64,
+                        etag: None,
+                    })
+                    .collect(),
                 continuation: None,
             })
         }
@@ -270,16 +305,22 @@ mod tests {
         ) -> Result<()> {
             let bytes = std::fs::read(path)?;
             ensure!(sha256(&bytes) == checksum_sha256_hex, "checksum mismatch");
-            self.put(relative, bytes, false)
+            self.put(relative, bytes, relative.starts_with("shards/"))
         }
 
         async fn download(
             &self,
-            _relative: &str,
-            _destination: &Path,
-            _max_bytes: u64,
+            relative: &str,
+            destination: &Path,
+            max_bytes: u64,
         ) -> Result<ObjectMetadata> {
-            anyhow::bail!("download is unused")
+            let bytes = self.get_small(relative, max_bytes).await?;
+            std::fs::write(destination, &bytes)?;
+            Ok(ObjectMetadata {
+                key: relative.to_owned(),
+                size: bytes.len() as u64,
+                etag: None,
+            })
         }
     }
 
@@ -336,6 +377,15 @@ mod tests {
         })
         .await?;
         let store = Arc::new(MemoryStore::default());
+        store.put(
+            "installation.json",
+            serde_json::to_vec(&super::super::remote::InstallationDocument {
+                format_version: 1,
+                installation_id: installation.clone(),
+                created_at_us: 1,
+            })?,
+            false,
+        )?;
         let coordinator = BackupCoordinator::new(db.clone(), data, store.clone());
         let job = coordinator
             .begin_cut()
@@ -352,13 +402,14 @@ mod tests {
             keys.iter()
                 .any(|key| key == &format!("shards/{shard_id}.tar.gz"))
         );
+        let verified_id = shard_id.clone();
         let verified = db
             .call(move |connection| {
                 connection
                     .query_row(
                         "SELECT state,remote_archive_key,archive_sha256,recovery_checkpoint_id
                      FROM shards WHERE id=?1",
-                        [shard_id],
+                        [verified_id],
                         |row| {
                             Ok((
                                 row.get::<_, String>(0)?,
@@ -373,6 +424,69 @@ mod tests {
             .await?;
         assert_eq!(verified.0, "remote_verified");
         assert!(verified.1.is_some() && verified.2.is_some() && verified.3.is_some());
+
+        // Eviction must not prevent later cuts from covering all historical shards.
+        db.call(|connection| {
+            connection.execute("UPDATE shards SET state='remote_only'", [])?;
+            Ok(())
+        })
+        .await?;
+        std::fs::remove_dir_all(&shard_path)?;
+        let archive_key = format!("shards/{shard_id}.tar.gz");
+        let archive = store
+            .0
+            .lock()
+            .unwrap()
+            .remove(&archive_key)
+            .context("archive missing")?;
+        let before = store.get_small("latest.json", 4096).await?;
+        assert!(
+            coordinator
+                .begin_cut()
+                .await?
+                .context("job")?
+                .complete()
+                .await
+                .is_err()
+        );
+        assert_eq!(store.get_small("latest.json", 4096).await?, before);
+        store.put(&archive_key, archive, true)?;
+        coordinator
+            .begin_cut()
+            .await?
+            .context("job")?
+            .complete()
+            .await?;
+        assert!(
+            !shard_path.exists(),
+            "backup must not hydrate an evicted shard"
+        );
+        let state = db
+            .call(|connection| {
+                Ok(connection.query_row("SELECT state FROM shards", [], |row| {
+                    row.get::<_, String>(0)
+                })?)
+            })
+            .await?;
+        assert_eq!(state, "remote_only");
+        let latest: super::super::remote::LatestDocument =
+            serde_json::from_slice(&store.get_small("latest.json", 4096).await?)?;
+        let restored = super::super::remote::prepare_restore(
+            store.as_ref(),
+            &installation,
+            &data.join("restored"),
+            super::super::remote::RestoreLimits::default(),
+            || false,
+        )
+        .await?;
+        assert_eq!(restored.document.checkpoint_id, latest.checkpoint_id);
+        let restored_db = crate::db::open_reader(&restored.directory.join("meta.db"))?;
+        assert_eq!(
+            restored_db.query_row("SELECT state FROM shards", [], |row| row
+                .get::<_, String>(0))?,
+            "remote_verified"
+        );
+        assert!(restored.directory.join("shards").join(shard_id).is_dir());
         Ok(())
     }
 }

@@ -169,16 +169,40 @@ pub async fn publish(
         .map(|shard| shard.id.as_str())
         .collect::<BTreeSet<_>>();
     ensure!(
-        archive_ids == document_ids,
+        archive_ids.len() == candidate.shard_archives.len() && archive_ids.is_subset(&document_ids),
         "checkpoint archive set mismatch"
     );
 
+    let existing = if archive_ids.len() < document_ids.len() {
+        list_all(store).await?
+    } else {
+        Vec::new()
+    };
     for shard in &candidate.document.shards {
         let path = candidate
             .shard_archives
             .iter()
-            .find_map(|(id, path)| (id == &shard.id).then_some(path))
-            .context("checkpoint shard archive missing")?;
+            .find_map(|(id, path)| (id == &shard.id).then_some(path));
+        let Some(path) = path else {
+            let catalog = candidate
+                .document
+                .cut
+                .shards
+                .iter()
+                .find(|entry| entry.id == shard.id)
+                .context("checkpoint catalog shard missing")?;
+            ensure!(
+                matches!(catalog.state.as_str(), "remote_verified" | "remote_only")
+                    && catalog.remote_archive_key.as_ref() == Some(&shard.object.key)
+                    && catalog.archive_sha256.as_ref() == Some(&shard.object.sha256)
+                    && existing
+                        .iter()
+                        .any(|object| object.key == shard.object.key
+                            && object.size == shard.object.size),
+                "previously verified checkpoint archive is missing or changed"
+            );
+            continue;
+        };
         ensure!(
             tokio::fs::metadata(path).await?.len() == shard.object.size,
             "checkpoint shard archive size changed"
@@ -569,7 +593,7 @@ fn secure_restored_snapshot(path: &Path, document: &CheckpointDocument) -> Resul
                 "UPDATE shards
                  SET state='remote_verified',remote_archive_key=?1,
                      archive_sha256=?2,recovery_checkpoint_id=?3
-                 WHERE id=?4 AND state IN ('local','remote_verified')",
+                 WHERE id=?4 AND state IN ('local','remote_verified','remote_only')",
                 rusqlite::params![
                     shard.object.key,
                     shard.object.sha256,
@@ -602,6 +626,24 @@ fn sha256_file(path: &Path) -> Result<String> {
 
 pub fn checkpoint_key(id: &str) -> String {
     format!("checkpoints/{id}.json")
+}
+
+pub async fn read_checkpoint(
+    store: &dyn ObjectStore,
+    id: &str,
+    installation: &str,
+) -> Result<CheckpointDocument> {
+    uuid::Uuid::parse_str(id)?;
+    let bytes = store
+        .get_small(&checkpoint_key(id), MAX_CONTROL_BYTES)
+        .await?;
+    let document: CheckpointDocument = serde_json::from_slice(&bytes)?;
+    validate_checkpoint(&document)?;
+    ensure!(
+        document.checkpoint_id == id && document.cut.installation_id == installation,
+        "recovery checkpoint identity mismatch"
+    );
+    Ok(document)
 }
 
 pub fn sha256(bytes: &[u8]) -> String {
@@ -649,7 +691,10 @@ pub fn validate_checkpoint(document: &CheckpointDocument) -> Result<()> {
         cut_ids.len() == document.cut.shards.len()
             && document.cut.shards.iter().all(|shard| {
                 uuid::Uuid::parse_str(&shard.id).is_ok()
-                    && matches!(shard.state.as_str(), "local" | "remote_verified")
+                    && matches!(
+                        shard.state.as_str(),
+                        "local" | "remote_verified" | "remote_only"
+                    )
                     && shard.last_applied_inbox_id <= document.cut.boundary.inbox_id
             }),
         "duplicate checkpoint catalog shard"

@@ -28,7 +28,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--memory-bytes', type=int, default=1073741824, choices=[536870912, 1073741824])
     parser.add_argument('--report', type=pathlib.Path, default=ROOT / '.tools/resource/report.json')
+    parser.add_argument('--target', action='append', choices=['lib', *TARGETS], help='Run only the named targets; repeat for related targets. Default: full suite.')
     args = parser.parse_args()
+    selected = list(dict.fromkeys(args.target or ['lib', *TARGETS]))
     args.report = args.report.resolve()
     args.report.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(['docker', 'info', '--format', '{{.OSType}}/{{.Architecture}}'], check=True)
@@ -46,8 +48,10 @@ def main():
         report_dir.mkdir()
         shutil.copy2(ROOT/'tools/resource/run_tests.py', report_dir/'run_tests.py')
         mounts = ['--mount', f'type=bind,src={stage},dst=/workspace,readonly', '--mount', 'type=volume,src=eventglass-linux-test-target,dst=/target', '--workdir', '/workspace']
-        cargo = ['cargo', 'test', '--locked', '--no-run', '--message-format=json', '--lib']
-        for target in TARGETS:
+        cargo = ['cargo', 'test', '--locked', '--no-run', '--message-format=json']
+        if 'lib' in selected:
+            cargo.append('--lib')
+        for target in [target for target in selected if target != 'lib']:
             if not (stage/'tests'/f'{target}.rs').is_file():
                 raise RuntimeError('Required target missing: '+target)
             cargo.extend(['--test', target])
@@ -61,16 +65,18 @@ def main():
                 continue
             target = item['target']
             name = 'lib' if target['kind'] == ['lib'] else target['name']
-            if name in TARGETS or name == 'lib':
+            if name in selected:
                 artifacts[name] = {'name': name, 'executable': item['executable']}
-        if set(artifacts) != set(TARGETS+['lib']):
+        if set(artifacts) != set(selected):
             raise RuntimeError('Compiled test set differs from required test set: '+str(sorted(artifacts)))
-        (report_dir/'artifacts.json').write_text(json.dumps([artifacts[name] for name in ['lib', *TARGETS]]))
+        (report_dir/'artifacts.json').write_text(json.dumps([artifacts[name] for name in selected]))
         try:
             container(['--cpus=1', '--memory='+str(args.memory_bytes), '--memory-swap='+str(args.memory_bytes), '--network=none', *mounts, '--mount', f'type=bind,src={report_dir},dst=/report', '--mount', 'type=tmpfs,dst=/pressure,tmpfs-size=805306368', '-e', 'EVENTGLASS_DISK_PRESSURE_ROOT=/pressure', IMAGE, 'python3', '/report/run_tests.py', str(args.memory_bytes)])
         finally:
             if (report_dir/'report.json').exists():
                 report = json.loads((report_dir/'report.json').read_text())
+                report['selected_targets'] = selected
+                report['omitted_targets'] = [target for target in ['lib', *TARGETS] if target not in selected]
                 report.update({'image': IMAGE, 'source_sha256': source_hash.hexdigest(), 'build_limits': {'cpus': 2, 'memory_bytes': 4294967296}, 'disk_pressure': {'filesystem': 'tmpfs', 'size_bytes': 805306368, 'expected_error': 'ENOSPC', 'ingest_status': 429}, 'excluded': ['embedded UI assets', 'failpoint crash suite', 'live SDK processes', '100K/1M/10M workload', 'S3 restore']})
                 args.report.write_text(json.dumps(report, indent=2)+'\n')
                 print('Resource evidence: '+str(args.report), flush=True)
