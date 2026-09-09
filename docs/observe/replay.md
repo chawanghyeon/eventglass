@@ -91,3 +91,13 @@ Sentry.init({
 ```
 
 DSN은 관리 화면에서 발급한 값을 복사한다. 비율은 서비스 트래픽에 맞게 선택한다. React/Vue/Next.js는 각각 공식 프레임워크 SDK의 정상 client 설정에 같은 Replay integration을 추가한다. 별도 recorder/tracker/snippet은 필요하지 않다. Feedback이 필요하면 공식 `Sentry.feedbackIntegration({ enableScreenshot: false })`만 선택적으로 추가한다. Replay sampling 밖의 방문과 iOS mouse movement는 이 서버가 새로 계측하지 않는다.
+
+## 상품 상세페이지에서 사용하기
+
+Replay 목록에서 프로젝트, `URL=/products/linen-shirt`, 세션 시작 기간, environment/release를 지정하고 `페이지별 Heatmaps`를 연다. 실제 origin/path 단위이므로 상품별 비교가 가능하며 임의 상품 ID나 conversion taxonomy를 만들지 않는다. 경로 전체를 모으려면 `/products/`로 URL을 좁힐 수 있다.
+
+페이지별 sampled Replay 수, 재방문을 포함한 관측 방문, timestamp로 계산한 평균 관측 시간, 직접 연결된 이전/다음 URL, 마지막 관측 페이지 수, 공식 rage/dead 신호를 확인한다. 지연 도착한 frustration breadcrumb는 수신 시점의 페이지가 아니라 SDK가 기록한 원래 클릭 시각의 페이지로 연결한다. 관련 Replay 최대 3개로 바로 이동해 실제 화면과 network/error timeline을 대조한다. 페이지 진입 viewport가 768px 미만/이상인 Replay 수는 화면 크기 분포이며 브라우저·기기 추론이 아니다. 비활성 시간은 관측 시간에 포함된다. 마지막 관측 페이지를 이탈·bounce로, `/cart` 이동을 장바구니 담기 성공·결제로 표시하지 않는다.
+
+긴 페이지는 화면 상단의 scroll y / 당시 viewport 높이를 1화면 단위(0–99)로 나눠 해당 구간의 좌표 클릭 수와 SDK selector breadcrumb를 보여준다. 리뷰 펼치기나 고정 구매 버튼이 어느 스크롤 위치에서 클릭됐는지 비교할 수 있다. 고정 요소를 문서의 절대 위치로 오인하지 않으며 DOM 구역명을 자동 추측하지 않는다. 구간당 selector 상한 50개와 기존 요청 전체 한도를 유지한다. 정확한 document-height 백분율·고유 사람 수·매출·구매율을 생성하지 않는다.
+
+실제 SDK 테스트 `tools/sdk-fixtures/browser-app/shopping.mjs`는 responsive 상품 페이지에서 데스크톱(1280×800)과 모바일 크기(390×844)의 리뷰 이동·내용 펼치기·스크롤·고정 장바구니 버튼·URL 이동을 캡처한다. 저장된 `shopping-*.envelope`는 손으로 작성한 rrweb 데이터가 아니다. Product UI E2E는 이 데이터를 수집해 집계, 실제 보이는 첫 snapshot, 관련 Replay 이동, 390px 관리 화면의 가로 넘침을 검증한다. 고객 서비스에는 여전히 공식 Sentry SDK만 설치한다.

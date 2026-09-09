@@ -1,0 +1,16 @@
+{
+  "sdk": "@sentry/browser",
+  "version": "10.73.0",
+  "captures": [
+    {
+      "mode": "desktop",
+      "name": "shopping-desktop-0.envelope",
+      "bytes": 3641
+    },
+    {
+      "mode": "mobile",
+      "name": "shopping-mobile-0.envelope",
+      "bytes": 3612
+    }
+  ]
+}

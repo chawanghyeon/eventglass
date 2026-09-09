@@ -233,6 +233,8 @@ pub struct ReplayFilter {
     pub dead_click: Option<bool>,
     pub min_duration_ms: Option<i64>,
     pub max_duration_ms: Option<i64>,
+    pub started_after_ms: Option<i64>,
+    pub started_before_ms: Option<i64>,
     pub before_started_ms: Option<i64>,
     pub before_id: Option<String>,
 }
@@ -282,6 +284,7 @@ pub fn list(
     AND (?8 IS NULL OR (rage_count>0)=?8) AND (?9 IS NULL OR (dead_count>0)=?9)
     AND (?10 IS NULL OR finished_at_ms-started_at_ms>=?10) AND (?11 IS NULL OR finished_at_ms-started_at_ms<=?11)
     AND (?12 IS NULL OR (started_at_ms,replay_id)<(?12,?13))
+    AND (?14 IS NULL OR started_at_ms>=?14) AND (?15 IS NULL OR started_at_ms<?15)
     ORDER BY started_at_ms DESC,replay_id DESC LIMIT 51"))?;
     Ok(query
         .query_map(
@@ -298,7 +301,9 @@ pub fn list(
                 filter.min_duration_ms,
                 filter.max_duration_ms,
                 filter.before_started_ms,
-                filter.before_id
+                filter.before_id,
+                filter.started_after_ms,
+                filter.started_before_ms
             ],
             summary,
         )?

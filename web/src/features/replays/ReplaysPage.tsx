@@ -102,6 +102,26 @@ export function ReplaysPage() {
             </select>
           </label>
         ))}
+        {[
+          ["started_after_ms", "세션 시작 이후"],
+          ["started_before_ms", "세션 시작 이전"],
+        ].map(([name, label]) => (
+          <label key={name}>
+            {label} (현지 시간)
+            <input
+              type="datetime-local"
+              value={localInput(params.get(name))}
+              onChange={(event) =>
+                change(
+                  name,
+                  event.target.value
+                    ? String(new Date(event.target.value).getTime())
+                    : "",
+                )
+              }
+            />
+          </label>
+        ))}
         <label>
           최소 시간 (초)
           <input
@@ -129,7 +149,7 @@ export function ReplaysPage() {
       {replays.data && (
         <>
           <div className="table-scroll">
-            <table>
+            <table className="replay-table">
               <thead>
                 <tr>
                   <th>User</th>
@@ -228,7 +248,7 @@ export function ReplaysPage() {
               : ""}{" "}
             전체 방문자의 집계가 아닙니다.
           </Notice>
-          <PageMaps pages={maps.data.pages} />
+          <PageMaps pages={maps.data.pages} project={project?.id} />
         </>
       )}
       <Button
@@ -246,4 +266,13 @@ export function ReplaysPage() {
       </p>
     </section>
   );
+}
+
+function localInput(value: string | null): string {
+  if (!value) return "";
+  const date = new Date(Number(value));
+  if (!Number.isFinite(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 16);
 }

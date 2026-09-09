@@ -12,16 +12,17 @@ export async function checkReplayUi(page,baseUrl,dsn) {
   await page.goto(`${baseUrl}/replays?project=${project}`);
   await page.getByRole('button',{name:'Sentry User Feedback',exact:true}).click();
   await page.getByText('Replay fixture feedback',{exact:true}).waitFor();
-  await page.locator(`a[href="/replays/${project}/${id}"]`).waitFor();
+  await page.locator(`a[href="/replays/${project}/${id}"]`).first().waitFor();
   await page.getByRole('button',{name:'페이지별 Heatmaps'}).click();
   await page.getByRole('heading',{name:'Page maps',exact:true}).waitFor();
   await page.getByRole('img',{name:/Click heatmap/}).waitFor();
-  await page.locator(`a[href="/replays/${project}/${id}"]`).click();
+  await page.locator(`a[href="/replays/${project}/${id}"]`).first().click();
   await page.getByRole('heading',{name:'Timeline',exact:true}).waitFor();
   await page.getByRole('link',{name:/^Error [a-f0-9]{32}$/}).waitFor();
   const outer=page.frameLocator('iframe[title="Session replay 화면"]');
   const screen=outer.frameLocator('iframe');
-  await screen.locator('#dead').waitFor({state:'attached',timeout:15000});
+  await screen.locator('#dead').waitFor({state:'visible',timeout:15000});
+  if(!await screen.locator('#dead').isVisible())throw Error('Initial replay snapshot is blank');
   const sandbox=await page.locator('iframe[title="Session replay 화면"]').getAttribute('sandbox');
   if(sandbox!=='allow-same-origin')throw Error('Replay iframe permits scripts');
   const html=await screen.locator('body').innerHTML();
@@ -37,8 +38,10 @@ export async function checkReplayUi(page,baseUrl,dsn) {
   await page.getByRole('img',{name:/Movement heatmap/}).waitFor();
   const directory=new URL('../../../.tools/screenshots/',import.meta.url);await mkdir(directory,{recursive:true});
   await page.getByLabel('Replay seek',{exact:true}).press('Home');
+  await screen.locator('#dead').waitFor({state:'visible'});
   await page.screenshot({path:new URL('replay.png',directory).pathname,fullPage:true});
   await checkUntrustedReplay(page.context(),baseUrl,project,parsed.username,bytes);
+  await checkShopping(page,baseUrl,project,parsed.username,root);
   console.log('Replay UI: official SDK ingest, duplicate/order, page maps, isolated DOM playback, masking, controls, timeline passed');
 }
 
@@ -76,4 +79,36 @@ async function checkUntrustedReplay(context,baseUrl,project,key,plain) {
     await isolated.waitForTimeout(300);
     if(requests!==0 || await isolated.evaluate(()=>Boolean(window.__replayEscaped)))throw Error(`Replay escaped sandbox: ${requests} requests`);
   } finally {await isolatedContext.close();}
+}
+
+async function checkShopping(page,baseUrl,project,key,root) {
+  const capture=JSON.parse(await readFile(new URL('shopping-capture.json',root),'utf8'));
+  let replayId,productUrl;
+  for(const item of capture.captures){
+    const bytes=await readFile(new URL(item.name,root));
+    const metadata=JSON.parse(bytes.toString('utf8').split('\n')[2]);
+    replayId??=metadata.replay_id;
+    const url=new URL(metadata.urls.find(url=>url.includes('/products/')));url.search='';productUrl=url.toString();
+    const response=await fetch(`${baseUrl}/api/${project}/envelope/?sentry_key=${key}`,{method:'POST',body:bytes});
+    if(response.status!==202)throw Error(`Shopping replay ingest ${response.status}`);
+  }
+  await page.goto(`${baseUrl}/replays?project=${project}&environment=shopping-fixture&url=${encodeURIComponent('/products/linen-shirt')}`);
+  await page.getByRole('button',{name:'페이지별 Heatmaps'}).click();
+  await page.getByRole('heading',{name:'상품·페이지 분석',exact:true}).waitFor();
+  await page.getByRole('button',{name:productUrl,exact:true}).first().click();
+  await page.locator('.replay-page-summary > div').first().getByText('2',{exact:true}).waitFor();
+  await page.getByText('2–3 화면 높이',{exact:true}).waitFor();
+  await page.getByText(/#expand-review/).first().waitFor();
+  await page.getByText(/#add-to-cart/).first().waitFor();
+  await page.getByRole('heading',{name:'다음 관측 페이지',exact:true}).locator('..').getByRole('button',{name:/\/cart$/}).waitFor();
+  await page.screenshot({path:new URL('../../../.tools/screenshots/shopping-analysis.png',import.meta.url).pathname,fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+1);
+  if(overflow){await page.screenshot({path:new URL('../../../.tools/screenshots/shopping-mobile-overflow.png',import.meta.url).pathname,fullPage:true});const wide=await page.evaluate(()=>[...document.querySelectorAll('body *')].map(e=>({tag:e.tagName,class:e.className,width:e.getBoundingClientRect().width,right:e.getBoundingClientRect().right})).filter(e=>e.right>window.innerWidth+1).slice(0,20));throw Error('Shopping analysis overflows narrow admin viewport: '+JSON.stringify(wide));}
+  await page.setViewportSize({width:1280,height:720});
+  await page.goto(`${baseUrl}/replays/${project}/${replayId}`);
+  const screen=page.frameLocator('iframe[title="Session replay 화면"]').frameLocator('iframe');
+  await screen.locator('#view-reviews').waitFor({state:'visible'});
+  await page.screenshot({path:new URL('../../../.tools/screenshots/shopping-replay.png',import.meta.url).pathname,fullPage:true});
+  console.log('Shopping: actual desktop/mobile SDK captures, page/time/scroll-band/selector/journey summaries, related replay and responsive admin UI passed');
 }

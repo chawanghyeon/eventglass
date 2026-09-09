@@ -56,6 +56,113 @@ fn movement_uses_sample_time_viewport_and_page_and_ignores_iframe_coordinates() 
 }
 
 #[test]
+fn actual_desktop_and_mobile_product_detail_recordings_explain_observed_page_behavior() {
+    let mut maps = eventglass::replay::PageMaps::default();
+    for (fixture, narrow) in [
+        (
+            include_bytes!("fixtures/replay/shopping-desktop-0.envelope").as_slice(),
+            false,
+        ),
+        (
+            include_bytes!("fixtures/replay/shopping-mobile-0.envelope").as_slice(),
+            true,
+        ),
+    ] {
+        let segment = decode(fixture);
+        let text = String::from_utf8_lossy(&segment.recording);
+        assert!(!text.contains("PRIVATE_TEXT_SENTINEL"));
+        assert!(!text.contains("PRIVATE_PASSWORD_SENTINEL"));
+        let mut analysis = eventglass::replay::Analysis::default();
+        for event in replay::recording_events(&segment.recording).unwrap() {
+            analysis.event(&event);
+        }
+        analysis.finish(segment.metadata.finished_at_ms);
+        let (url, product) = analysis
+            .pages
+            .iter()
+            .find(|(url, _)| url.ends_with("/products/linen-shirt"))
+            .expect("product detail page");
+        assert!(!url.contains("campaign"));
+        assert_eq!(product.visits, 1);
+        assert_eq!(product.sampled_replays, 1);
+        assert_eq!(product.timed_visits, 1);
+        assert!(product.observed_time_ms > 0);
+        assert_eq!(
+            product.last_observed_replays, 0,
+            "cart navigation is observed, not a conversion"
+        );
+        assert_eq!(product.narrow_replays, u32::from(narrow));
+        assert_eq!(product.wide_replays, u32::from(!narrow));
+        assert!(product.max_scroll_viewports >= 2.0);
+        assert!(
+            product
+                .next_pages
+                .iter()
+                .any(|(url, count)| url.ends_with("/cart") && *count == 1)
+        );
+        assert!(
+            product
+                .depth_clicks
+                .iter()
+                .any(|(depth, count)| depth.parse::<u32>().unwrap() >= 2 && *count > 0)
+        );
+        assert!(
+            product
+                .depth_elements
+                .iter()
+                .any(|(depth, elements)| depth.parse::<u32>().unwrap() >= 2
+                    && elements.keys().any(|label| label.contains("expand-review")))
+        );
+        assert!(
+            product
+                .elements
+                .keys()
+                .any(|label| label.contains("add-to-cart"))
+        );
+        maps.include(analysis);
+    }
+    let product = maps
+        .pages
+        .iter()
+        .find(|(url, _)| url.ends_with("/products/linen-shirt"))
+        .unwrap()
+        .1;
+    assert_eq!(product.sampled_replays, 2);
+    assert_eq!(product.visits, 2);
+    assert_eq!((product.narrow_replays, product.wide_replays), (1, 1));
+}
+
+#[test]
+fn delayed_frustration_belongs_to_the_click_page_not_the_later_cart_page() {
+    let mut analysis = eventglass::replay::Analysis::default();
+    for event in [
+        json!({"type":4,"timestamp":1000,"data":{"href":"https://shop.test/products/shirt","width":390,"height":844}}),
+        json!({"type":5,"timestamp":2000,"data":{"tag":"breadcrumb","payload":{"category":"navigation","data":{"to":"/cart"}}}}),
+        // Emitted later by the SDK detector, retaining the original click timestamp.
+        json!({"type":5,"timestamp":1500,"data":{"tag":"breadcrumb","payload":{"category":"ui.slowClickDetected","data":{"endReason":"timeout","node":{"tagName":"BUTTON"},"clickCount":5}}}}),
+    ] {
+        analysis.event(&event);
+    }
+    analysis.finish(10000);
+    assert_eq!(
+        analysis.pages["https://shop.test/products/shirt"]
+            .frustration
+            .rage,
+        1
+    );
+    assert_eq!(analysis.pages["https://shop.test/cart"].frustration.rage, 0);
+    let signal = analysis
+        .timeline
+        .iter()
+        .find(|event| event.kind == "rage click")
+        .unwrap();
+    assert_eq!(
+        signal.url.as_deref(),
+        Some("https://shop.test/products/shirt")
+    );
+}
+
+#[test]
 fn official_sdk_plain_and_zlib_recordings_preserve_privacy() {
     for bytes in [PLAIN, COMPRESSED] {
         let segment = decode(bytes);
@@ -315,6 +422,27 @@ async fn durable_http_segments_are_atomic_idempotent_order_independent_and_autho
             .iter()
             .any(|e| e["type"] == 2)
     );
+    let started = decode(PLAIN).metadata.started_at_ms;
+    for (range, count) in [
+        (format!("started_after_ms={started}"), 1),
+        (format!("started_before_ms={started}"), 0),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(get(format!("/api/replays?project_id=1&{range}")))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await?)?;
+        assert_eq!(value["items"].as_array().unwrap().len(), count);
+    }
+    let response = router
+        .clone()
+        .oneshot(get(
+            "/api/replay-pages?project_id=1&started_after_ms=2&started_before_ms=1".into(),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     // A conflicting retry rolls back a normal Event in the SAME envelope.
     let altered =
         String::from_utf8(PLAIN.to_vec())?.replace("replay-fixture@1", "replay-fixture@2");

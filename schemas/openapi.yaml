@@ -1033,6 +1033,16 @@ paths:
         required: false
         schema:
           type: integer
+      - name: started_after_ms
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: started_before_ms
+        in: query
+        required: false
+        schema:
+          type: integer
       - name: before_started_ms
         in: query
         required: false
@@ -1140,6 +1150,16 @@ paths:
         schema:
           type: integer
       - name: max_duration_ms
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: started_after_ms
+        in: query
+        required: false
+        schema:
+          type: integer
+      - name: started_before_ms
         in: query
         required: false
         schema:
@@ -2795,6 +2815,19 @@ components:
     ReplayPageActivity:
       type: object
       required:
+      - visits
+      - sampled_replays
+      - observed_time_ms
+      - timed_visits
+      - last_observed_replays
+      - narrow_replays
+      - wide_replays
+      - next_pages
+      - previous_pages
+      - depth_clicks
+      - depth_elements
+      - replay_ids
+      - frustration
       - clicks
       - movement
       - elements
@@ -2802,6 +2835,44 @@ components:
       - scroll_samples
       - scroll_reach_replays
       properties:
+        visits:
+          type: integer
+        sampled_replays:
+          type: integer
+        observed_time_ms:
+          type: integer
+        timed_visits:
+          type: integer
+        last_observed_replays:
+          type: integer
+        narrow_replays:
+          type: integer
+        wide_replays:
+          type: integer
+        next_pages:
+          type: object
+          additionalProperties:
+            type: integer
+        previous_pages:
+          type: object
+          additionalProperties:
+            type: integer
+        depth_clicks:
+          type: object
+          additionalProperties:
+            type: integer
+        depth_elements:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties:
+              type: integer
+        replay_ids:
+          type: array
+          items:
+            type: string
+        frustration:
+          $ref: '#/components/schemas/ReplayFrustration'
         clicks:
           type: object
           additionalProperties:

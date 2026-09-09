@@ -1596,7 +1596,7 @@ textarea {
   flex-wrap: wrap;
   gap: 12px;
   padding: 16px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   border-radius: 12px;
 }
 .replay-filters label,
@@ -1684,4 +1684,72 @@ textarea {
   .replay-columns {
     grid-template-columns: 1fr;
   }
+}
+
+.replay-page-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+}
+.replay-page-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.replay-page-summary strong {
+  font-size: 1.7rem;
+}
+.replay-page-summary span {
+  font-size: 0.8rem;
+}
+
+.table-scroll {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+}
+.replay-columns > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.replay-controls select {
+  max-width: 100%;
+}
+
+.replay-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--paper);
+  font-size: 0.85rem;
+}
+.replay-table th,
+.replay-table td {
+  padding: 12px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+.replay-table th {
+  background: #f7fafb;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.replay-table td code {
+  overflow-wrap: anywhere;
+}
+.link-button {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: var(--mint-dark);
+  text-decoration: underline;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
 }

@@ -36,6 +36,10 @@ fn validate_filter(filter: &ReplayFilter) -> ApiResult<()> {
         ]
         .iter()
         .any(|s| s.as_ref().is_some_and(|s| s.len() > 4096))
+        || filter
+            .started_after_ms
+            .zip(filter.started_before_ms)
+            .is_some_and(|(a, b)| a >= b)
         || filter.min_duration_ms.is_some_and(|v| v < 0)
         || filter.max_duration_ms.is_some_and(|v| v < 0)
         || filter
@@ -170,6 +174,7 @@ pub(super) async fn pages(
                 .map(|replay| {
                     Ok((
                         replay.metadata.finished_at_ms,
+                        replay.metadata.replay_id.clone(),
                         replays::segments(db, filter.project_id, &replay.metadata.replay_id)?,
                     ))
                 })
@@ -185,8 +190,11 @@ pub(super) async fn pages(
             ..Default::default()
         };
         let mut budget = crate::replay::ReadBudget::default();
-        for (end, segments) in items {
-            let analysis = crate::replay::analyze(&root, segments, end, &mut budget)?;
+        for (end, id, segments) in items {
+            let mut analysis = crate::replay::analyze(&root, segments, end, &mut budget)?;
+            for page in analysis.pages.values_mut() {
+                page.replay_ids.push(id.clone());
+            }
             let stop = analysis.truncated;
             maps.include(analysis);
             if stop {

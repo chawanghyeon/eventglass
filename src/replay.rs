@@ -11,6 +11,21 @@ pub struct PageActivity {
     pub clicks: BTreeMap<String, u32>,
     pub movement: BTreeMap<String, u32>,
     pub elements: BTreeMap<String, u32>,
+    pub visits: u32,
+    pub sampled_replays: u32,
+    pub observed_time_ms: i64,
+    pub timed_visits: u32,
+    pub last_observed_replays: u32,
+    pub narrow_replays: u32,
+    pub wide_replays: u32,
+    pub next_pages: BTreeMap<String, u32>,
+    pub previous_pages: BTreeMap<String, u32>,
+    /// Clicks observed while the top document was scrolled by N viewport heights.
+    /// Sticky controls remain viewport clicks, not fabricated document positions.
+    pub depth_clicks: BTreeMap<String, u32>,
+    pub depth_elements: BTreeMap<String, BTreeMap<String, u32>>,
+    pub replay_ids: Vec<String>,
+    pub frustration: crate::sentry::replay::Frustration,
     /// Maximum observed top-document scroll offset measured in viewport heights.
     /// This is not percentage of document height or a count of unique humans.
     pub max_scroll_viewports: f64,
@@ -46,17 +61,22 @@ pub struct Analysis {
     #[serde(skip)]
     viewport: Option<(f64, f64)>,
     #[serde(skip)]
+    scroll_offset: Option<f64>,
+    #[serde(skip)]
     viewport_history: VecDeque<(i64, f64, f64)>,
     #[serde(skip)]
     document: Option<i64>,
     #[serde(skip)]
     top_nodes: HashSet<i64>,
+    #[serde(skip)]
+    signals: Vec<(i64, crate::sentry::replay::Frustration)>,
 }
 impl Analysis {
     pub fn gap(&mut self, next: u32) {
         self.gaps.push(next);
         self.url = None;
         self.viewport = None;
+        self.scroll_offset = None;
         self.viewport_history.clear();
         self.document = None;
         self.top_nodes.clear();
@@ -78,6 +98,10 @@ impl Analysis {
                 self.top_nodes.clear();
                 self.document = data.pointer("/node/id").and_then(Value::as_i64);
                 collect_top_nodes(&data["node"], self.document, &mut self.top_nodes);
+                self.scroll_offset = data
+                    .pointer("/initialOffset/top")
+                    .and_then(Value::as_f64)
+                    .filter(|v| v.is_finite() && *v >= 0.0);
             }
             Some(3) => match data["source"].as_u64() {
                 Some(0) => {
@@ -108,6 +132,10 @@ impl Analysis {
                     self.push(time, "click", "click".into(), None, None);
                 }
                 Some(3) => {
+                    if self.document.is_some() && data["id"].as_i64() == self.document {
+                        self.scroll_offset =
+                            data["y"].as_f64().filter(|v| v.is_finite() && *v >= 0.0);
+                    }
                     self.push(time, "scroll", "scroll".into(), None, None);
                     if data["id"].as_i64() == self.document
                         && self.document.is_some()
@@ -137,15 +165,27 @@ impl Analysis {
                             self.navigate(to, time, "navigation");
                         }
                     } else if category == "ui.click" {
+                        let depth = self.depth();
                         if !label.is_empty()
                             && let Some(page) = self.page()
-                            && page.elements.len() < 1000
+                            && (page.elements.len() < 1000 || page.elements.contains_key(&label))
                         {
                             *page.elements.entry(label.clone()).or_default() += 1;
+                            if let Some(depth) = depth {
+                                let elements = page.depth_elements.entry(depth).or_default();
+                                if elements.len() < 50 || elements.contains_key(&label) {
+                                    *elements.entry(label.clone()).or_default() += 1;
+                                }
+                            }
                         }
                         self.push(time, category, label, None, Some(payload));
                     } else if matches!(category, "ui.slowClickDetected" | "ui.multiClick") {
                         let f = frustration(event);
+                        if self.signals.len() < MAX_TIMELINE {
+                            self.signals.push((time, f));
+                        } else {
+                            self.truncated = true;
+                        }
                         let kind = if f.rage > 0 {
                             "rage click"
                         } else if f.dead > 0 {
@@ -222,6 +262,55 @@ impl Analysis {
         {
             last.duration_ms = Some(end.saturating_sub(last.started_at_ms).max(0));
         }
+        for visit in &self.journey {
+            if let Some(page) = self.pages.get_mut(&visit.url) {
+                page.visits += 1;
+                page.sampled_replays = 1;
+                if let Some(duration) = visit.duration_ms {
+                    page.observed_time_ms += duration;
+                    page.timed_visits += 1;
+                }
+            }
+        }
+        for pair in self.journey.windows(2) {
+            if pair[0].duration_ms.is_some() {
+                if let Some(page) = self.pages.get_mut(&pair[0].url) {
+                    *page.next_pages.entry(pair[1].url.clone()).or_default() += 1;
+                }
+                if let Some(page) = self.pages.get_mut(&pair[1].url) {
+                    *page.previous_pages.entry(pair[0].url.clone()).or_default() += 1;
+                }
+            }
+        }
+        if !self.truncated
+            && let Some(url) = &self.url
+            && let Some(page) = self.pages.get_mut(url)
+        {
+            page.last_observed_replays = 1;
+        }
+        // Slow/rage breadcrumbs can arrive after navigation but refer to the original click time.
+        let page_at = |time: i64| {
+            self.journey
+                .iter()
+                .rev()
+                .find(|visit| {
+                    visit.started_at_ms <= time
+                        && visit.duration_ms.is_some_and(|duration| {
+                            time <= visit.started_at_ms.saturating_add(duration)
+                        })
+                })
+                .map(|visit| visit.url.clone())
+        };
+        for event in &mut self.timeline {
+            event.url = page_at(event.timestamp_ms);
+        }
+        for (time, signal) in &self.signals {
+            if let Some(url) = page_at(*time)
+                && let Some(page) = self.pages.get_mut(&url)
+            {
+                add_frustration(&mut page.frustration, *signal);
+            }
+        }
         self.timeline.sort_by_key(|event| event.timestamp_ms);
     }
     fn navigate(&mut self, href: &str, time: i64, kind: &str) {
@@ -247,7 +336,16 @@ impl Analysis {
             previous.duration_ms = Some(time.saturating_sub(previous.started_at_ms).max(0));
         }
         self.url = Some(url.clone());
-        let _ = self.page();
+        let width = self.viewport.map(|v| v.0);
+        if let Some(page) = self.page()
+            && let Some(width) = width
+        {
+            if width < 768.0 {
+                page.narrow_replays = 1;
+            } else {
+                page.wide_replays = 1;
+            }
+        }
         if self.journey.len() < MAX_PAGES {
             self.journey.push(Visit {
                 url: url.clone(),
@@ -313,7 +411,15 @@ impl Analysis {
             self.truncated = true;
             return;
         }
+        let depth = if click && self.url.as_deref() == Some(url.as_str()) {
+            self.depth()
+        } else {
+            None
+        };
         if let Some(page) = self.pages.get_mut(&url) {
+            if let Some(depth) = depth {
+                *page.depth_clicks.entry(depth).or_default() += 1;
+            }
             let cells = if click {
                 &mut page.clicks
             } else {
@@ -321,6 +427,11 @@ impl Analysis {
             };
             *cells.entry(cell).or_default() += 1;
         }
+    }
+    fn depth(&self) -> Option<String> {
+        let (_, height) = self.viewport?;
+        let depth = self.scroll_offset? / height;
+        (depth.is_finite() && depth < 100.0).then(|| (depth.floor() as u32).to_string())
     }
     fn page(&mut self) -> Option<&mut PageActivity> {
         let url = self.url.as_ref()?;
@@ -423,11 +534,10 @@ pub fn analyze(
             analysis.event(&event);
         }
     }
-    if !analysis.truncated {
-        analysis.finish(end);
-    } else {
-        analysis.timeline.sort_by_key(|e| e.timestamp_ms);
+    if analysis.truncated {
+        analysis.url = None;
     }
+    analysis.finish(end);
     Ok(analysis)
 }
 
@@ -451,12 +561,36 @@ impl PageMaps {
                 (&mut total.clicks, page.clicks),
                 (&mut total.movement, page.movement),
                 (&mut total.elements, page.elements),
+                (&mut total.depth_clicks, page.depth_clicks),
+                (&mut total.next_pages, page.next_pages),
+                (&mut total.previous_pages, page.previous_pages),
             ] {
                 for (cell, count) in b {
                     if a.len() < 1000 || a.contains_key(&cell) {
                         *a.entry(cell).or_default() += count;
                     } else {
                         self.truncated = true;
+                    }
+                }
+            }
+            total.visits += page.visits;
+            total.sampled_replays += page.sampled_replays;
+            total.observed_time_ms += page.observed_time_ms;
+            total.timed_visits += page.timed_visits;
+            total.last_observed_replays += page.last_observed_replays;
+            total.narrow_replays += page.narrow_replays;
+            total.wide_replays += page.wide_replays;
+            add_frustration(&mut total.frustration, page.frustration);
+            for id in page.replay_ids {
+                if total.replay_ids.len() < 3 && !total.replay_ids.contains(&id) {
+                    total.replay_ids.push(id);
+                }
+            }
+            for (depth, elements) in page.depth_elements {
+                let merged = total.depth_elements.entry(depth).or_default();
+                for (label, count) in elements {
+                    if merged.len() < 50 || merged.contains_key(&label) {
+                        *merged.entry(label).or_default() += count;
                     }
                 }
             }
@@ -467,4 +601,14 @@ impl PageMaps {
             }
         }
     }
+}
+
+fn add_frustration(
+    total: &mut crate::sentry::replay::Frustration,
+    value: crate::sentry::replay::Frustration,
+) {
+    total.slow += value.slow;
+    total.dead += value.dead;
+    total.rage += value.rage;
+    total.multi += value.multi;
 }

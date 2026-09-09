@@ -190,7 +190,9 @@ export function ReplayDetailPage() {
         </div>
       </div>
       <h2>Page activity</h2>
-      {analysis.data && <PageMaps pages={analysis.data.pages} />}
+      {analysis.data && (
+        <PageMaps pages={analysis.data.pages} project={project} />
+      )}
     </section>
   );
 }

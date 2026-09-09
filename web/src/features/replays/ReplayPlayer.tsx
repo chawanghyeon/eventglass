@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Replayer, type eventWithTime } from "@sentry/rrweb";
-import "@sentry/rrweb/dist/style.css";
+import playerCss from "@sentry/rrweb/dist/style.css?inline";
 import { Button } from "../../components/Button";
 import { Notice } from "../../components/Notice";
 import { duration } from "./presentation";
 
 // Static trusted document only. Recording HTML never enters the administration DOM.
 // No allow-scripts, forms, popups or top navigation. CSP is inherited by rrweb's child iframe.
-export const PLAYER_DOCUMENT = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; frame-src 'self'; form-action 'none'; base-uri 'none'"><style>html,body{margin:0;overflow:hidden}#player{transform-origin:top left}</style></head><body><div id="player"></div></body></html>`;
+export const PLAYER_DOCUMENT = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; frame-src 'self'; form-action 'none'; base-uri 'none'"><style>${playerCss}</style><style>html,body{margin:0;overflow:hidden}#player{transform-origin:top left}</style></head><body><div id="player"></div></body></html>`;
 
 export function ReplayPlayer({
   events,
@@ -30,6 +30,11 @@ export function ReplayPlayer({
   const last = events.at(-1);
   const end = typeof last?.timestamp === "number" ? last.timestamp : start;
   const total = Math.max(0, end - start);
+  const firstSnapshot = events.find((event) => event.type === 2);
+  const firstVisibleOffset = Math.min(
+    total,
+    Math.max(0, Number(firstSnapshot?.timestamp ?? start) - start + 1),
+  );
   useEffect(() => {
     const root = frame.current?.contentDocument?.getElementById("player");
     if (!ready || !root || events.length < 2) return;
@@ -44,7 +49,7 @@ export function ReplayPlayer({
         skipInactive: false,
       });
       player.current = instance;
-      instance.pause(0);
+      instance.pause(firstVisibleOffset);
     } catch {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- Report an external replayer construction failure.
       setError("이 구간의 DOM snapshot을 재생할 수 없습니다.");
@@ -79,24 +84,27 @@ export function ReplayPlayer({
       instance.destroy();
       player.current = null;
     };
-  }, [events, ready, total, start, onTime]);
+  }, [events, ready, total, start, onTime, firstVisibleOffset]);
   useEffect(() => {
     player.current?.setConfig({ speed });
   }, [speed, events, ready]);
   useEffect(() => {
     if (seekTo !== null && player.current) {
       try {
-        const offset = Math.max(0, Math.min(total, seekTo.time - start));
+        const offset = Math.max(
+          firstVisibleOffset,
+          Math.min(total, seekTo.time - start),
+        );
         player.current.pause(offset);
       } catch {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- Report failure of the external replayer seek.
         setError("누락되거나 손상된 구간입니다. 다른 시점을 선택해 주세요.");
       }
     }
-  }, [seekTo, start, total, onTime]);
+  }, [seekTo, start, total, onTime, firstVisibleOffset]);
   function seek(offset: number) {
     try {
-      player.current?.pause(offset);
+      player.current?.pause(Math.max(firstVisibleOffset, offset));
       setPosition(offset);
       onTime(start + offset);
       setPlaying(false);
@@ -132,7 +140,11 @@ export function ReplayPlayer({
                 player.current?.pause();
                 setPlaying(false);
               } else {
-                player.current?.play(position >= total ? 0 : position);
+                player.current?.play(
+                  position >= total
+                    ? firstVisibleOffset
+                    : Math.max(firstVisibleOffset, position),
+                );
                 setPlaying(true);
               }
             } catch {

@@ -1075,6 +1075,29 @@ export interface components {
             duration_ms: number | null;
         };
         ReplayPageActivity: {
+            visits: number;
+            sampled_replays: number;
+            observed_time_ms: number;
+            timed_visits: number;
+            last_observed_replays: number;
+            narrow_replays: number;
+            wide_replays: number;
+            next_pages: {
+                [key: string]: number;
+            };
+            previous_pages: {
+                [key: string]: number;
+            };
+            depth_clicks: {
+                [key: string]: number;
+            };
+            depth_elements: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            replay_ids: string[];
+            frustration: components["schemas"]["ReplayFrustration"];
             clicks: {
                 [key: string]: number;
             };
@@ -2035,6 +2058,8 @@ export interface operations {
                 dead_click?: boolean;
                 min_duration_ms?: number;
                 max_duration_ms?: number;
+                started_after_ms?: number;
+                started_before_ms?: number;
                 before_started_ms?: number;
                 before_id?: string;
             };
@@ -2102,6 +2127,8 @@ export interface operations {
                 dead_click?: boolean;
                 min_duration_ms?: number;
                 max_duration_ms?: number;
+                started_after_ms?: number;
+                started_before_ms?: number;
                 before_started_ms?: number;
                 before_id?: string;
             };
