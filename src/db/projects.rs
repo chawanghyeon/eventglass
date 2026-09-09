@@ -115,3 +115,30 @@ pub fn revoke_key(db: &mut Connection, actor: i64, project: i64, key: i64) -> Re
     tx.commit()?;
     Ok(())
 }
+
+#[derive(Debug, Serialize)]
+pub struct ProjectKey {
+    pub id: String,
+    pub public_key: String,
+}
+
+pub fn list_keys(db: &Connection, actor: i64, project: i64) -> Result<Vec<ProjectKey>> {
+    require_admin(db, actor)?;
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+        [project],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Err(ManagementError::NotFound.into());
+    }
+    let mut query = db.prepare("SELECT id, public_key FROM project_keys WHERE project_id=?1 AND revoked_at_us IS NULL ORDER BY id DESC")?;
+    Ok(query
+        .query_map([project], |row| {
+            Ok(ProjectKey {
+                id: row.get::<_, i64>(0)?.to_string(),
+                public_key: row.get(1)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?)
+}

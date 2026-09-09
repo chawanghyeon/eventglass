@@ -225,6 +225,30 @@ paths:
         "503":
           $ref: "#/components/responses/Error"
   /api/projects/{id}/keys:
+    get:
+      operationId: listProjectKeys
+      summary: List active SDK keys and DSNs (administrator only)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ProjectId"
+      responses:
+        "200":
+          description: Active project keys
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ProjectKey"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
     post:
       operationId: createProjectKey
       summary: Issue a project DSN key
@@ -234,7 +258,7 @@ paths:
         - $ref: "#/components/parameters/ProjectId"
       responses:
         "201":
-          description: One-time key and DSN
+          description: Issued key and DSN
           content:
             application/json:
               schema:

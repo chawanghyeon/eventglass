@@ -636,3 +636,73 @@ async fn login_and_setup_have_separate_bounded_attempt_queues() -> anyhow::Resul
     assert_eq!(setup_response.status(), StatusCode::BAD_REQUEST);
     Ok(())
 }
+
+#[tokio::test]
+async fn project_keys_remain_manageable_after_reload_and_are_admin_only() -> anyhow::Result<()> {
+    let fixture = fixture().await?;
+    setup(&fixture, "owner@example.test", PASSWORD).await?;
+    let owner = login(&fixture, "owner@example.test", PASSWORD).await?;
+    fixture.state.db.call(|db| {
+        db.execute_batch("INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'keys','Keys',0,0); INSERT INTO users(email,password_hash,role,created_at_us,updated_at_us) SELECT 'member@example.test',password_hash,'member',0,0 FROM users WHERE role='admin'")?;
+        Ok(())
+    }).await?;
+    let member = login(&fixture, "member@example.test", PASSWORD).await?;
+    let created = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/projects/1/keys",
+            Value::Null,
+            Some(&owner),
+        ))
+        .await?;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let key = json_body(created).await?;
+    let listed = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/projects/1/keys",
+            Value::Null,
+            Some(&owner),
+        ))
+        .await?;
+    assert_eq!(listed.status(), StatusCode::OK);
+    assert_eq!(json_body(listed).await?["items"], json!([key.clone()]));
+    let denied = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/projects/1/keys",
+            Value::Null,
+            Some(&member),
+        ))
+        .await?;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let revoked = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "DELETE",
+            &format!("/api/projects/1/keys/{}", key["id"].as_str().unwrap()),
+            Value::Null,
+            Some(&owner),
+        ))
+        .await?;
+    assert_eq!(revoked.status(), StatusCode::NO_CONTENT);
+    let listed = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/projects/1/keys",
+            Value::Null,
+            Some(&owner),
+        ))
+        .await?;
+    assert_eq!(json_body(listed).await?["items"], json!([]));
+    Ok(())
+}

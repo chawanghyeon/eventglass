@@ -149,7 +149,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List active SDK keys and DSNs (administrator only) */
+        get: operations["listProjectKeys"];
         put?: never;
         /** Issue a project DSN key */
         post: operations["createProjectKey"];
@@ -1158,6 +1159,32 @@ export interface operations {
             503: components["responses"]["Error"];
         };
     };
+    listProjectKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Active project keys */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        items: components["schemas"]["ProjectKey"][];
+                    };
+                };
+            };
+            403: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
     createProjectKey: {
         parameters: {
             query?: never;
@@ -1169,7 +1196,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description One-time key and DSN */
+            /** @description Issued key and DSN */
             201: {
                 headers: {
                     [name: string]: unknown;

@@ -1,3 +1,6 @@
+import { useQuery } from "@tanstack/react-query";
+import { endpoints } from "../../api/endpoints";
+import { describeApiError } from "../../api/client";
 import type { Project, ProjectKey } from "../../api/types";
 import { Button } from "../../components/Button";
 import { Notice } from "../../components/Notice";
@@ -5,7 +8,7 @@ import { Notice } from "../../components/Notice";
 interface ProjectCardProps {
   admin: boolean;
   busy: boolean;
-  issuedKey?: ProjectKey;
+  userId: string;
   onCreateKey: () => void;
   onRevokeKey: (key: ProjectKey) => void;
   onToggle: () => void;
@@ -15,17 +18,17 @@ interface ProjectCardProps {
 export function ProjectCard({
   admin,
   busy,
-  issuedKey,
+  userId,
   onCreateKey,
   onRevokeKey,
   onToggle,
   project,
 }: ProjectCardProps) {
-  async function copyDsn() {
-    if (issuedKey) {
-      await navigator.clipboard.writeText(issuedKey.dsn);
-    }
-  }
+  const keys = useQuery({
+    queryKey: ["projectKeys", userId, project.id],
+    queryFn: ({ signal }) => endpoints.projectKeys(project.id, signal),
+    enabled: admin,
+  });
 
   return (
     <article
@@ -46,57 +49,62 @@ export function ProjectCard({
         <span className="project-id">ID {project.id}</span>
       </header>
 
-      {issuedKey ? (
-        <div className="dsn-panel">
-          <Notice tone="warning">
-            이 DSN은 지금만 확인할 수 있습니다. 안전한 곳에 복사하세요.
-          </Notice>
-          <label>
-            DSN
-            <textarea readOnly rows={3} value={issuedKey.dsn} />
-          </label>
-          <div className="button-row">
-            <Button onClick={() => void copyDsn()} type="button">
-              DSN 복사
-            </Button>
-            <Button
-              disabled={busy}
-              onClick={() => onRevokeKey(issuedKey)}
-              type="button"
-              variant="danger"
-            >
-              이 키 폐기
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div className="project-card__actions">
-          <p>
-            {project.is_active
-              ? "SDK 연결용 DSN을 새로 발급할 수 있습니다."
-              : "중지된 프로젝트는 새 키를 발급할 수 없습니다."}
-          </p>
-          {admin ? (
+      {keys.isError ? (
+        <Notice tone="error">{describeApiError(keys.error)}</Notice>
+      ) : null}
+      {admin &&
+        keys.data?.map((issuedKey) => (
+          <div className="dsn-panel" key={issuedKey.id}>
+            <label>
+              DSN
+              <textarea readOnly rows={3} value={issuedKey.dsn} />
+            </label>
             <div className="button-row">
               <Button
-                disabled={busy || !project.is_active}
-                onClick={onCreateKey}
+                onClick={() =>
+                  void navigator.clipboard.writeText(issuedKey.dsn)
+                }
                 type="button"
               >
-                새 DSN 발급
+                DSN 복사
               </Button>
               <Button
                 disabled={busy}
-                onClick={onToggle}
+                onClick={() => onRevokeKey(issuedKey)}
                 type="button"
-                variant="quiet"
+                variant="danger"
               >
-                {project.is_active ? "프로젝트 중지" : "프로젝트 다시 활성화"}
+                이 키 폐기
               </Button>
             </div>
-          ) : null}
-        </div>
-      )}
+          </div>
+        ))}
+      <div className="project-card__actions">
+        <p>
+          {project.is_active
+            ? "SDK 연결용 DSN을 새로 발급할 수 있습니다."
+            : "중지된 프로젝트는 새 키를 발급할 수 없습니다."}
+        </p>
+        {admin ? (
+          <div className="button-row">
+            <Button
+              disabled={busy || !project.is_active}
+              onClick={onCreateKey}
+              type="button"
+            >
+              새 DSN 발급
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={onToggle}
+              type="button"
+              variant="quiet"
+            >
+              {project.is_active ? "프로젝트 중지" : "프로젝트 다시 활성화"}
+            </Button>
+          </div>
+        ) : null}
+      </div>
     </article>
   );
 }

@@ -193,7 +193,10 @@ pub fn router(app: AppState) -> Router {
         )
         .route("/api/projects", get(projects).post(create_project))
         .route("/api/projects/{id}", patch(update_project))
-        .route("/api/projects/{id}/keys", post(create_key))
+        .route(
+            "/api/projects/{id}/keys",
+            post(create_key).get(projects::list_keys),
+        )
         .route("/api/projects/{id}/keys/{key_id}", delete(revoke_key))
         .route("/api/system/status", get(system::status))
         .route("/api/system/doctor", get(system::doctor))

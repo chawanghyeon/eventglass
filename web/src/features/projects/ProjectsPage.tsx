@@ -1,8 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { describeApiError } from "../../api/client";
 import { endpoints } from "../../api/endpoints";
-import type { ProjectKey } from "../../api/types";
 import { Button } from "../../components/Button";
 import { Notice } from "../../components/Notice";
 import { Spinner } from "../../components/Spinner";
@@ -19,7 +17,6 @@ export function ProjectsPage() {
     ...projectsQuery(user?.id ?? "unknown"),
     enabled: Boolean(user),
   });
-  const [issuedKeys, setIssuedKeys] = useState<Record<string, ProjectKey>>({});
 
   const refreshProjects = () =>
     queryClient.invalidateQueries({ queryKey: ["projects", user?.id] });
@@ -35,20 +32,18 @@ export function ProjectsPage() {
   });
   const issueKey = useMutation({
     mutationFn: (projectId: string) => endpoints.createProjectKey(projectId),
-    onSuccess: (key, projectId) =>
-      setIssuedKeys((current) => ({ ...current, [projectId]: key })),
+    onSuccess: (_, projectId) =>
+      queryClient.invalidateQueries({
+        queryKey: ["projectKeys", user?.id, projectId],
+      }),
   });
   const revokeKey = useMutation({
     mutationFn: ({ projectId, keyId }: { projectId: string; keyId: string }) =>
       endpoints.revokeProjectKey(projectId, keyId),
     onSuccess: (_, input) =>
-      setIssuedKeys((current) =>
-        Object.fromEntries(
-          Object.entries(current).filter(
-            ([projectId]) => projectId !== input.projectId,
-          ),
-        ),
-      ),
+      queryClient.invalidateQueries({
+        queryKey: ["projectKeys", user?.id, input.projectId],
+      }),
   });
 
   const mutationError =
@@ -109,7 +104,7 @@ export function ProjectsPage() {
           <ProjectCard
             admin={user?.role === "admin"}
             busy={update.isPending || issueKey.isPending || revokeKey.isPending}
-            issuedKey={issuedKeys[project.id]}
+            userId={user?.id ?? "unknown"}
             key={project.id}
             onCreateKey={() => issueKey.mutate(project.id)}
             onRevokeKey={(key) =>

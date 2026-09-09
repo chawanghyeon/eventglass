@@ -111,3 +111,25 @@ pub(super) async fn revoke_key(
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+pub(super) async fn list_keys(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<Json<Value>> {
+    let principal = authenticate(&state, &headers, false, true).await?;
+    let keys = state
+        .app
+        .db
+        .call(move |db| crate::db::projects::list_keys(db, principal.id, id))
+        .await?;
+    let mut items = Vec::with_capacity(keys.len());
+    for key in keys {
+        let mut dsn = state.app.config.base_url.clone();
+        dsn.set_username(&key.public_key)
+            .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "invalid_base_url"))?;
+        dsn.set_path(&id.to_string());
+        items.push(json!({"id":key.id,"public_key":key.public_key,"dsn":dsn.to_string()}));
+    }
+    Ok(Json(json!({"items":items})))
+}

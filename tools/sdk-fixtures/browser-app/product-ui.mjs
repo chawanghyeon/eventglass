@@ -31,6 +31,7 @@ const setup = spawnSync(binary, ["admin", "setup-token"], {
   timeout: 15_000,
 });
 if (setup.status !== 0 || !setup.stdout.trim()) {
+  await rm(dataDir, { force: true, recursive: true });
   throw new Error(`setup-token failed: ${setup.stderr}`);
 }
 
@@ -42,8 +43,9 @@ const server = spawn(binary, ["serve"], {
 server.stderr.setEncoding("utf8");
 server.stderr.on("data", (chunk) => serverLog.push(chunk));
 
-const browser = await chromium.launch({ headless: true });
+let browser;
 try {
+  browser = await chromium.launch({ headless: true });
   await waitReady(baseUrl);
   const page = await browser.newPage();
   const browserErrors = [];
@@ -115,6 +117,10 @@ try {
   await card.getByRole("button", { name: "새 DSN 발급" }).click();
   const dsn = await card.getByLabel("DSN").inputValue();
   validateDsn(dsn, baseUrl, projectId);
+  await page.reload({ waitUntil: "networkidle" });
+  if ((await card.getByLabel("DSN").inputValue()) !== dsn) {
+    throw new Error("Issued DSN disappeared after reload");
+  }
 
   await ingest(page, dsn, "11111111111111111111111111111111");
   await waitForIssue(page, projectId, "unresolved", 1);
@@ -211,13 +217,24 @@ try {
     }),
   );
 } finally {
-  await browser.close();
-  server.kill("SIGTERM");
-  const exited = await Promise.race([
-    new Promise((resolve) => server.once("exit", resolve)),
-    new Promise((resolve) => setTimeout(() => resolve("timeout"), 30_000)),
-  ]);
-  if (exited === "timeout") server.kill("SIGKILL");
+  await browser?.close();
+  let timer;
+  try {
+    if (server.exitCode === null && server.signalCode === null) {
+      const stopped = new Promise((resolve) => server.once("exit", resolve));
+      server.kill("SIGTERM");
+      const exited = await Promise.race([
+        stopped,
+        new Promise((resolve) => { timer = setTimeout(() => resolve("timeout"), 30_000); }),
+      ]);
+      if (exited === "timeout") {
+        server.kill("SIGKILL");
+        await stopped;
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+  }
   if (server.exitCode && server.exitCode !== 0) {
     process.stderr.write(serverLog.join(""));
   }

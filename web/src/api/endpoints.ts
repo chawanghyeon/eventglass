@@ -144,6 +144,11 @@ export const endpoints = {
       body: { is_active: project.is_active },
       signal,
     }),
+  projectKeys: (projectId: string, signal?: AbortSignal) =>
+    apiRequest<{ items: ProjectKey[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/keys`,
+      { signal },
+    ).then((result) => result.items),
   createProjectKey: (projectId: string, signal?: AbortSignal) =>
     apiRequest<ProjectKey>(
       `/api/projects/${encodeURIComponent(projectId)}/keys`,
