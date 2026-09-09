@@ -22,17 +22,24 @@ WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/eventglass-ci-tools.XXXXXX")
 trap 'rm -rf "$WORK_DIR"' EXIT HUP INT TERM
 mkdir -p "$TOOLS_BIN" "$WORK_DIR/actionlint" "$WORK_DIR/shellcheck"
 
+download() {
+    destination=$1
+    url=$2
+    curl --fail --location --silent --show-error \
+        --retry 5 --retry-all-errors --retry-delay 2 \
+        --connect-timeout 20 --max-time 300 \
+        --output "$destination" "$url"
+}
+
 actionlint_asset="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-curl --fail --location --silent --show-error \
-    --output "$WORK_DIR/$actionlint_asset" \
+download "$WORK_DIR/$actionlint_asset" \
     "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/$actionlint_asset"
 printf '%s  %s\n' "$ACTIONLINT_LINUX_AMD64_SHA256" "$WORK_DIR/$actionlint_asset" | sha256sum --check --status
 tar -xzf "$WORK_DIR/$actionlint_asset" -C "$WORK_DIR/actionlint"
 install -m 0755 "$WORK_DIR/actionlint/actionlint" "$TOOLS_BIN/actionlint"
 
 shellcheck_asset="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
-curl --fail --location --silent --show-error \
-    --output "$WORK_DIR/$shellcheck_asset" \
+download "$WORK_DIR/$shellcheck_asset" \
     "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/$shellcheck_asset"
 printf '%s  %s\n' "$SHELLCHECK_LINUX_X86_64_SHA256" "$WORK_DIR/$shellcheck_asset" | sha256sum --check --status
 tar -xJf "$WORK_DIR/$shellcheck_asset" -C "$WORK_DIR/shellcheck" --strip-components=1
