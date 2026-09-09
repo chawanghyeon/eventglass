@@ -78,7 +78,7 @@ export function IssuesPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">오류 추적</p>
-          <h1>Issues</h1>
+          <h1>오류 추적</h1>
           <p>같은 원인의 오류를 묶어 발생 횟수와 상태를 확인합니다.</p>
         </div>
         {issues.data ? (

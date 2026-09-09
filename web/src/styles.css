@@ -1838,3 +1838,153 @@ textarea {
 .replay-table thead th {
   white-space: nowrap;
 }
+
+/* First-use guidance and purposeful navigation. */
+.mobile-menu-toggle {
+  display: none;
+}
+.getting-started {
+  padding: clamp(1.5rem, 4vw, 3.5rem);
+  border: 1px solid var(--line);
+  border-radius: 1.25rem;
+  background: var(--paper);
+}
+.getting-started h2 {
+  font-size: clamp(1.4rem, 3vw, 2rem);
+  max-width: 32rem;
+}
+.getting-started > p {
+  max-width: 38rem;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.setup-symbol {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  background: #d8f4e9;
+  color: #087755;
+  border-radius: 1rem;
+  font-size: 1.6rem;
+  margin-bottom: 1rem;
+}
+.setup-steps {
+  list-style: none;
+  counter-reset: setup;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  padding: 0;
+  margin: 2rem 0;
+}
+.setup-steps li {
+  counter-increment: setup;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+  display: grid;
+  gap: 0.6rem;
+}
+.setup-steps li::before {
+  content: "0" counter(setup);
+  color: #087755;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.setup-steps span {
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.replay-entry {
+  display: grid;
+  gap: 0.4rem;
+  text-decoration: none;
+  min-width: 10rem;
+}
+.replay-entry span {
+  font-size: 0.78rem;
+  color: #087755;
+}
+.replay-entry-url {
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+}
+.dsn-panel .disclosure {
+  margin-top: 0.75rem;
+}
+.project-card pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 1rem;
+  background: #f3f6f8;
+  border-radius: 0.6rem;
+  font-size: 0.8rem;
+  line-height: 1.65;
+}
+a.button {
+  text-decoration: none;
+}
+@media (max-width: 900px) {
+  .sidebar {
+    grid-template-columns: 1fr auto auto;
+  }
+  .mobile-menu-toggle {
+    display: block;
+    grid-row: 1;
+    grid-column: 2;
+    border: 1px solid #40515d;
+    color: white;
+    background: transparent;
+    border-radius: 0.5rem;
+    padding: 0.65rem;
+    font: inherit;
+    cursor: pointer;
+  }
+  .sidebar .sidebar__bottom {
+    grid-column: 3;
+  }
+  .sidebar nav {
+    display: none;
+  }
+  .sidebar nav.is-open {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
+  .sidebar nav a {
+    justify-content: start;
+    white-space: normal;
+  }
+}
+@media (max-width: 600px) {
+  .setup-steps {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+  .setup-steps li {
+    grid-template-columns: 2rem 1fr;
+    gap: 0.4rem;
+  }
+  .setup-steps span {
+    grid-column: 2;
+  }
+  .sidebar {
+    gap: 0.6rem;
+  }
+  .sidebar__brand {
+    font-size: 0.95rem;
+  }
+}
+
+.getting-started h2,
+.getting-started p,
+.setup-steps {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}

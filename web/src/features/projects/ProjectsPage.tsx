@@ -55,7 +55,7 @@ export function ProjectsPage() {
         <div>
           <p className="eyebrow">수집 구성</p>
           <h1>프로젝트</h1>
-          <p>데이터 경계를 만들고 SDK 연결에 필요한 DSN을 발급합니다.</p>
+          <p>분석할 서비스를 등록하고 Sentry SDK를 연결하세요.</p>
         </div>
         {projects.data ? (
           <span className="count-badge">{projects.data.length}개</span>
@@ -63,10 +63,21 @@ export function ProjectsPage() {
       </header>
 
       {user?.role === "admin" ? (
-        <ProjectForm
-          disabled={create.isPending}
-          onCreate={(input) => create.mutate(input)}
-        />
+        projects.data?.length ? (
+          <details className="disclosure">
+            <summary>새 프로젝트 추가</summary>
+            <ProjectForm
+              disabled={create.isPending}
+              onCreate={(input) => create.mutate(input)}
+            />
+          </details>
+        ) : (
+          <ProjectForm
+            key={create.data?.id ?? "new"}
+            disabled={create.isPending}
+            onCreate={(input) => create.mutate(input)}
+          />
+        )
       ) : (
         <Notice>프로젝트 설정은 관리자만 변경할 수 있습니다.</Notice>
       )}
@@ -87,17 +98,6 @@ export function ProjectsPage() {
             다시 시도
           </Button>
         </Notice>
-      ) : null}
-      {projects.data?.length === 0 ? (
-        <div className="empty-state">
-          <span className="empty-state__mark" aria-hidden="true">
-            01
-          </span>
-          <h2>첫 프로젝트를 추가하세요.</h2>
-          <p>
-            프로젝트를 만든 뒤 DSN을 발급하면 SDK 연결을 준비할 수 있습니다.
-          </p>
-        </div>
       ) : null}
       <div className="project-grid">
         {projects.data?.map((project) => (

@@ -71,7 +71,7 @@ export function ExplorePage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">분석</p>
-          <h1>Explore</h1>
+          <h1>수치 분석</h1>
           <p>로그의 건수와 수치를 비교하고 추이를 확인하세요.</p>
         </div>
         {aggregate.data ? (

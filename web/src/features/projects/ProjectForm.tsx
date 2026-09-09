@@ -21,10 +21,10 @@ export function ProjectForm({
     <form className="project-form" onSubmit={submit}>
       <div className="form-heading">
         <div>
-          <p className="eyebrow">새 수집 경계</p>
+          <p className="eyebrow">1단계 · 서비스 등록</p>
           <h2>프로젝트 추가</h2>
         </div>
-        <p>환경이나 제품 단위로 데이터를 분리합니다.</p>
+        <p>웹사이트나 서비스 하나를 프로젝트로 등록하세요.</p>
       </div>
       <div className="project-form__fields">
         <label>
@@ -38,13 +38,13 @@ export function ProjectForm({
           />
         </label>
         <label>
-          Slug
+          프로젝트 식별자 (영문)
           <input
             autoCapitalize="none"
             maxLength={64}
             onChange={(event) => setSlug(event.target.value.toLowerCase())}
             pattern={"[a-z0-9\\-]+"}
-            placeholder="payments-api"
+            placeholder="my-shop"
             required
             spellCheck={false}
             value={slug}

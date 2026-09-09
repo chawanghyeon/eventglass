@@ -152,7 +152,7 @@ export function LogsPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">검색</p>
-          <h1>Logs</h1>
+          <h1>로그 검색</h1>
           <p>메시지를 검색하고 오류의 원인을 확인하세요.</p>
         </div>
         {logs.data ? (

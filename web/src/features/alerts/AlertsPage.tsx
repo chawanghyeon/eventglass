@@ -129,7 +129,7 @@ export function AlertsPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">자동 감시</p>
-          <h1>Alerts</h1>
+          <h1>알림 규칙</h1>
           <p>
             수신 시각 window를 기본으로 평가하며 webhook은 at-least-once로
             전송합니다.

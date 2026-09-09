@@ -56,3 +56,32 @@ it("switches views without mixing results or sending view state to the API", asy
   expect(maps.mock.calls[0][0]).not.toContain("view=");
   expect(list.mock.calls).toHaveLength(1);
 });
+
+it("guides a first-time admin to setup instead of showing unusable replay filters", () => {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  client.setQueryData(sessionQueryKey, {
+    id: "first",
+    email: "first@example.invalid",
+    role: "admin",
+    csrf_token: "qa",
+  });
+  client.setQueryData(["projects", "first"], []);
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter>
+        <ReplaysPage />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+  expect(
+    screen.getByRole("link", { name: "웹사이트 연결하기 →" }),
+  ).toHaveAttribute("href", "/projects");
+  expect(
+    screen.queryByRole("textbox", { name: "URL" }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole("button", { name: "새로고침" }),
+  ).not.toBeInTheDocument();
+});

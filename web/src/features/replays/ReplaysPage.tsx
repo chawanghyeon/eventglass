@@ -1,14 +1,14 @@
 import { FeedbackPanel } from "./FeedbackPanel";
 import { PageMaps } from "./PageMaps";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { describeApiError } from "../../api/client";
 import { Notice } from "../../components/Notice";
 import { Button } from "../../components/Button";
 import { useSession } from "../auth";
 import { projectsQuery } from "../projects";
 import { replaysQuery, mapsQuery } from "./queries";
-import { duration, userLabel } from "./presentation";
+import { displayPage, duration, userLabel } from "./presentation";
 
 export function ReplaysPage() {
   const session = useSession();
@@ -19,6 +19,7 @@ export function ReplaysPage() {
     enabled: !!user,
   });
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
   const active = projects.data?.filter((p) => p.is_active) ?? [];
   const selected = params.get("project");
   const project =
@@ -67,11 +68,78 @@ export function ReplaysPage() {
     next.delete("before_id");
     setParams(next);
   }
+  if (projects.isSuccess && !project) {
+    return (
+      <section className="page-stack">
+        <header className="page-heading">
+          <div>
+            <h1>방문 분석</h1>
+            <p>방문자의 화면과 행동을 확인하세요.</p>
+          </div>
+        </header>
+        <div className="getting-started">
+          <span className="setup-symbol" aria-hidden="true">
+            ▷
+          </span>
+          <h2>
+            {active.length
+              ? "다른 프로젝트를 선택해 주세요"
+              : "웹사이트를 연결해 주세요"}
+          </h2>
+          <p>
+            {active.length
+              ? "이전에 선택한 프로젝트가 없거나 중지되었습니다."
+              : "공식 Sentry SDK가 보내는 방문 기록을 재생하고, 클릭과 스크롤을 분석합니다."}
+          </p>
+          {active.length ? (
+            <label>
+              프로젝트
+              <select
+                value=""
+                onChange={(e) => change("project", e.target.value)}
+              >
+                <option value="" disabled>
+                  프로젝트 선택
+                </option>
+                {active.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : user?.role === "admin" ? (
+            <>
+              <ol className="setup-steps">
+                <li>
+                  <strong>프로젝트 만들기</strong>
+                  <span>분석할 웹사이트를 등록합니다.</span>
+                </li>
+                <li>
+                  <strong>Sentry SDK 연결</strong>
+                  <span>연결 주소와 설정 예제를 복사합니다.</span>
+                </li>
+                <li>
+                  <strong>방문 기록 확인</strong>
+                  <span>수집된 세션을 재생합니다.</span>
+                </li>
+              </ol>
+              <Link className="button button--primary" to="/projects">
+                웹사이트 연결하기 →
+              </Link>
+            </>
+          ) : (
+            <p>관리자에게 프로젝트 연결을 요청해 주세요.</p>
+          )}
+        </div>
+      </section>
+    );
+  }
   return (
     <section className="page-stack">
       <header className="page-heading">
         <div>
-          <h1>Replays</h1>
+          <h1>방문 분석</h1>
           <p>방문을 재생하고, 페이지에서 막힌 지점을 찾으세요.</p>
         </div>
         <Button
@@ -90,7 +158,7 @@ export function ReplaysPage() {
       </header>
       <nav className="view-switcher" aria-label="Replay 보기">
         {[
-          ["recordings", "세션 녹화"],
+          ["recordings", "방문 기록"],
           ["pages", "페이지 분석"],
           ["feedback", "사용자 피드백"],
         ].map(([value, label]) => (
@@ -133,7 +201,7 @@ export function ReplaysPage() {
               />
             </label>
             <label>
-              Error
+              오류 포함
               <select
                 value={params.get("has_error") ?? ""}
                 onChange={(e) => change("has_error", e.target.value)}
@@ -157,9 +225,9 @@ export function ReplaysPage() {
           </summary>
           <div className="replay-filters">
             {[
-              ["environment", "Environment"],
-              ["release", "Release"],
-              ["user", "User"],
+              ["environment", "환경"],
+              ["release", "릴리스"],
+              ["user", "사용자"],
             ].map(([name, label]) => (
               <label key={name}>
                 {label}
@@ -226,7 +294,26 @@ export function ReplaysPage() {
           </div>
         </details>
       )}
-      {!project && <Notice>활성 프로젝트를 선택해 주세요.</Notice>}
+      {Array.from(params.keys()).some(
+        (key) => !["project", "view", "viewport"].includes(key),
+      ) && (
+        <div className="button-row">
+          <span className="muted">필터가 적용되어 있습니다.</span>
+          <Button
+            variant="quiet"
+            onClick={() => {
+              const next = new URLSearchParams();
+              for (const key of ["project", "view", "viewport"]) {
+                const value = params.get(key);
+                if (value) next.set(key, value);
+              }
+              setParams(next);
+            }}
+          >
+            필터 초기화
+          </Button>
+        </div>
+      )}
       {project && replays.isPending && <Notice>Replay를 불러오는 중…</Notice>}
       {replays.isError && (
         <Notice tone="error">{describeApiError(replays.error)}</Notice>
@@ -252,9 +339,22 @@ export function ReplaysPage() {
                     <td>
                       <Link
                         to={`/replays/${r.project_id}/${r.metadata.replay_id}`}
+                        state={{
+                          replaysReturnTo: location.pathname + location.search,
+                        }}
+                        className="replay-entry"
                       >
-                        {userLabel(r.metadata.user)}
+                        <strong>{userLabel(r.metadata.user)}</strong>
+                        <span>▶ 방문 기록 보기</span>
                       </Link>
+                      <p
+                        className="replay-entry-url"
+                        title={r.metadata.urls[0]}
+                      >
+                        {r.metadata.urls[0]
+                          ? displayPage(r.metadata.urls[0])
+                          : "페이지 정보 없음"}
+                      </p>
                     </td>
                     <td>
                       {new Date(r.metadata.started_at_ms).toLocaleString()}
@@ -292,8 +392,11 @@ export function ReplaysPage() {
           </div>
           {!replays.data.items.length && (
             <Notice>
-              조건에 맞는 Replay가 없습니다. 프로젝트에 공식 replayIntegration과
-              sampling 설정이 필요합니다.
+              조건에 맞는 Replay가 없습니다. 필터를 바꾸거나 웹사이트 연결
+              설정을 확인해 주세요.
+              {user?.role === "admin" && (
+                <Link to="/projects">SDK 연결 설정 보기 →</Link>
+              )}
             </Notice>
           )}
           {replays.data.next_cursor && (

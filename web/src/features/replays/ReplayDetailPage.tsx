@@ -69,7 +69,16 @@ export function ReplayDetailPage() {
     <section className="page-stack">
       <header className="page-heading">
         <div>
-          <Link to={`/replays?project=${project}`}>← Replays</Link>
+          <Link
+            to={
+              typeof location.state?.replaysReturnTo === "string" &&
+              location.state.replaysReturnTo.startsWith("/replays?")
+                ? location.state.replaysReturnTo
+                : `/replays?project=${project}`
+            }
+          >
+            ← 방문 기록으로
+          </Link>
           <h1>{userLabel(m.user)}</h1>
           <p>
             {new Date(m.started_at_ms).toLocaleString()} ·{" "}

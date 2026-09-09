@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import type { ReplayPageActivity } from "../../api/types";
 import { Notice } from "../../components/Notice";
-import { duration } from "./presentation";
+import { displayPage, duration } from "./presentation";
 
 export function PageMaps({
   pages,
@@ -11,6 +11,13 @@ export function PageMaps({
   pages: Record<string, ReplayPageActivity>;
   project?: string;
 }) {
+  const location = useLocation();
+  const returnState = {
+    replaysReturnTo:
+      location.pathname === "/replays"
+        ? location.pathname + location.search
+        : location.state?.replaysReturnTo,
+  };
   const urls = Object.keys(pages);
   const [selected, setSelected] = useState("");
   const [mode, setMode] = useState<"clicks" | "movement">("clicks");
@@ -29,7 +36,7 @@ export function PageMaps({
   const evidence = (kind: string, key: string, label: React.ReactNode) => {
     const to = example(kind, key);
     return to ? (
-      <Link to={to} title="관측된 Replay 시점 보기">
+      <Link to={to} state={returnState} title="관측된 Replay 시점 보기">
         {label}
       </Link>
     ) : (
@@ -61,8 +68,10 @@ export function PageMaps({
                     <button
                       className="link-button"
                       onClick={() => setSelected(pageUrl)}
+                      aria-label={pageUrl}
+                      title={pageUrl}
                     >
-                      {pageUrl}
+                      {displayPage(pageUrl)} <span aria-hidden="true">→</span>
                     </button>
                   </td>
                   <td>{item.visits}</td>
@@ -89,7 +98,7 @@ export function PageMaps({
           <select value={url} onChange={(e) => setSelected(e.target.value)}>
             {urls.map((u) => (
               <option key={u} value={u}>
-                {u}
+                {displayPage(u)}
               </option>
             ))}
           </select>
@@ -176,7 +185,7 @@ export function PageMaps({
             <ul>
               {page.replay_ids.map((id, index) => (
                 <li key={id}>
-                  <Link to={`/replays/${project}/${id}`}>
+                  <Link to={`/replays/${project}/${id}`} state={returnState}>
                     관련 Replay {index + 1}
                   </Link>
                 </li>
@@ -225,6 +234,7 @@ export function PageMaps({
             <Link
               key={cell}
               to={to}
+              state={returnState}
               aria-label={`${count} samples · ${cell} · Replay 시점 보기`}
             >
               {dot}

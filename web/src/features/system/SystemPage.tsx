@@ -38,7 +38,7 @@ export function SystemPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">운영</p>
-          <h1>Storage / System</h1>
+          <h1>시스템 상태</h1>
           <p>수집 가능 여부, 로컬 보관과 원격 복구 가능 범위를 구분합니다.</p>
         </div>
         <Button

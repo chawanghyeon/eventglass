@@ -10,7 +10,10 @@ describe("ProjectForm", () => {
     render(<ProjectForm disabled={false} onCreate={onCreate} />);
 
     await user.type(screen.getByLabelText("표시 이름"), "  결제 API  ");
-    await user.type(screen.getByLabelText("Slug"), "Payments-API");
+    await user.type(
+      screen.getByLabelText("프로젝트 식별자 (영문)"),
+      "Payments-API",
+    );
     await user.click(screen.getByRole("button", { name: "프로젝트 추가" }));
 
     expect(onCreate).toHaveBeenCalledWith({

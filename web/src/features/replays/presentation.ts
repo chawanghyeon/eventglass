@@ -6,5 +6,14 @@ export function userLabel(user: Record<string, unknown> | null) {
   for (const field of ["id", "email", "username", "name"]) {
     if (typeof user?.[field] === "string") return user[field];
   }
-  return "anonymous";
+  return "익명 방문자";
+}
+
+export function displayPage(value: string): string {
+  try {
+    const url = new URL(value);
+    return url.pathname === "/" ? url.host : url.pathname;
+  } catch {
+    return value;
+  }
 }

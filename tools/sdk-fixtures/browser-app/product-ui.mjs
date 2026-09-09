@@ -106,7 +106,7 @@ try {
   ]);
 
   await page.getByLabel("표시 이름").fill("Product UI E2E");
-  await page.getByLabel("Slug").fill("product-ui-e2e");
+  await page.getByLabel("프로젝트 식별자 (영문)").fill("product-ui-e2e");
   await page.getByRole("button", { name: "프로젝트 추가" }).click();
   const card = page.locator("article.project-card", {
     has: page.getByRole("heading", { name: "Product UI E2E" }),
@@ -125,7 +125,7 @@ try {
 
   await ingest(page, dsn, "11111111111111111111111111111111");
   await waitForIssue(page, projectId, "unresolved", 1);
-  await page.getByRole("link", { name: "Issues", exact: true }).click();
+  await page.getByRole("link", { name: "오류 추적", exact: true }).click();
   await page.waitForURL((url) => url.pathname === "/issues", { timeout: 15_000 });
   const firstIssueLink = page.getByRole("link", { name: issueTitle });
   try {
@@ -156,13 +156,13 @@ try {
 
   await ingest(page, dsn, "22222222222222222222222222222222");
   await waitForIssue(page, projectId, "unresolved", 2);
-  await page.getByRole("link", { name: "Issues", exact: true }).click();
+  await page.getByRole("link", { name: "오류 추적", exact: true }).click();
   await page.waitForURL((url) => url.pathname === "/issues", { timeout: 15_000 });
   await page.getByRole("link", { name: issueTitle }).click();
   await page.getByText("2회", { exact: true }).waitFor();
   await page.getByRole("table").getByText("미해결", { exact: true }).waitFor();
 
-  await page.getByRole("link", { name: "Logs", exact: true }).click();
+  await page.getByRole("link", { name: "로그 검색", exact: true }).click();
   await page.waitForURL((url) => url.pathname === "/logs", { timeout: 15_000 });
   const logTable = page.getByRole("table");
   await logTable.getByText(issueTitle, { exact: true }).first().waitFor();

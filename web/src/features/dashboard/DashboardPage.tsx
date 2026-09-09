@@ -122,8 +122,8 @@ export function DashboardPage() {
       <header className="page-heading">
         <div>
           <p className="eyebrow">개요</p>
-          <h1>Dashboard</h1>
-          <p>최근 수집량, 오류 흐름, Issue와 저장소 준비 상태를 확인합니다.</p>
+          <h1>전체 현황</h1>
+          <p>서비스에서 일어나는 오류와 수집 현황을 확인하세요.</p>
         </div>
         <label className="dashboard-project">
           프로젝트
@@ -152,7 +152,14 @@ export function DashboardPage() {
             00
           </span>
           <h2>활성 프로젝트가 없습니다.</h2>
-          <p>프로젝트를 활성화하면 수집 현황을 볼 수 있습니다.</p>
+          <p>웹사이트를 연결하면 오류와 방문 기록을 확인할 수 있습니다.</p>
+          {user?.role === "admin" ? (
+            <Link className="button button--primary" to="/projects">
+              웹사이트 연결하기 →
+            </Link>
+          ) : (
+            <p>관리자에게 프로젝트 연결을 요청해 주세요.</p>
+          )}
         </div>
       ) : null}
       {requestedProject && !project && activeProjects.length > 0 ? (
@@ -174,7 +181,7 @@ export function DashboardPage() {
               <small>record</small>
             </article>
             <article className="dashboard-card">
-              <span>미해결 Issue</span>
+              <span>미해결 오류</span>
               <strong>{issues.data?.items.length ?? "—"}</strong>
               <small>
                 {issues.data?.next_cursor ? "다음 결과 있음" : "현재 목록"}
@@ -206,7 +213,7 @@ export function DashboardPage() {
             <header>
               <div>
                 <p className="eyebrow">최근 흐름</p>
-                <h2 id="dashboard-flow-heading">Error와 Log</h2>
+                <h2 id="dashboard-flow-heading">오류·로그 추이</h2>
               </div>
               {rows.data ? <span>{rows.data.watermark} W</span> : null}
             </header>
@@ -231,9 +238,9 @@ export function DashboardPage() {
             <header>
               <div>
                 <p className="eyebrow">같은 스냅샷</p>
-                <h2 id="recent-records-heading">최근 record</h2>
+                <h2 id="recent-records-heading">최근 기록</h2>
               </div>
-              <Link to={`/logs?${searchParams}`}>Logs에서 보기</Link>
+              <Link to={`/logs?${searchParams}`}>로그 검색에서 보기</Link>
             </header>
             {rows.data?.rows.length === 0 ? (
               <p className="histogram__empty">최근 record가 없습니다.</p>

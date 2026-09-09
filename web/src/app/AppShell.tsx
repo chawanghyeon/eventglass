@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { Button } from "../components/Button";
@@ -6,6 +7,7 @@ import { SystemReadiness } from "../features/system";
 
 export function AppShell() {
   const session = useSession();
+  const [menuOpen, setMenuOpen] = useState(false);
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const logout = useMutation({
@@ -27,25 +29,41 @@ export function AppShell() {
           </span>
           <span>Eventglass</span>
         </div>
-        <nav aria-label="주요 메뉴">
+        <button
+          className="mobile-menu-toggle"
+          type="button"
+          aria-expanded={menuOpen}
+          aria-controls="main-navigation"
+          onClick={() => setMenuOpen(!menuOpen)}
+        >
+          {menuOpen ? "메뉴 닫기" : "메뉴 열기"}
+        </button>
+        <nav
+          id="main-navigation"
+          className={menuOpen ? "is-open" : ""}
+          aria-label="주요 메뉴"
+          onClick={(event) => {
+            if ((event.target as Element).closest("a")) setMenuOpen(false);
+          }}
+        >
           <NavLink end to="/">
             <span aria-hidden="true">◫</span>
-            Dashboard
+            전체 현황
           </NavLink>
           <NavLink to="/explore">
             <span aria-hidden="true">▥</span>
-            Explore
+            수치 분석
           </NavLink>
           <NavLink to="/logs">
             <span aria-hidden="true">≋</span>
-            Logs
+            로그 검색
           </NavLink>
           <NavLink to="/issues">
             <span aria-hidden="true">◇</span>
-            Issues
+            오류 추적
           </NavLink>
           <NavLink to="/replays">
-            <span aria-hidden="true">▷</span>Replays
+            <span aria-hidden="true">▷</span>방문 분석
           </NavLink>
           <NavLink to="/projects">
             <span aria-hidden="true">⌁</span>
@@ -55,7 +73,7 @@ export function AppShell() {
             <>
               <NavLink to="/alerts">
                 <span aria-hidden="true">△</span>
-                Alerts
+                알림 규칙
               </NavLink>
               <NavLink to="/users">
                 <span aria-hidden="true">◎</span>
@@ -63,7 +81,7 @@ export function AppShell() {
               </NavLink>
               <NavLink to="/system">
                 <span aria-hidden="true">◉</span>
-                System
+                시스템 상태
               </NavLink>
             </>
           ) : null}
