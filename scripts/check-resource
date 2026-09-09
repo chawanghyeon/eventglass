@@ -57,7 +57,15 @@ def main():
             cargo.extend(['--test', target])
         print('Build phase: 2 CPUs / 4 GiB. Product test phase below: 1 CPU / '+str(args.memory_bytes)+' bytes / no swap.', flush=True)
         with (stage/'artifacts.jsonl').open('w') as output:
-            container(['--cpus=2', '--memory=4294967296', '--memory-swap=4294967296', *mounts, '--mount', 'type=volume,src=eventglass-linux-test-cargo,dst=/cargo', '-e', 'CARGO_HOME=/cargo', '-e', 'CARGO_TARGET_DIR=/target', '-e', 'CARGO_BUILD_JOBS=2', IMAGE, *cargo], stdout=output)
+            try:
+                container(['--cpus=2', '--memory=4294967296', '--memory-swap=4294967296', *mounts, '--mount', 'type=volume,src=eventglass-linux-test-cargo,dst=/cargo', '-e', 'CARGO_HOME=/cargo', '-e', 'CARGO_TARGET_DIR=/target', '-e', 'CARGO_BUILD_JOBS=2', IMAGE, *cargo], stdout=output)
+            except RuntimeError:
+                output.flush()
+                for line in (stage/'artifacts.jsonl').read_text().splitlines():
+                    message = json.loads(line).get('message', {})
+                    if message.get('rendered'):
+                        print(message['rendered'], flush=True)
+                raise
         artifacts = {}
         for line in (stage/'artifacts.jsonl').read_text().splitlines():
             item = json.loads(line)

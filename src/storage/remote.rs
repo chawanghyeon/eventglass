@@ -157,6 +157,16 @@ pub async fn publish(
     candidate: &LocalCheckpoint,
 ) -> Result<LatestDocument> {
     validate_checkpoint(&candidate.document)?;
+    let installation: InstallationDocument = serde_json::from_slice(
+        &store
+            .get_small("installation.json", MAX_CONTROL_BYTES)
+            .await?,
+    )?;
+    validate_installation(&installation)?;
+    ensure!(
+        installation.installation_id == candidate.document.cut.installation_id,
+        "checkpoint publication namespace differs from local installation"
+    );
     let archive_ids = candidate
         .shard_archives
         .iter()
@@ -226,9 +236,17 @@ pub async fn publish(
 
     let checkpoint_bytes = serde_json::to_vec(&candidate.document)?;
     let checkpoint_key = checkpoint_key(&candidate.document.checkpoint_id);
-    store
+    if let Err(error) = store
         .put_if_absent(&checkpoint_key, checkpoint_bytes.clone())
-        .await?;
+        .await
+    {
+        // A lost response after immutable publication is safe to retry only byte-for-byte.
+        let existing = store.get_small(&checkpoint_key, MAX_CONTROL_BYTES).await?;
+        ensure!(
+            existing == checkpoint_bytes,
+            "immutable checkpoint differs after retry: {error}"
+        );
+    }
     let latest = LatestDocument {
         format_version: 1,
         installation_id: candidate.document.cut.installation_id.clone(),
@@ -295,10 +313,9 @@ pub async fn prepare_restore(
         let attempt = parent.join(format!(".restore-{}.tmp", uuid::Uuid::new_v4()));
         std::fs::create_dir(&attempt)?;
         let guard = RemoveDirectory(attempt.clone());
-        if restore_candidate(store, &document, &attempt, limits, &cancelled)
-            .await
-            .is_err()
+        if let Err(error) = restore_candidate(store, &document, &attempt, limits, &cancelled).await
         {
+            tracing::warn!(checkpoint_id = %document.checkpoint_id, reason = %error, "checkpoint restore failed; trying an older complete checkpoint");
             continue;
         }
         std::fs::rename(&attempt, destination)?;
@@ -1058,6 +1075,7 @@ mod tests {
         ensure_installation(&store, &installation(&installation_id), true).await?;
         let latest = publish(&store, &candidate).await?;
         assert_eq!(latest.checkpoint_id, candidate.document.checkpoint_id);
+        assert_eq!(publish(&store, &candidate).await?, latest);
         let writes = store.writes();
         let checkpoint = checkpoint_key(&candidate.document.checkpoint_id);
         assert!(
@@ -1078,6 +1096,7 @@ mod tests {
         );
 
         let failed = MemoryStore::default();
+        ensure_installation(&failed, &installation(&installation_id), true).await?;
         failed.fail_on(&candidate.document.snapshot.key);
         assert!(publish(&failed, &candidate).await.is_err());
         assert!(!failed.keys().contains(&checkpoint));

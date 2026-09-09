@@ -140,6 +140,30 @@ impl PinnedSnapshot {
         &self.cut
     }
 
+    /// Reserve the snapshot and newly archived shards from this exact SQLite cut.
+    pub fn temporary_bytes(&self) -> Result<u64> {
+        let pages: i64 = self
+            .source
+            .query_row("PRAGMA page_count", [], |row| row.get(0))?;
+        let page_size: i64 = self
+            .source
+            .query_row("PRAGMA page_size", [], |row| row.get(0))?;
+        let shards: i64 = self.source.query_row(
+            "SELECT coalesce(sum(size_bytes),0) FROM shards WHERE state='local'",
+            [],
+            |row| row.get(0),
+        )?;
+        let pages = u64::try_from(pages)?;
+        let page_size = u64::try_from(page_size)?;
+        let shards = u64::try_from(shards)?;
+        pages
+            .checked_mul(page_size)
+            .and_then(|bytes| bytes.checked_add(shards))
+            .and_then(|bytes| bytes.checked_mul(2))
+            .and_then(|bytes| bytes.checked_add(1024 * 1024))
+            .context("checkpoint disk reservation overflow")
+    }
+
     /// Read recovery provenance from the same pinned snapshot as the catalog.
     pub fn recovery_checkpoints(&self) -> Result<std::collections::BTreeMap<String, String>> {
         let mut statement = self.source.prepare(

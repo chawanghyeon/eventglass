@@ -96,6 +96,11 @@ impl Indexer {
     ) -> Result<Self> {
         let mut catalog = db.call(|db| shards::startup(db)).await?;
         let directory = data_dir.to_owned();
+        let cleanup_root = directory.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::storage::reclaim_interrupted_temporary_work(&cleanup_root)
+        })
+        .await??;
         if let Some(active_id) = catalog.active_id.clone() {
             let path = directory.join("shards").join(&active_id);
             if path.join(crate::storage::manifest::NAME).exists() {

@@ -25,6 +25,7 @@ struct Inner {
     db: DbWorker,
     data_dir: PathBuf,
     store: Arc<dyn ObjectStore>,
+    disk: super::budget::DiskBudget,
     gate: Arc<Semaphore>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
@@ -32,16 +33,23 @@ struct Inner {
 pub struct BackupJob {
     coordinator: BackupCoordinator,
     snapshot: PinnedSnapshot,
-    _permit: tokio::sync::OwnedSemaphorePermit,
+    _disk: Arc<super::budget::Reservation>,
+    _permit: Arc<tokio::sync::OwnedSemaphorePermit>,
 }
 
 impl BackupCoordinator {
-    pub fn new(db: DbWorker, data_dir: &Path, store: Arc<dyn ObjectStore>) -> Self {
+    pub fn new(
+        db: DbWorker,
+        data_dir: &Path,
+        store: Arc<dyn ObjectStore>,
+        disk: super::budget::DiskBudget,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 db,
                 data_dir: data_dir.to_owned(),
                 store,
+                disk,
                 gate: Arc::new(Semaphore::new(1)),
                 tasks: Mutex::new(Vec::new()),
             }),
@@ -60,10 +68,12 @@ impl BackupCoordinator {
         };
         let path = self.inner.data_dir.join("meta.db");
         let snapshot = tokio::task::spawn_blocking(move || PinnedSnapshot::open(&path)).await??;
+        let reservation = self.inner.disk.reserve(snapshot.temporary_bytes()?)?;
         Ok(Some(BackupJob {
+            _disk: Arc::new(reservation),
             coordinator: self.clone(),
             snapshot,
-            _permit: permit,
+            _permit: Arc::new(permit),
         }))
     }
 
@@ -108,12 +118,18 @@ impl BackupJob {
             .data_dir
             .join(format!(".backup-{checkpoint_id}.tmp"));
         std::fs::create_dir(&root)?;
-        let guard = RemoveDirectory(root.clone());
+        let guard = Arc::new(RemoveDirectory(root.clone()));
         let snapshot_path = root.join("snapshot.db");
         let recovery_checkpoints = self.snapshot.recovery_checkpoints()?;
         let snapshot = self.snapshot;
         let snapshot_output = snapshot_path.clone();
+        let resources = (
+            Arc::clone(&guard),
+            Arc::clone(&self._disk),
+            Arc::clone(&self._permit),
+        );
         let artifact = tokio::task::spawn_blocking(move || {
+            let _resources = resources;
             snapshot.backup_to(&snapshot_output, SnapshotLimits::default(), || false)
         })
         .await??;
@@ -156,7 +172,13 @@ impl BackupJob {
             let id = shard.id.clone();
             let source_path = source.clone();
             let output_path = path.clone();
+            let resources = (
+                Arc::clone(&guard),
+                Arc::clone(&self._disk),
+                Arc::clone(&self._permit),
+            );
             let archived = tokio::task::spawn_blocking(move || {
+                let _resources = resources;
                 archive::create(&source_path, &output_path, &installation, &id, || false)
             })
             .await??;
@@ -386,13 +408,20 @@ mod tests {
             })?,
             false,
         )?;
-        let coordinator = BackupCoordinator::new(db.clone(), data, store.clone());
+        let coordinator = BackupCoordinator::new(
+            db.clone(),
+            data,
+            store.clone(),
+            super::super::budget::DiskBudget::new(data),
+        );
         let job = coordinator
             .begin_cut()
             .await?
             .context("missing backup job")?;
         assert!(coordinator.begin_cut().await?.is_none());
+        assert!(coordinator.inner.disk.reserved_bytes()? > 0);
         job.complete().await?;
+        assert_eq!(coordinator.inner.disk.reserved_bytes()?, 0);
 
         let keys = store.0.lock().unwrap().keys().cloned().collect::<Vec<_>>();
         assert!(keys.iter().any(|key| key == "latest.json"));

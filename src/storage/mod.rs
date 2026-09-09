@@ -8,3 +8,69 @@ pub mod manifest;
 pub mod registry;
 pub mod remote;
 pub mod s3;
+
+/// Called only while holding the exclusive data-directory lock, before workers start.
+pub(crate) fn reclaim_interrupted_temporary_work(root: &std::path::Path) -> anyhow::Result<()> {
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let single = [".backup-", ".restore-"].iter().any(|prefix| {
+            name.strip_prefix(prefix)
+                .and_then(|value| value.strip_suffix(".tmp"))
+                .is_some_and(|value| uuid::Uuid::parse_str(value).is_ok())
+        });
+        let double = [(".cold-", ".tar.gz"), (".evict-", ".tmp")]
+            .iter()
+            .any(|(prefix, suffix)| {
+                name.strip_prefix(prefix)
+                    .and_then(|value| value.strip_suffix(suffix))
+                    .is_some_and(|value| {
+                        value.is_ascii()
+                            && value.len() == 73
+                            && value.as_bytes()[36] == b'-'
+                            && uuid::Uuid::parse_str(&value[..36]).is_ok()
+                            && uuid::Uuid::parse_str(&value[37..]).is_ok()
+                    })
+            });
+        if !single && !double {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else if kind.is_file() {
+            std::fs::remove_file(entry.path())?;
+        }
+        // Never follow unexpected links or remove arbitrary unknown entries.
+    }
+    std::fs::File::open(root)?.sync_all()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    #[test]
+    fn interrupted_work_is_removed_without_touching_recovery_or_unknown_data() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        let id = uuid::Uuid::new_v4();
+        let backup = root.path().join(format!(".backup-{id}.tmp"));
+        std::fs::create_dir(&backup)?;
+        std::fs::write(backup.join("partial"), b"partial")?;
+        let cold = root.path().join(format!(".cold-{id}-{id}.tar.gz"));
+        std::fs::write(&cold, b"partial")?;
+        let prepared = root.path().join(format!(".restore-{id}"));
+        std::fs::create_dir(&prepared)?;
+        let unknown = root.path().join(".backup-user-data.tmp");
+        std::fs::write(&unknown, b"preserve")?;
+        super::reclaim_interrupted_temporary_work(root.path())?;
+        assert!(!backup.exists());
+        assert!(!cold.exists());
+        assert!(prepared.exists());
+        assert!(unknown.exists());
+        Ok(())
+    }
+}

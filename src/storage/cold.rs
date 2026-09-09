@@ -186,10 +186,9 @@ impl ColdStorage {
         let Some(remote) = remote else {
             return Ok(false);
         };
-        let reservation_bytes = remote
-            .expanded_bytes
-            .max(1024 * 1024)
-            .checked_mul(2)
+        let expanded_limit = remote.expanded_bytes.max(1024 * 1024);
+        let reservation_bytes = expanded_limit
+            .checked_mul(3)
             .context("cold shard reservation overflow")?;
         let disk_reservation = Arc::new(self.disk.reserve(reservation_bytes)?);
 
@@ -219,7 +218,11 @@ impl ColdStorage {
         let limits = RestoreLimits::default();
         let metadata = self
             .store
-            .download(&remote.key, &compressed, limits.shard_archive_bytes)
+            .download(
+                &remote.key,
+                &compressed,
+                limits.shard_archive_bytes.min(expanded_limit * 2),
+            )
             .await?;
         ensure!(
             metadata.key == remote.key,
@@ -256,7 +259,7 @@ impl ColdStorage {
                 &destination,
                 &installation,
                 &id,
-                limits.shard_expanded_bytes,
+                limits.shard_expanded_bytes.min(expanded_limit),
                 || task_cancelled.load(Ordering::Relaxed),
             )
         });

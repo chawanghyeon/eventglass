@@ -95,13 +95,14 @@ impl AppState {
     pub async fn start_core(mut self) -> Result<Self> {
         anyhow::ensure!(self.indexer.is_none(), "core is already running");
         #[cfg(feature = "s3")]
-        let remote = build_remote_store(&self.config, &self.db).await;
+        let remote = build_remote_store(&self.config).await;
         #[cfg(feature = "s3")]
         let backup = remote.as_ref().map(|store| {
             crate::storage::backup::BackupCoordinator::new(
                 self.db.clone(),
                 &self.config.data_dir,
                 Arc::clone(store),
+                self.disk_budget.clone(),
             )
         });
         #[cfg(not(feature = "s3"))]
@@ -146,10 +147,7 @@ impl AppState {
 }
 
 #[cfg(feature = "s3")]
-async fn build_remote_store(
-    config: &Config,
-    db: &DbWorker,
-) -> Option<Arc<dyn crate::storage::s3::ObjectStore>> {
+async fn build_remote_store(config: &Config) -> Option<Arc<dyn crate::storage::s3::ObjectStore>> {
     let result: Result<Option<Arc<dyn crate::storage::s3::ObjectStore>>> = async {
         let Some(value) = &config.s3_url else {
             return Ok(None);
@@ -158,24 +156,8 @@ async fn build_remote_store(
         let store: Arc<dyn crate::storage::s3::ObjectStore> = Arc::new(
             crate::storage::s3::AwsObjectStore::load(location, config.s3_endpoint.as_ref()).await?,
         );
-        let local_installation = db
-            .call(|connection| {
-                connection
-                    .query_row(
-                        "SELECT installation_id FROM runtime_state WHERE singleton=1",
-                        [],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .map_err(Into::into)
-            })
-            .await?;
-        let remote = crate::storage::remote::read_installation(store.as_ref())
-            .await?
-            .context("S3 installation identity is missing")?;
-        anyhow::ensure!(
-            remote.installation_id == local_installation,
-            "S3 installation identity differs from the local database"
-        );
+        // Keep the client through an outage. Each publication verifies the namespace
+        // before writing, so a transient startup failure cannot disable backups forever.
         Ok(Some(store))
     }
     .await;
