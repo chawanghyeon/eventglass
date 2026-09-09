@@ -4,36 +4,40 @@ set -eu
 SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
 IMAGE=eventglass:release-smoke
+PROBE_IMAGE='curlimages/curl:8.16.0@sha256:463eaf6072688fe96ac64fa623fe73e1dbe25d8ad6c34404a669ad3ce1f104b6'
 NAME="eventglass-smoke-$$"
 VOLUME="eventglass-smoke-$$"
+NETWORK="eventglass-smoke-$$"
 : "${EVENTGLASS_CONTAINER_PLATFORM:=linux/arm64}"
 
 cleanup() {
     docker rm -f "$NAME" >/dev/null 2>&1 || :
     docker volume rm "$VOLUME" >/dev/null 2>&1 || :
+    docker network rm "$NETWORK" >/dev/null 2>&1 || :
 }
 trap cleanup EXIT HUP INT TERM
 
 docker buildx build --platform "$EVENTGLASS_CONTAINER_PLATFORM" --load --tag "$IMAGE" "$ROOT"
 docker volume create "$VOLUME" >/dev/null
+docker network create --internal "$NETWORK" >/dev/null
 
 start() {
     docker run --detach --name "$NAME" \
         --read-only \
         --cap-drop ALL \
         --security-opt no-new-privileges \
+        --network "$NETWORK" \
         --memory 768m \
         --cpus 1 \
-        --publish 127.0.0.1::8080 \
         --volume "$VOLUME:/data" \
         "$IMAGE" >/dev/null
 }
 
 ready() {
-    port=$(docker port "$NAME" 8080/tcp | sed 's/.*://')
     attempt=0
     while [ "$attempt" -lt 100 ]; do
-        if curl --fail --silent "http://127.0.0.1:$port/readyz" >/dev/null; then
+        if docker run --rm --network "$NETWORK" "$PROBE_IMAGE" \
+            --fail --silent --max-time 1 "http://$NAME:8080/readyz" >/dev/null 2>&1; then
             return 0
         fi
         attempt=$((attempt + 1))
@@ -45,6 +49,11 @@ ready() {
 
 start
 ready
+if docker run --rm --network "$NETWORK" "$PROBE_IMAGE" \
+    --fail --silent --max-time 2 https://example.com >/dev/null 2>&1; then
+    printf 'container smoke: internal runtime network unexpectedly reached the internet\n' >&2
+    exit 1
+fi
 [ "$(docker exec "$NAME" id -u)" = 10001 ]
 docker stop --time 30 "$NAME" >/dev/null
 docker rm "$NAME" >/dev/null
@@ -52,4 +61,4 @@ start
 ready
 docker exec "$NAME" eventglass doctor >/dev/null
 docker stop --time 30 "$NAME" >/dev/null
-printf 'container smoke: non-root, read-only root, one CPU, 768 MiB, persistent /data restart passed\n'
+printf 'container smoke: offline network, non-root, read-only root, one CPU, 768 MiB, persistent /data restart passed\n'
