@@ -514,6 +514,7 @@ impl AlertCoordinator {
         db: crate::db::worker::DbWorker,
         indexer: crate::indexer::Indexer,
         query_permit: std::sync::Arc<tokio::sync::Semaphore>,
+        cold: Option<crate::storage::cold::ColdStorage>,
     ) -> Result<Self> {
         let sender = WebhookSender::from_env()?;
         let (stop, sender_stop) = tokio::sync::watch::channel(false);
@@ -523,7 +524,7 @@ impl AlertCoordinator {
             sender_loop(sender_db, sender, sender_stop).await;
         });
         let evaluation_join = tokio::spawn(async move {
-            evaluation_loop(db, indexer, query_permit, evaluation_stop).await;
+            evaluation_loop(db, indexer, query_permit, cold, evaluation_stop).await;
         });
         Ok(Self {
             control: std::sync::Arc::new(CoordinatorControl {
@@ -572,13 +573,14 @@ async fn evaluation_loop(
     db: crate::db::worker::DbWorker,
     indexer: crate::indexer::Indexer,
     query_permit: std::sync::Arc<tokio::sync::Semaphore>,
+    cold: Option<crate::storage::cold::ColdStorage>,
     mut stop: tokio::sync::watch::Receiver<bool>,
 ) {
     loop {
         if *stop.borrow() {
             return;
         }
-        if let Err(error) = evaluate_once(&db, &indexer, &query_permit).await {
+        if let Err(error) = evaluate_once(&db, &indexer, &query_permit, cold.as_ref()).await {
             tracing::warn!(reason = %error, "alert threshold evaluation pass failed");
         }
         tokio::select! {
@@ -592,6 +594,7 @@ pub async fn evaluate_once(
     db: &crate::db::worker::DbWorker,
     indexer: &crate::indexer::Indexer,
     query_permit: &std::sync::Arc<tokio::sync::Semaphore>,
+    cold: Option<&crate::storage::cold::ColdStorage>,
 ) -> Result<bool> {
     let now_us = crate::model::now_us()?;
     let Some(pending) = db
@@ -603,7 +606,7 @@ pub async fn evaluate_once(
     if indexer.snapshot()?.boundary.ingest_seq < pending.cut_seq {
         return Ok(false);
     }
-    let result = evaluate_pending(db, indexer, query_permit, &pending).await;
+    let result = evaluate_pending(db, indexer, query_permit, cold, &pending).await;
     match result {
         Ok(count) => {
             let completed = db
@@ -634,6 +637,7 @@ async fn evaluate_pending(
     db: &crate::db::worker::DbWorker,
     indexer: &crate::indexer::Indexer,
     query_permit: &std::sync::Arc<tokio::sync::Semaphore>,
+    cold: Option<&crate::storage::cold::ColdStorage>,
     pending: &crate::db::alerts::PendingEvaluation,
 ) -> Result<u64> {
     use crate::search::{
@@ -687,6 +691,11 @@ async fn evaluate_pending(
             ),
         })
         .await?;
+    if let Some(cold) = cold {
+        tokio::time::timeout(Duration::from_secs(30), cold.ensure_local(&candidate_ids))
+            .await
+            .context("alert cold hydration timed out")??;
+    }
     let request = AggregateRequest {
         query,
         scope: QueryScope {

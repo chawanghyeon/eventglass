@@ -205,6 +205,42 @@ async fn cold_hydration_is_single_flight_verified_and_atomic() -> Result<()> {
         })
         .await?;
     assert_eq!(state, "remote_verified");
+    // Threshold evaluation must hydrate the same remote candidates as interactive search.
+    assert!(cold.evict_remote_verified(&ids[0]).await?);
+    let before_downloads = store.downloads.load(Ordering::SeqCst);
+    app.db.call(|db| {
+        db.execute_batch("INSERT INTO users(id,email,password_hash,role,created_at_us,updated_at_us) VALUES(1,'admin@example.test','unused','admin',0,0); INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'one','One',0,0)")?;
+        let configuration = eventglass::alerts::Configuration {
+            name: "Cold count".into(), project_id: Some(1), enabled: true,
+            condition: eventglass::alerts::Condition::ErrorCount {
+                query: String::new(), window_seconds: 60, threshold: 1, cooldown_seconds: 0,
+                time_basis: eventglass::alerts::TimeBasis::ReceivedAt,
+            },
+            destination: eventglass::alerts::Destination::Webhook { url: "https://example.invalid/hook".into() },
+        };
+        eventglass::db::alerts::create(db, 1, &configuration, eventglass::model::now_us()? - 120_000_000)?;
+        Ok(())
+    }).await?;
+    assert!(!eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit, None).await?);
+    assert!(
+        eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit, Some(&cold))
+            .await?
+    );
+    assert_eq!(store.downloads.load(Ordering::SeqCst), before_downloads + 1);
+    let deliveries = app
+        .db
+        .call(|db| {
+            Ok(
+                db.query_row("SELECT count(*) FROM alert_deliveries", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            )
+        })
+        .await?;
+    assert_eq!(
+        deliveries, 0,
+        "empty cold shard must not cause a notification"
+    );
     indexer.shutdown().await?;
     Ok(())
 }

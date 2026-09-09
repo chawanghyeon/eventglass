@@ -223,8 +223,8 @@ async fn threshold_evaluation_waits_for_cut_uses_native_count_and_advances_once(
         }
     })
     .await?;
-    assert!(eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit).await?);
-    assert!(!eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit).await?);
+    assert!(eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit, None).await?);
+    assert!(!eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit, None).await?);
     let state = app
         .db
         .call(|db| {

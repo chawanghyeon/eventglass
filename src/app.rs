@@ -138,6 +138,7 @@ impl AppState {
             self.db.clone(),
             indexer.clone(),
             self.query_permit.clone(),
+            self.cold.clone(),
         )?);
         self.indexer = Some(indexer);
         Ok(self)

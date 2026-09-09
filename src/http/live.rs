@@ -250,6 +250,9 @@ async fn catch_up(
             })
             .await
             .map_err(|_| "live_unavailable")?;
+        super::search::hydrate_candidates(state, &candidate_ids)
+            .await
+            .map_err(|_| "live_cold_unavailable")?;
         let request = SearchRequest {
             query: session.query.clone(),
             scope: QueryScope {
