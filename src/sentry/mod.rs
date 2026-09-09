@@ -5,6 +5,7 @@
 
 mod envelope;
 mod identity;
+mod json;
 mod normalize;
 mod scrub;
 
@@ -122,7 +123,6 @@ pub fn normalize_envelope(
         return Err(SentryError::TooLarge("decoded request body exceeds limit"));
     }
     let parsed = envelope::parse(decoded, limits.request_records)?;
-    normalize::validate_json_shape(&parsed.header)?;
     let envelope_auth = parse_auth_value(&parsed.header)?;
     if envelope_auth.as_ref().is_some_and(|auth| {
         auth.project_id != project.project_id || auth.public_key != project.public_key
@@ -161,7 +161,6 @@ pub fn normalize_store(
 
 pub fn envelope_auth(decoded: &[u8]) -> Result<Option<EnvelopeAuth>, SentryError> {
     let (header, _) = envelope::parse_header(decoded)?;
-    normalize::validate_json_shape(&header)?;
     parse_auth_value(&header)
 }
 

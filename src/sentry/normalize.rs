@@ -12,8 +12,6 @@ use crate::{
 
 use super::{EnvelopeAuth, NormalizedRequest, ProjectContext, SentryError, identity, scrub};
 
-const MAX_JSON_DEPTH: usize = 64;
-const MAX_JSON_NODES: usize = 20_000;
 const MAX_SEARCH_DEPTH: usize = 16;
 const MAX_SEARCH_SCALARS: usize = 1_000;
 const MAX_SEARCH_BYTES: usize = 64 * 1024;
@@ -54,12 +52,10 @@ impl<'a> RequestNormalizer<'a> {
         item_ordinal: usize,
         record_ordinal: usize,
     ) -> Result<(), SentryError> {
-        let mut raw: Value = serde_json::from_slice(payload)
-            .map_err(|_| SentryError::Malformed("invalid event payload"))?;
+        let mut raw = super::json::parse(payload)?;
         if !raw.is_object() {
             return Err(SentryError::Malformed("event payload must be an object"));
         }
-        validate_json_shape(&raw)?;
         scrub::scrub(&mut raw, &self.project.scrub_keys);
         let record = normalize_event(
             raw,
@@ -121,7 +117,6 @@ impl<'a> RequestNormalizer<'a> {
                 "structured log record must be an object",
             ));
         }
-        validate_json_shape(&raw)?;
         scrub::scrub(&mut raw, &self.project.scrub_keys);
         let record = normalize_log(
             raw,
@@ -273,7 +268,15 @@ impl<'de> Visitor<'de> for LogItemsVisitor<'_, '_> {
         S: SeqAccess<'de>,
     {
         let mut ordinal = 0;
-        while let Some(value) = sequence.next_element::<Value>()? {
+        loop {
+            let mut nodes = 0;
+            let Some(value) = sequence.next_element_seed(super::json::BoundedValue::new(
+                &mut nodes,
+                self.captured_error,
+            ))?
+            else {
+                break;
+            };
             if let Err(error) = self.normalizer.log(value, self.item_ordinal, ordinal) {
                 *self.captured_error = Some(error);
                 return Err(de::Error::custom("structured log normalization failed"));
@@ -435,30 +438,6 @@ fn normalize_log(
         normalizer_version: NORMALIZER_VERSION,
         indexing_warnings,
     })
-}
-
-pub(super) fn validate_json_shape(value: &Value) -> Result<(), SentryError> {
-    let mut nodes = 0usize;
-    let mut stack = vec![(value, 1usize)];
-    while let Some((node, depth)) = stack.pop() {
-        nodes = nodes
-            .checked_add(1)
-            .ok_or(SentryError::TooLarge("JSON node count overflow"))?;
-        if nodes > MAX_JSON_NODES {
-            return Err(SentryError::TooLarge(
-                "record JSON node count exceeds limit",
-            ));
-        }
-        if depth > MAX_JSON_DEPTH {
-            return Err(SentryError::TooLarge("record JSON depth exceeds limit"));
-        }
-        match node {
-            Value::Array(values) => stack.extend(values.iter().map(|child| (child, depth + 1))),
-            Value::Object(object) => stack.extend(object.values().map(|child| (child, depth + 1))),
-            _ => {}
-        }
-    }
-    Ok(())
 }
 
 fn canonical_event_id(value: Option<&Value>) -> Result<Option<String>, SentryError> {

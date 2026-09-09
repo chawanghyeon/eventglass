@@ -31,7 +31,6 @@ pub(super) fn parse(input: &[u8], max_items: usize) -> Result<Envelope<'_>, Sent
             return Err(SentryError::TooLarge("item header exceeds limit"));
         }
         let item_header = json_object(item_header_bytes, "invalid item header")?;
-        super::normalize::validate_json_shape(&item_header)?;
         let kind = item_header
             .get("type")
             .and_then(Value::as_str)
@@ -114,8 +113,7 @@ fn line<'a>(
 }
 
 fn json_object(input: &[u8], invalid: &'static str) -> Result<Value, SentryError> {
-    let value: Value =
-        serde_json::from_slice(input).map_err(|_| SentryError::Malformed(invalid))?;
+    let value = super::json::parse(input)?;
     if !value.is_object() {
         return Err(SentryError::Malformed(invalid));
     }
