@@ -142,3 +142,41 @@ async fn conflict_revoke_pressure_and_malformed_never_ack() -> anyhow::Result<()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn sdk_transaction_ack_reaches_index_without_creating_an_issue() -> anyhow::Result<()> {
+    let (_dir, state, router) = app().await?;
+    let response = router
+        .oneshot(
+            Request::post("/api/1/envelope/?sentry_key=public-test-key").body(Body::from(
+                include_bytes!("fixtures/sentry/rust-http-transaction/transaction.envelope")
+                    .as_slice(),
+            ))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let receipt: Value = serde_json::from_slice(&to_bytes(response.into_body(), 8192).await?)?;
+    assert_eq!(receipt["accepted"], 1);
+    let state = state.start_core().await?;
+    let indexer = state.indexer.as_ref().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while indexer.snapshot()?.boundary.ingest_seq < 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    assert_eq!(indexer.snapshot()?.searcher.num_docs(), 1);
+    assert_eq!(
+        state
+            .db
+            .call(
+                |db| Ok(db.query_row("SELECT count(*) FROM issues", [], |row| row
+                    .get::<_, i64>(0))?)
+            )
+            .await?,
+        0
+    );
+    indexer.shutdown().await?;
+    Ok(())
+}

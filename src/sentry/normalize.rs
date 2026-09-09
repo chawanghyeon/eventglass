@@ -68,6 +68,77 @@ impl<'a> RequestNormalizer<'a> {
         self.push(record)
     }
 
+    // Transactions use the existing append-only log path. Keep nested spans in
+    // the scrubbed raw transaction once; never create Issues for performance data.
+    pub(super) fn transaction(
+        &mut self,
+        payload: &[u8],
+        item_ordinal: usize,
+    ) -> Result<(), SentryError> {
+        let mut raw = super::json::parse(payload)?;
+        if !raw.is_object() {
+            return Err(SentryError::Malformed(
+                "transaction payload must be an object",
+            ));
+        }
+        scrub::scrub(&mut raw, &self.project.scrub_keys);
+        let mut record = normalize_event(
+            raw,
+            self.project,
+            self.acceptance_id,
+            self.received_at_us,
+            item_ordinal,
+            0,
+        )?;
+        record.kind = RecordKind::Log;
+        record.record_id = identity::accepted_record_id(
+            self.project.project_id,
+            self.acceptance_id,
+            item_ordinal,
+            0,
+        );
+        record.source_event_id = None;
+        record.issue_id = None;
+        record.fingerprint = None;
+        record.fingerprint_version = None;
+        record.level = canonical_level(
+            record
+                .raw_json
+                .get("level")
+                .and_then(Value::as_str)
+                .unwrap_or("info"),
+        )?;
+        record.message = record
+            .raw_json
+            .get("transaction")
+            .and_then(Value::as_str)
+            .unwrap_or("transaction")
+            .to_owned();
+        record.search_text = event_search_projection(
+            &record.message,
+            &record.raw_json,
+            &mut record.indexing_warnings,
+        );
+        record.attributes["sentry_type"] = Value::String("transaction".to_owned());
+        if let Some(event_id) = record.raw_json.get("event_id") {
+            record.attributes["event_id"] = event_id.clone();
+        }
+        if let (Some(start), Some(end)) = (
+            record
+                .raw_json
+                .get("start_timestamp")
+                .and_then(parse_timestamp_us),
+            record
+                .raw_json
+                .get("timestamp")
+                .and_then(parse_timestamp_us),
+        ) && let Some(duration) = end.checked_sub(start).filter(|duration| *duration >= 0)
+        {
+            record.attributes["duration_us"] = Value::from(duration);
+        }
+        self.push(record)
+    }
+
     pub(super) fn logs(&mut self, payload: &[u8], item_ordinal: usize) -> Result<(), SentryError> {
         let mut deserializer = serde_json::Deserializer::from_slice(payload);
         let mut captured_error = None;

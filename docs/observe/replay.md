@@ -5,7 +5,7 @@
 ## 기존 구조와 추가 경계
 
 - 공개 `/api/{project_id}/envelope/`와 `/store/`: URL project ID, query/header public key, 선택적인 envelope DSN이 일치해야 한다. commit 시 프로젝트 활성 상태와 키를 재검사한다.
-- Error/log는 sanitized Record → SQLite Inbox durable ACK → 단일 Tantivy Indexer로 처리된다. transaction/span은 기존에 미지원이다. breadcrumbs는 Record raw 안에 보관하며 별도 복제 테이블은 없다.
+- Error/log는 sanitized Record → SQLite Inbox durable ACK → 단일 Tantivy Indexer로 처리된다. transaction은 기존 Log 저장 경로로 수집하며 `attributes.sentry_type=transaction`, 관측 duration_us, trace_id/span_id를 보존한다. 중첩 spans는 원문 안에 한 번만 보관하고 독립 span envelope는 아직 미지원이다. Transaction은 Issue를 생성하지 않으며 구조화 로그와 동일한 append-only 수신 의미를 따른다. breadcrumbs는 Record raw 안에 보관하며 별도 복제 테이블은 없다.
 - 운영 SQLite 하나, 로컬 shard와 선택적인 S3-compatible 백업·hydration을 사용한다. 기존 Error/log archive는 자동 영구 삭제하지 않는다. Replay는 별도 크기·만료 정책이 필요하다.
 - React/TanStack Query/URL search state와 OpenAPI 생성 타입을 재사용한다. Replay를 Tantivy Record로 위장하거나 별도 검색 언어를 만들지 않는다.
 
@@ -35,7 +35,7 @@ PLAYWRIGHT_BROWSERS_PATH=tools/sdk-fixtures/.playwright-browsers node tools/sdk-
 | scroll | A: source=3 x/y | 관측 스크롤 위치 제공. 전체 문서 높이/동적 레이아웃의 정확한 백분율은 SDK가 직접 제공하지 않음. viewport 높이를 문서 높이로 오인하지 않음 |
 | slow/dead/rage/multi | A: ui.slowClickDetected/ui.multiClick; B: 공식 predicate | slow timeout의 a/button/input을 dead, 이때 clickCount>=5면 dead-rage; multiClick>=5면 rage. 새로운 scoring 없음 |
 | network/performance | A: performanceSpan | method/status/duration과 실제 id가 있는 연결만. 시간 인접성을 인과관계로 표시하지 않음 |
-| error/trace | A: error_ids/trace_ids, event contexts | 수신한 기존 Error에 연결. transaction/span 저장을 지원하지 않는 동안 backend trace를 재구성했다고 표시하지 않음 |
+| error/trace | A: error_ids/trace_ids, event contexts | 수신한 Error 및 transaction의 trace_id로 연결. 중첩 span은 원문에서 확인하며 독립 span 저장이나 전체 waterfall 재구성을 주장하지 않음 |
 | browser/os/device | A: contexts에 있을 때 | 기본 Browser fixture에는 UA만 있고 이 context들은 없음. 없는 정보를 가짜 값으로 채우지 않음 |
 | feedback | A: feedback item, contexts.feedback | 공식 captureFeedback/feedbackIntegration의 메시지·replay association; survey builder 아님 |
 | exact scroll reach, custom funnels/attribution/form capture | C 또는 데이터 부족 | 추가 계측·입력값 추출·추측 금지 |
@@ -113,3 +113,5 @@ Page maps의 `viewport=narrow|wide|mixed|unknown`은 최근 최대 20개 Replay�
 기존 ingest/query permit과 BackupCoordinator의 snapshot/upload gate를 모두 즉시 획득할 수 있을 때만 60초 주기로 로컬 Replay를 정리한다. 세션은 최대 16개/256 segments, 큰 세션은 1개(최대 10,001 segments), Feedback은 256개씩 만료 처리한다. DB commit 후 디렉터리를 최대 256개씩 순회해 참조 없는 압축 파일만 unlink/fsync한다. 순회 커서는 재사용하고 끝나거나 실패하면 다시 연다. DB commit 이후 중단·삭제 실패로 남은 orphan은 다음 순회 또는 시작 시 정리된다. 다른 프로젝트가 참조하는 동일 blob은 유지한다. 원격 completed checkpoint 객체는 건드리지 않는다. 읽기·업로드·수집 중에는 다음 주기로 미루며 지속적 부하에서는 정리가 지연될 수 있다.
 
 취소된 비동기 요청도 실제 DB 작업이 끝날 때까지 permit을 보유한다. graceful shutdown은 보존 작업 종료 후 Indexer/backup을 종료한다. 관리자 System 화면에는 active/partial/expired Replay, 참조 segment/중복 제거 압축 크기, 백업 변경분, 정리 최근 성공·실패/유휴 대기와 프로세스 시작 이후 삭제량을 제공한다. Sentry 수집 응답 카운터는 모든 완료된 transport 요청의 고정된 상태 분류이며, 재시도·무시된 item도 포함하고 재시작 시 초기화된다. Replay 수집 성공률·실제 방문자 수로 오인하지 않는다. 클라이언트 코드는 바뀌지 않는다.
+
+`tests/fixtures/sentry/rust-http-transaction/transaction.envelope`는 공식 sentry-rust 0.49.2 + SentryHttpLayer를 실행하고 `/api/health` 요청으로 캡처한 원본이다. 외부 사용자 데이터는 포함하지 않는다.

@@ -142,6 +142,7 @@ pub fn normalize_envelope(
     for item in parsed.items {
         match item.kind.as_str() {
             "event" => state.event(item.payload, item.ordinal, 0)?,
+            "transaction" => state.transaction(item.payload, item.ordinal)?,
             "log" => state.logs(item.payload, item.ordinal)?,
             "replay_event" | "replay_recording" => {}
             "feedback" => {

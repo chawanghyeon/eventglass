@@ -802,3 +802,34 @@ fn envelope(header: &Value, items: &[(&str, &[u8])], final_newline: bool) -> Vec
     }
     output
 }
+
+#[test]
+fn real_rust_sdk_transaction_preserves_trace_and_avoids_error_identity() {
+    let wire = include_bytes!("fixtures/sentry/rust-http-transaction/transaction.envelope");
+    let result = normalize_envelope(
+        wire,
+        &project(),
+        Uuid::from_u128(1),
+        RECEIVED_AT_US,
+        &Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(result.unsupported_items, 0);
+    assert_eq!(result.records.len(), 1);
+    let record = &result.records[0];
+    assert_eq!(record.kind, RecordKind::Log);
+    assert_eq!(record.message, "GET /api/health");
+    assert_eq!(record.level, "info");
+    assert_eq!(
+        record.trace_id.as_deref(),
+        Some("1234567890abcdef1234567890abcdef") // pragma: allowlist secret -- fixed local trace fixture
+    );
+    assert!(record.span_id.is_some());
+    assert!(record.issue_id.is_none());
+    assert!(record.fingerprint.is_none());
+    assert!(record.source_event_id.is_none());
+    assert_eq!(record.attributes["sentry_type"], "transaction");
+    assert!(record.attributes["duration_us"].as_i64().unwrap() >= 0);
+    assert_eq!(record.raw_json["sdk"]["version"], "0.49.2");
+    assert!(record.raw_json["spans"].is_array());
+}
