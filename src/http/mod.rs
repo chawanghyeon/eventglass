@@ -35,7 +35,9 @@ use serde_json::json;
 
 use crate::app::AppState;
 
-pub use crate::auth::issue_setup_token;
+pub async fn issue_setup_token(app: &crate::app::AppState) -> anyhow::Result<String> {
+    crate::auth::issue_setup_token(&app.db).await
+}
 
 #[derive(Clone)]
 pub(super) struct HttpState {

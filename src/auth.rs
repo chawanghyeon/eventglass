@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
 
-use crate::app::AppState;
+use crate::db::worker::DbWorker;
 
 pub const PASSWORD_MEMORY_KIB: u32 = 32 * 1024;
 const PASSWORD_TIME_COST: u32 = 3;
@@ -184,23 +184,30 @@ pub(crate) fn secure_eq(left: &str, right: &str) -> bool {
     left.len() == right.len() && left.as_bytes().ct_eq(right.as_bytes()).into()
 }
 
-pub async fn issue_setup_token(app: &AppState) -> anyhow::Result<String> {
+pub async fn issue_setup_token(db: &DbWorker) -> anyhow::Result<String> {
     let token = random_token();
     let token_hash = hash_token(&token);
     let expires_at_us = crate::model::now_us()?
         .checked_add(i64::try_from(SETUP_TOKEN_TTL.as_micros())?)
         .ok_or_else(|| anyhow::anyhow!("setup token expiry overflow"))?;
-    app.db
-        .call(move |db| {
-            crate::db::auth::issue_setup_token(
-                db,
-                &token_hash,
-                expires_at_us,
-                crate::model::now_us()?,
-            )
-        })
-        .await?;
+    db.call(move |db| {
+        crate::db::auth::issue_setup_token(db, &token_hash, expires_at_us, crate::model::now_us()?)
+    })
+    .await?;
     Ok(token)
+}
+
+/// Offline administrator recovery: never accepts a secret in process arguments.
+pub async fn reset_admin_password(db: &DbWorker, email: &str) -> anyhow::Result<String> {
+    let password = random_token();
+    let email = normalize_credentials(email, &password)
+        .ok_or_else(|| anyhow::anyhow!("invalid administrator email"))?;
+    let hash = hash_password(Arc::new(Semaphore::new(1)), password.clone()).await?;
+    db.call(move |db| {
+        crate::db::auth::reset_admin_password(db, &email, &hash, crate::model::now_us()?)
+    })
+    .await?;
+    Ok(password)
 }
 
 #[cfg(test)]

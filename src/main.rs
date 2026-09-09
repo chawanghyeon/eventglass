@@ -31,9 +31,29 @@ async fn main() -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
+    let reset_email = match args.as_slice() {
+        [admin, reset, email] if admin == "admin" && reset == "reset-password" => {
+            Some(email.as_str())
+        }
+        _ => None,
+    };
+    anyhow::ensure!(
+        args.is_empty()
+            || args == ["serve"]
+            || args == ["admin", "setup-token"]
+            || reset_email.is_some(),
+        "usage: eventglass [serve|version|doctor|admin setup-token|admin reset-password EMAIL]"
+    );
     let app = AppState::open(config).await?;
+    if let Some(email) = reset_email {
+        println!(
+            "{}",
+            eventglass::auth::reset_admin_password(&app.db, email).await?
+        );
+        return Ok(());
+    }
     if args.iter().map(String::as_str).collect::<Vec<_>>() == ["admin", "setup-token"] {
-        println!("{}", eventglass::http::issue_setup_token(&app).await?);
+        println!("{}", eventglass::auth::issue_setup_token(&app.db).await?);
         return Ok(());
     }
     anyhow::ensure!(args.is_empty() || args == ["serve"], "unknown command");

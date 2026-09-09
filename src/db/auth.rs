@@ -300,3 +300,27 @@ pub fn update_user(
     tx.commit()?;
     Ok(())
 }
+
+/// Local CLI recovery; the process holds the exclusive data-directory lock.
+pub fn reset_admin_password(db: &mut Connection, email: &str, hash: &str, now: i64) -> Result<()> {
+    let transaction = db.transaction()?;
+    let id = transaction
+        .query_row(
+            "SELECT id FROM users WHERE email=?1 AND role='admin' AND is_active=1",
+            [email],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .ok_or(AuthDbError::NotFound)?;
+    transaction.execute(
+        "UPDATE users SET password_hash=?1,updated_at_us=?2 WHERE id=?3",
+        params![hash, now, id],
+    )?;
+    transaction.execute("DELETE FROM sessions WHERE user_id=?1", [id])?;
+    transaction.execute(
+        "UPDATE runtime_state SET authorization_epoch=authorization_epoch+1",
+        [],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}

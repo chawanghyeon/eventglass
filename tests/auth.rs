@@ -706,3 +706,50 @@ async fn project_keys_remain_manageable_after_reload_and_are_admin_only() -> any
     assert_eq!(json_body(listed).await?["items"], json!([]));
     Ok(())
 }
+
+#[tokio::test]
+async fn offline_admin_reset_replaces_password_and_revokes_existing_sessions() -> anyhow::Result<()>
+{
+    let fixture = fixture().await?;
+    setup(&fixture, "owner@example.test", PASSWORD).await?;
+    let old = login(&fixture, "owner@example.test", PASSWORD).await?;
+    let before = authorization_epoch(&fixture).await?;
+    let password =
+        eventglass::auth::reset_admin_password(&fixture.state.db, "owner@example.test").await?;
+    assert!(password.len() >= 32);
+    assert!(authorization_epoch(&fixture).await? > before);
+    let stale = fixture
+        .router
+        .clone()
+        .oneshot(request("GET", "/api/auth/me", Value::Null, Some(&old)))
+        .await?;
+    assert_eq!(stale.status(), StatusCode::UNAUTHORIZED);
+    let denied = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/auth/login",
+            json!({"email":"owner@example.test", "password":PASSWORD}),
+            None,
+        ))
+        .await?;
+    assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
+    login(&fixture, "owner@example.test", &password).await?;
+    assert!(
+        eventglass::auth::reset_admin_password(&fixture.state.db, "missing@example.test")
+            .await
+            .is_err()
+    );
+    fixture.state.db.call(|db| {
+        db.execute_batch("INSERT INTO users(email,password_hash,role,created_at_us,updated_at_us) SELECT 'member@example.test',password_hash,'member',0,0 FROM users WHERE role='admin'")?;
+        Ok(())
+    }).await?;
+    assert!(
+        eventglass::auth::reset_admin_password(&fixture.state.db, "member@example.test")
+            .await
+            .is_err()
+    );
+    login(&fixture, "member@example.test", &password).await?;
+    Ok(())
+}
