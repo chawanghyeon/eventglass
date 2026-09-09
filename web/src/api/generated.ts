@@ -826,6 +826,23 @@ export interface components {
             items: components["schemas"]["AlertDelivery"][];
         };
         SystemStatus: {
+            sentry_ingest_since_start: {
+                [key: string]: string;
+            };
+            replay_maintenance: {
+                state: string;
+                last_success_us: number | null;
+                deleted_files: number;
+                deleted_bytes: number;
+            } | null;
+            replay: {
+                active_replays: string;
+                partial_replays: string;
+                expired_replays: string;
+                segments: string;
+                referenced_bytes: string;
+                backup_pending: boolean;
+            };
             version: string;
             ready: boolean;
             ingest_accepting: boolean;
@@ -1075,6 +1092,12 @@ export interface components {
             duration_ms: number | null;
         };
         ReplayPageActivity: {
+            examples: {
+                kind: string;
+                key: string;
+                timestamp_ms: number;
+                replay_id: string;
+            }[];
             visits: number;
             sampled_replays: number;
             observed_time_ms: number;
@@ -1114,6 +1137,8 @@ export interface components {
             };
         };
         ReplayAnalysis: {
+            /** @enum {string} */
+            viewport_class: "unknown" | "narrow" | "wide" | "mixed";
             timeline: components["schemas"]["ReplayTimelineEvent"][];
             journey: components["schemas"]["ReplayVisit"][];
             pages: {
@@ -2117,6 +2142,8 @@ export interface operations {
     getReplayMaps: {
         parameters: {
             query: {
+                /** @description Complete observed Replay width group; filters the bounded recent sample after parsing. */
+                viewport?: "unknown" | "narrow" | "wide" | "mixed";
                 project_id: number;
                 environment?: string;
                 release?: string;

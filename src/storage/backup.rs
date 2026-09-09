@@ -39,6 +39,11 @@ pub struct BackupJob {
 }
 
 impl BackupCoordinator {
+    /// Exclude local Replay collection for the full pinned snapshot/upload lifetime.
+    pub(crate) fn try_maintenance_permit(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        self.inner.gate.clone().try_acquire_owned().ok()
+    }
+
     pub fn new(
         db: DbWorker,
         data_dir: &Path,
@@ -543,6 +548,10 @@ mod tests {
             .await?
             .context("missing backup job")?;
         assert!(coordinator.begin_cut().await?.is_none());
+        assert!(
+            coordinator.try_maintenance_permit().is_none(),
+            "pinned backup must exclude Replay collection"
+        );
         assert!(coordinator.inner.disk.reserved_bytes()? > 0);
         job.complete().await?;
         assert_eq!(coordinator.inner.disk.reserved_bytes()?, 0);

@@ -1104,6 +1104,12 @@ paths:
     get:
       operationId: getReplayMaps
       parameters:
+      - in: query
+        name: viewport
+        description: Complete observed Replay width group; filters the bounded recent sample after parsing.
+        schema:
+          type: string
+          enum: [unknown, narrow, wide, mixed]
       - name: project_id
         in: query
         required: true
@@ -2067,6 +2073,9 @@ components:
       additionalProperties: false
       required:
         [
+          replay,
+          replay_maintenance,
+          sentry_ingest_since_start,
           version,
           ready,
           ingest_accepting,
@@ -2084,6 +2093,30 @@ components:
           alerts,
         ]
       properties:
+        sentry_ingest_since_start:
+          type: object
+          additionalProperties:
+            type: string
+        replay_maintenance:
+          type: [object, 'null']
+          required: [state, last_success_us, deleted_files, deleted_bytes]
+          properties:
+            state: {type: string}
+            last_success_us: {type: [integer, 'null']}
+            deleted_files: {type: integer}
+            deleted_bytes: {type: integer}
+          additionalProperties: false
+        replay:
+          type: object
+          required: [active_replays, partial_replays, expired_replays, segments, referenced_bytes, backup_pending]
+          properties:
+            active_replays: {type: string}
+            partial_replays: {type: string}
+            expired_replays: {type: string}
+            segments: {type: string}
+            referenced_bytes: {type: string}
+            backup_pending: {type: boolean}
+          additionalProperties: false
         version:
           type: string
         ready:
@@ -2815,6 +2848,7 @@ components:
     ReplayPageActivity:
       type: object
       required:
+      - examples
       - visits
       - sampled_replays
       - observed_time_ms
@@ -2835,6 +2869,17 @@ components:
       - scroll_samples
       - scroll_reach_replays
       properties:
+        examples:
+          type: array
+          items:
+            type: object
+            required: [kind, key, timestamp_ms, replay_id]
+            properties:
+              kind: {type: string}
+              key: {type: string}
+              timestamp_ms: {type: integer}
+              replay_id: {type: string}
+            additionalProperties: false
         visits:
           type: integer
         sampled_replays:
@@ -2897,12 +2942,16 @@ components:
     ReplayAnalysis:
       type: object
       required:
+      - viewport_class
       - timeline
       - journey
       - pages
       - truncated
       - gaps
       properties:
+        viewport_class:
+          type: string
+          enum: [unknown, narrow, wide, mixed]
         timeline:
           type: array
           items:

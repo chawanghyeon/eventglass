@@ -15,6 +15,21 @@ const session: Session = {
   csrf_token: "csrf",
 };
 const status: SystemStatus = {
+  replay: {
+    active_replays: "0",
+    partial_replays: "0",
+    expired_replays: "17",
+    segments: "0",
+    referenced_bytes: "0",
+    backup_pending: false,
+  },
+  replay_maintenance: {
+    state: "busy",
+    last_success_us: 1788951797000000,
+    deleted_files: 2,
+    deleted_bytes: 1024,
+  },
+  sentry_ingest_since_start: { accepted: "12", too_large: "3" },
   version: "0.1.0",
   ready: true,
   ingest_accepting: true,
@@ -81,6 +96,9 @@ it("distinguishes local archives from recoverable shards and runs doctor", async
   render(<SystemPage />, { wrapper: Wrapper });
 
   expect(await screen.findByText("lagging")).toBeInTheDocument();
+  expect(screen.getByText(/만료 정리 대기 17/)).toBeInTheDocument();
+  expect(screen.getByText(/로컬 보존 정리: busy/)).toBeInTheDocument();
+  expect(screen.getByText("too_large")).toBeInTheDocument();
   expect(screen.getByText("로컬 전용 archive")).toBeInTheDocument();
   expect(screen.getByText("원격 복구 검증 + 로컬")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "검사 실행" }));

@@ -54,7 +54,7 @@ SQLite schema 2의 `replays`는 검색용 metadata·파생 count, `replay_segmen
 
 S3 설정 시 기존 체크포인트가 정확한 Replay blob 집합·hash·size·metadata revision을 함께 포함한다. 복구 후보 하나의 SQLite와 모든 blob이 일치해야 한다. 체크포인트 제어 문서의 기존 4 MiB 한도를 넘으면 완료로 게시하지 않고 backup lag를 유지한다. 최신 포인터는 최적화이며 손상되면 완료 후보 listing으로 복구한다. 이미 완료 체크포인트가 검증한 동일 blob은 재업로드하지 않는다. Replay/Feedback만 들어와도 기존 단일 Indexer가 봉인 경계를 만들어 백업한다. metadata 변경 시 최소 5분 간격으로 시도하며 고정 RPO는 보장하지 않는다. `doctor`도 Replay 파일 무결성을 검사하고 backup 상태는 아직 백업되지 않은 Replay를 반영한다.
 
-조회 가능 기간은 최초 수신부터 30일이다. 만료 metadata와 로컬 미참조 blob의 물리적 삭제는 시작 시 수행하므로 재시작 전에는 디스크에 남을 수 있다. 실행 중 pinned reader/backup과 경쟁하는 GC를 추가하지 않았다. S3의 과거 완료 checkpoint와 blob은 기존 백업 보존 정책을 따르며 자동 영구 삭제하지 않는다. 따라서 30일은 S3 개인정보 영구 삭제 SLA가 아니다. S3 lifecycle은 복구 후보가 참조하는 파일을 임의로 먼저 지우지 않도록 전체 백업 보존 정책으로 운영해야 한다. Replay 파일은 현재 로컬 조회하며 Error shard처럼 S3 cold eviction하지 않는다.
+조회 가능 기간은 최초 수신부터 30일이다. 만료 metadata와 로컬 미참조 blob은 시작 시와 실행 중 제한된 배치로 정리한다. 실행 중에는 기존 reader/ingest/backup gate로 충돌을 막으며 부하가 지속되면 물리적 삭제가 지연될 수 있다. S3의 과거 완료 checkpoint와 blob은 기존 백업 보존 정책을 따르며 자동 영구 삭제하지 않는다. 따라서 30일은 S3 개인정보 영구 삭제 SLA가 아니다. S3 lifecycle은 복구 후보가 참조하는 파일을 임의로 먼저 지우지 않도록 전체 백업 보존 정책으로 운영해야 한다. Replay 파일은 현재 로컬 조회하며 Error shard처럼 S3 cold eviction하지 않는다.
 
 관리자 session과 기존 project 검색 권한을 사용하는 API:
 
@@ -101,3 +101,15 @@ Replay 목록에서 프로젝트, `URL=/products/linen-shirt`, 세션 시작 기
 긴 페이지는 화면 상단의 scroll y / 당시 viewport 높이를 1화면 단위(0–99)로 나눠 해당 구간의 좌표 클릭 수와 SDK selector breadcrumb를 보여준다. 리뷰 펼치기나 고정 구매 버튼이 어느 스크롤 위치에서 클릭됐는지 비교할 수 있다. 고정 요소를 문서의 절대 위치로 오인하지 않으며 DOM 구역명을 자동 추측하지 않는다. 구간당 selector 상한 50개와 기존 요청 전체 한도를 유지한다. 정확한 document-height 백분율·고유 사람 수·매출·구매율을 생성하지 않는다.
 
 실제 SDK 테스트 `tools/sdk-fixtures/browser-app/shopping.mjs`는 responsive 상품 페이지에서 데스크톱(1280×800)과 모바일 크기(390×844)의 리뷰 이동·내용 펼치기·스크롤·고정 장바구니 버튼·URL 이동을 캡처한다. 저장된 `shopping-*.envelope`는 손으로 작성한 rrweb 데이터가 아니다. Product UI E2E는 이 데이터를 수집해 집계, 실제 보이는 첫 snapshot, 관련 Replay 이동, 390px 관리 화면의 가로 넘침을 검증한다. 고객 서비스에는 여전히 공식 Sentry SDK만 설치한다.
+
+## 화면 크기 비교와 관측 시점 링크
+
+Page maps의 `viewport=narrow|wide|mixed|unknown`은 최근 최대 20개 Replay를 읽은 뒤 적용한다. 전체 기록에서 확인된 viewport 폭이 모두 768px 미만이면 narrow, 모두 이상이면 wide, 경계를 넘으면 mixed다. 실제 휴대폰·데스크톱 종류로 추정하지 않는다. 미관측 구간은 복원하지 않으며 partial/truncated 경고는 유지한다. 목록 자체의 메타데이터 필터와 별개인 분석 필터이고 URL 및 query cache key에 보존한다.
+
+히트맵 cell, SDK selector, 스크롤 구간·도달 지점, frustration에는 실제 timestamp의 대표 관측을 페이지당 최대 128개 붙인다. 움직임이 많아도 selector/frustration이 밀려나지 않도록 우선한다. 원본 이벤트를 DB에 복제하지 않는다. `/replays/{project}/{replay_id}?t={epoch_ms}`로 진입·새로고침·뒤로 가기해도 공식 replayer의 해당 시점을 표시한다. 최초 full snapshot 이전과 처리 범위 이후는 재생 가능한 범위로 제한한다.
+
+## 실행 중 보존 정리와 진단
+
+기존 ingest/query permit과 BackupCoordinator의 snapshot/upload gate를 모두 즉시 획득할 수 있을 때만 60초 주기로 로컬 Replay를 정리한다. 세션은 최대 16개/256 segments, 큰 세션은 1개(최대 10,001 segments), Feedback은 256개씩 만료 처리한다. DB commit 후 디렉터리를 최대 256개씩 순회해 참조 없는 압축 파일만 unlink/fsync한다. 순회 커서는 재사용하고 끝나거나 실패하면 다시 연다. DB commit 이후 중단·삭제 실패로 남은 orphan은 다음 순회 또는 시작 시 정리된다. 다른 프로젝트가 참조하는 동일 blob은 유지한다. 원격 completed checkpoint 객체는 건드리지 않는다. 읽기·업로드·수집 중에는 다음 주기로 미루며 지속적 부하에서는 정리가 지연될 수 있다.
+
+취소된 비동기 요청도 실제 DB 작업이 끝날 때까지 permit을 보유한다. graceful shutdown은 보존 작업 종료 후 Indexer/backup을 종료한다. 관리자 System 화면에는 active/partial/expired Replay, 참조 segment/중복 제거 압축 크기, 백업 변경분, 정리 최근 성공·실패/유휴 대기와 프로세스 시작 이후 삭제량을 제공한다. Sentry 수집 응답 카운터는 모든 완료된 transport 요청의 고정된 상태 분류이며, 재시도·무시된 item도 포함하고 재시작 시 초기화된다. Replay 수집 성공률·실제 방문자 수로 오인하지 않는다. 클라이언트 코드는 바뀌지 않는다.

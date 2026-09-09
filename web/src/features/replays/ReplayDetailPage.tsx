@@ -1,6 +1,11 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "react-router-dom";
+import {
+  Link,
+  useLocation,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { describeApiError } from "../../api/client";
 import { Notice } from "../../components/Notice";
 import { Button } from "../../components/Button";
@@ -34,11 +39,20 @@ export function ReplayDetailPage() {
     ...analysisQuery(user?.id ?? "unknown", project, id),
     enabled: !!user && !!detail.data && !recording.isFetching,
   });
-  const [seek, setSeek] = useState<{ time: number; request: number } | null>(
-    null,
-  );
-  const seekTo = (time: number) =>
-    setSeek((previous) => ({ time, request: (previous?.request ?? 0) + 1 }));
+  const [search, setSearch] = useSearchParams();
+  const location = useLocation();
+  const time = search.get("t");
+  const seek = useMemo(() => {
+    const value = time && /^\d{1,16}$/.test(time) ? Number(time) : NaN;
+    return Number.isSafeInteger(value)
+      ? { time: value, request: location.key }
+      : null;
+  }, [time, location.key]);
+  const seekTo = (value: number) => {
+    const next = new URLSearchParams(search);
+    next.set("t", String(Math.trunc(value)));
+    setSearch(next);
+  };
   const [currentTime, setCurrentTime] = useState(0);
   if (detail.isPending) return <Notice>Replay를 불러오는 중…</Notice>;
   if (detail.isError)

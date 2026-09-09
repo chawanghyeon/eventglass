@@ -15,7 +15,7 @@ export function ReplayPlayer({
   onTime,
 }: {
   events: Record<string, unknown>[];
-  seekTo: { time: number; request: number } | null;
+  seekTo: { time: number; request: string } | null;
   onTime: (time: number) => void;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
@@ -101,7 +101,7 @@ export function ReplayPlayer({
         setError("누락되거나 손상된 구간입니다. 다른 시점을 선택해 주세요.");
       }
     }
-  }, [seekTo, start, total, onTime, firstVisibleOffset]);
+  }, [seekTo, start, total, onTime, firstVisibleOffset, ready, events]);
   function seek(offset: number) {
     try {
       player.current?.pause(Math.max(firstVisibleOffset, offset));

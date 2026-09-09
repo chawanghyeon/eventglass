@@ -8,6 +8,7 @@ pub mod manifest;
 pub mod registry;
 pub mod remote;
 pub mod replay;
+pub mod replay_maintenance;
 pub mod s3;
 
 /// Called only while holding the exclusive data-directory lock, before workers start.

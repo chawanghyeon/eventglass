@@ -1,4 +1,5 @@
 import { readFile, mkdir } from 'node:fs/promises';
+import { inflateSync } from 'node:zlib';
 
 export async function checkReplayUi(page,baseUrl,dsn) {
   const parsed=new URL(dsn);const project=parsed.pathname.slice(1);
@@ -84,10 +85,15 @@ async function checkUntrustedReplay(context,baseUrl,project,key,plain) {
 async function checkShopping(page,baseUrl,project,key,root) {
   const capture=JSON.parse(await readFile(new URL('shopping-capture.json',root),'utf8'));
   let replayId,productUrl;
+  const starts=new Map();
   for(const item of capture.captures){
     const bytes=await readFile(new URL(item.name,root));
     const metadata=JSON.parse(bytes.toString('utf8').split('\n')[2]);
     replayId??=metadata.replay_id;
+    const length=JSON.parse(bytes.toString('utf8').split('\n')[3]).length;
+    const recording=bytes.subarray(bytes.length-length);
+    const events=JSON.parse(inflateSync(recording.subarray(recording.indexOf(10)+1)));
+    starts.set(metadata.replay_id,Math.min(...events.map(event=>event.data?.tag==='performanceSpan'?Math.trunc(event.data.payload.startTimestamp*1000):event.timestamp)));
     const url=new URL(metadata.urls.find(url=>url.includes('/products/')));url.search='';productUrl=url.toString();
     const response=await fetch(`${baseUrl}/api/${project}/envelope/?sentry_key=${key}`,{method:'POST',body:bytes});
     if(response.status!==202)throw Error(`Shopping replay ingest ${response.status}`);
@@ -102,6 +108,23 @@ async function checkShopping(page,baseUrl,project,key,root) {
   await page.getByText(/#add-to-cart/).first().waitFor();
   await page.getByRole('heading',{name:'다음 관측 페이지',exact:true}).locator('..').getByRole('button',{name:/\/cart$/}).waitFor();
   await page.screenshot({path:new URL('../../../.tools/screenshots/shopping-analysis.png',import.meta.url).pathname,fullPage:true});
+  await page.getByRole('combobox',{name:'분석 화면 크기'}).selectOption('narrow');
+  await page.locator('.replay-page-summary > div').first().getByText('1',{exact:true}).waitFor();
+  await page.getByRole('button',{name:productUrl,exact:true}).first().click();
+  const target=page.getByRole('link',{name:/#expand-review/}).first();
+  const href=await target.getAttribute('href');
+  if(!href?.includes('?t='))throw Error('Missing exact replay timestamp link');
+  const targetUrl=new URL(href,baseUrl);
+  const expected=Number(targetUrl.searchParams.get('t'))-starts.get(targetUrl.pathname.split('/').at(-1));
+  if(!(expected>0))throw Error('Invalid real SDK sample offset');
+  await target.click();
+  await page.getByRole('slider',{name:'Replay seek'}).waitFor();
+  await page.waitForFunction(expected=>Math.abs(Number(document.querySelector('input[aria-label="Replay seek"]')?.value)-expected)<2,expected);
+  await page.reload();
+  await page.waitForFunction(expected=>Math.abs(Number(document.querySelector('input[aria-label="Replay seek"]')?.value)-expected)<2,expected);
+  await page.goto(`${baseUrl}/replays?project=${project}&environment=shopping-fixture`);
+  await page.getByRole('button',{name:'페이지별 Heatmaps'}).click();
+  await page.getByRole('heading',{name:'상품·페이지 분석',exact:true}).waitFor();
   await page.setViewportSize({width:390,height:844});
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+1);
   if(overflow){await page.screenshot({path:new URL('../../../.tools/screenshots/shopping-mobile-overflow.png',import.meta.url).pathname,fullPage:true});const wide=await page.evaluate(()=>[...document.querySelectorAll('body *')].map(e=>({tag:e.tagName,class:e.className,width:e.getBoundingClientRect().width,right:e.getBoundingClientRect().right})).filter(e=>e.right>window.innerWidth+1).slice(0,20));throw Error('Shopping analysis overflows narrow admin viewport: '+JSON.stringify(wide));}

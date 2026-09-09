@@ -21,6 +21,8 @@ pub struct AppState {
     pub query_permit: Arc<Semaphore>,
     pub live_permit: Arc<Semaphore>,
     pub alerts: Option<crate::alerts::AlertCoordinator>,
+    pub replay_maintenance: Option<crate::storage::replay_maintenance::ReplayMaintenance>,
+    pub ingest_stats: Arc<crate::operations::IngestStats>,
     pub cold: Option<crate::storage::cold::ColdStorage>,
     pub tokens: Arc<crate::search::tokens::TokenCodec>,
     pub disk_budget: crate::storage::budget::DiskBudget,
@@ -89,6 +91,8 @@ impl AppState {
             live_permit: Arc::new(Semaphore::new(32)),
             alerts: None,
             cold: None,
+            replay_maintenance: None,
+            ingest_stats: Arc::new(crate::operations::IngestStats::default()),
             tokens: Arc::new(crate::search::tokens::TokenCodec::new(token_key)),
             disk_budget,
             _directory_lock: lock,
@@ -115,7 +119,7 @@ impl AppState {
         let indexer = crate::indexer::Indexer::start_with_backup(
             self.db.clone(),
             &self.config.data_dir,
-            backup,
+            backup.clone(),
         )
         .await?;
         #[cfg(feature = "s3")]
@@ -146,6 +150,15 @@ impl AppState {
             self.query_permit.clone(),
             self.cold.clone(),
         )?);
+        self.replay_maintenance = Some(
+            crate::storage::replay_maintenance::ReplayMaintenance::start(
+                self.db.clone(),
+                self.config.data_dir.clone(),
+                self.ingress_permit.clone(),
+                self.query_permit.clone(),
+                backup,
+            ),
+        );
         self.indexer = Some(indexer);
         Ok(self)
     }

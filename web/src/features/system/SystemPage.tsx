@@ -88,6 +88,59 @@ export function SystemPage() {
             </article>
           </section>
           <section className="panel system-details">
+            <h2>Replay 수집 / 보존</h2>
+            <p>
+              보관 중 {status.data.replay.active_replays} · Partial{" "}
+              {status.data.replay.partial_replays} · 만료 정리 대기{" "}
+              {status.data.replay.expired_replays}
+            </p>
+            <p>
+              {status.data.replay.segments} segments · 참조 중인 압축 데이터{" "}
+              {bytes(status.data.replay.referenced_bytes)}
+            </p>
+            <p>
+              Replay 백업 변경분:{" "}
+              {status.data.replay.backup_pending ? "미반영" : "없음"} · 백업
+              구성 여부는 위 Backup 상태를 확인하세요.
+            </p>
+            <p>
+              로컬 보존 정리: {status.data.replay_maintenance?.state ?? "중지"}{" "}
+              · 최근 성공{" "}
+              {status.data.replay_maintenance?.last_success_us
+                ? new Date(
+                    status.data.replay_maintenance.last_success_us / 1000,
+                  ).toLocaleString()
+                : "없음"}
+            </p>
+            <p>
+              프로세스 시작 이후 정리:{" "}
+              {status.data.replay_maintenance?.deleted_files ?? 0} files ·{" "}
+              {bytes(status.data.replay_maintenance?.deleted_bytes ?? 0)}
+            </p>
+            <p className="muted">
+              30일 만료 데이터는 즉시 조회에서 제외합니다. 매분 유휴 구간에서
+              작은 세션 최대 16개(큰 세션 1개)·파일 최대 256개를 정리하며
+              조회·수집·백업 중에는 다음 주기로 미룹니다. 원격 복구 지점의
+              객체는 삭제하지 않습니다.
+            </p>
+            <h3>Sentry 수집 응답</h3>
+            <dl>
+              {Object.entries(status.data.sentry_ingest_since_start).map(
+                ([code, count]) => (
+                  <div key={code}>
+                    <dt>{code}</dt>
+                    <dd>{count}</dd>
+                  </div>
+                ),
+              )}
+            </dl>
+            <p className="muted">
+              현재 프로세스가 응답한 전체 Sentry 요청 수입니다. Replay 전용·고유
+              세션 수가 아니며 재시도와 지원하지 않아 무시된 item도 포함됩니다.
+              재시작 시 초기화됩니다.
+            </p>
+          </section>
+          <section className="panel system-details">
             <h2>Shard 보관 상태</h2>
             <dl>
               <div>

@@ -20,6 +20,22 @@ export function PageMaps({
     return (
       <Notice>좌표·viewport가 함께 확인된 페이지 데이터가 없습니다.</Notice>
     );
+  const example = (kind: string, key: string) => {
+    const found = page.examples.find((e) => e.kind === kind && e.key === key);
+    return found && project && found.replay_id
+      ? `/replays/${project}/${found.replay_id}?t=${found.timestamp_ms}`
+      : undefined;
+  };
+  const evidence = (kind: string, key: string, label: React.ReactNode) => {
+    const to = example(kind, key);
+    return to ? (
+      <Link to={to} title="관측된 Replay 시점 보기">
+        {label}
+      </Link>
+    ) : (
+      label
+    );
+  };
   const cells = page[mode];
   const max = Math.max(1, ...Object.values(cells));
   return (
@@ -163,6 +179,15 @@ export function PageMaps({
           </ul>
         </div>
       )}
+      <p className="muted">
+        아래 링크는 집계 중 대표 관측 1건의 실제 시점을 엽니다. 대표 시점은
+        페이지당 최대 128개이며 모든 클릭을 나열하지 않습니다.
+      </p>
+      <p>
+        {evidence("frustration", "rage", `Rage ${page.frustration.rage}`)} ·{" "}
+        {evidence("frustration", "dead", `Dead ${page.frustration.dead}`)} ·{" "}
+        {evidence("frustration", "slow", `Slow ${page.frustration.slow}`)}
+      </p>
       <svg
         className="replay-heatmap"
         viewBox="0 0 400 300"
@@ -172,7 +197,7 @@ export function PageMaps({
         <rect width="400" height="300" fill="#eef2f6" />
         {Object.entries(cells).map(([cell, count]) => {
           const [x, y] = cell.split(",").map(Number);
-          return (
+          const dot = (
             <circle
               key={cell}
               cx={(x + 0.5) * 20}
@@ -185,6 +210,18 @@ export function PageMaps({
                 {count} samples · viewport {x * 5}% / {y * 5}%
               </title>
             </circle>
+          );
+          const to = example(mode, cell);
+          return to ? (
+            <Link
+              key={cell}
+              to={to}
+              aria-label={`${count} samples · ${cell} · Replay 시점 보기`}
+            >
+              {dot}
+            </Link>
+          ) : (
+            dot
           );
         })}
       </svg>
@@ -208,7 +245,7 @@ export function PageMaps({
             .map(([selector, count]) => (
               <tr key={selector}>
                 <td>
-                  <code>{selector}</code>
+                  {evidence("element", selector, <code>{selector}</code>)}
                 </td>
                 <td>{count}</td>
               </tr>
@@ -237,7 +274,11 @@ export function PageMaps({
               .map((depth) => (
                 <tr key={depth}>
                   <td>
-                    {depth}–{Number(depth) + 1} 화면 높이
+                    {evidence(
+                      "depth",
+                      depth,
+                      `${depth}–${Number(depth) + 1} 화면 높이`,
+                    )}
                   </td>
                   <td>{page.depth_clicks[depth] ?? 0}</td>
                   <td>
@@ -276,7 +317,7 @@ export function PageMaps({
         <tbody>
           {Object.entries(page.scroll_reach_replays).map(([depth, count]) => (
             <tr key={depth}>
-              <td>{depth}배 이상</td>
+              <td>{evidence("scroll", depth, `${depth}배 이상`)}</td>
               <td>{count}</td>
             </tr>
           ))}

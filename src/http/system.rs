@@ -18,12 +18,21 @@ pub(super) async fn status(
         .is_some_and(|indexer| indexer.ready());
     let data_dir = state.app.config.data_dir.clone();
     let s3 = state.app.config.s3_url.is_some();
-    let status = state
+    let mut status = state
         .app
         .db
-        .call(move |db| crate::operations::status(db, &data_dir, disk, ready, s3))
+        .call(move |db| {
+            let mut status = json!(crate::operations::status(db, &data_dir, disk, ready, s3)?);
+            status["replay"] = json!(crate::operations::replay_status(
+                db,
+                crate::model::now_us()?
+            )?);
+            Ok(status)
+        })
         .await?;
-    Ok(Json(json!(status)))
+    status["sentry_ingest_since_start"] = json!(state.app.ingest_stats.snapshot());
+    status["replay_maintenance"] = json!(state.app.replay_maintenance.as_ref().map(|m| m.status()));
+    Ok(Json(status))
 }
 
 pub(super) async fn doctor(

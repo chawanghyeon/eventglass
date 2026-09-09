@@ -25,7 +25,7 @@ pub fn path(root: &Path, hash: &str) -> Result<PathBuf> {
 }
 
 /// Publish fully fsynced bytes before an acceptance transaction references them.
-/// A failed transaction leaves an unreferenced immutable file, reclaimed at startup.
+/// A failed transaction leaves an unreferenced immutable file, reclaimed by local retention or at startup.
 pub fn write(root: &Path, bytes: &[u8]) -> Result<ObjectReference> {
     ensure!(
         bytes.len() <= MAX_RECORDING_BYTES,

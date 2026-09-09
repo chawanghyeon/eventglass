@@ -184,6 +184,29 @@ pub fn blob_references(db: &Connection) -> Result<Vec<ObjectReference>> {
         .collect()
 }
 
+/// Up to 16 small sessions / 256 segments, or one larger session (SDK max 10,001).
+/// Caller must exclude ingest, recording readers, and pinned backup snapshots.
+pub(crate) fn expire_batch(db: &mut Connection, now: i64) -> Result<()> {
+    let tx = db.transaction()?;
+    let candidates = tx.prepare("SELECT rowid,segment_count FROM replays WHERE expires_at_us<=?1 ORDER BY expires_at_us LIMIT 16")?
+        .query_map([now], |row| Ok((row.get::<_,i64>(0)?, row.get::<_,u32>(1)?)))?
+        .collect::<std::result::Result<Vec<_>,_>>()?;
+    let (mut removed, mut segments) = (0, 0);
+    for (id, count) in candidates {
+        if removed > 0 && segments + count > 256 {
+            break;
+        }
+        removed += tx.execute("DELETE FROM replays WHERE rowid=?1", [id])?;
+        segments += count;
+    }
+    removed += tx.execute("DELETE FROM feedback WHERE rowid IN (SELECT rowid FROM feedback WHERE expires_at_us<=?1 LIMIT 256)", [now])?;
+    if removed > 0 {
+        mark_dirty(&tx, now)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Startup-only physical cleanup: no reader or in-flight backup can lose a pinned blob.
 /// Expired replays are hidden immediately by API queries even before the next restart.
 pub fn expire_at_startup(db: &mut Connection, root: &std::path::Path, now: i64) -> Result<()> {
@@ -223,6 +246,7 @@ pub fn expire_at_startup(db: &mut Connection, root: &std::path::Path, now: i64) 
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReplayFilter {
+    pub viewport: Option<crate::replay::ViewportClass>,
     pub project_id: i64,
     pub environment: Option<String>,
     pub release: Option<String>,

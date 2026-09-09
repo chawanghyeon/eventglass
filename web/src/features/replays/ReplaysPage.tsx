@@ -25,6 +25,7 @@ export function ReplaysPage() {
     active.find((p) => p.id === selected) ?? (selected ? undefined : active[0]);
   const query = new URLSearchParams(params);
   query.delete("project");
+  query.delete("viewport");
   if (project) query.set("project_id", project.id);
   const replays = useQuery({
     ...replaysQuery(user?.id ?? "unknown", query.toString()),
@@ -32,8 +33,11 @@ export function ReplaysPage() {
   });
   const [showMaps, setShowMaps] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
+  const mapQuery = new URLSearchParams(query);
+  const viewport = params.get("viewport");
+  if (viewport) mapQuery.set("viewport", viewport);
   const maps = useQuery({
-    ...mapsQuery(user?.id ?? "unknown", query.toString()),
+    ...mapsQuery(user?.id ?? "unknown", mapQuery.toString()),
     enabled: showMaps && !!user && !!project,
   });
   function change(name: string, value: string) {
@@ -231,6 +235,22 @@ export function ReplaysPage() {
       <Button disabled={!project} onClick={() => setShowMaps(!showMaps)}>
         {showMaps ? "Page maps 닫기" : "페이지별 Heatmaps"}
       </Button>
+      {showMaps && (
+        <label>
+          분석 화면 크기
+          <select
+            aria-label="분석 화면 크기"
+            value={params.get("viewport") ?? ""}
+            onChange={(e) => change("viewport", e.target.value)}
+          >
+            <option value="">전체</option>
+            <option value="narrow">좁은 화면 · 768px 미만</option>
+            <option value="wide">넓은 화면 · 768px 이상</option>
+            <option value="mixed">크기 그룹 변경</option>
+            <option value="unknown">크기 불명</option>
+          </select>
+        </label>
+      )}
       {showMaps && maps.isPending && (
         <Notice>페이지별 행동 데이터를 분석하는 중…</Notice>
       )}
@@ -241,8 +261,9 @@ export function ReplaysPage() {
         <>
           <h2>Page maps</h2>
           <Notice>
-            현재 필터의 최근 Replay {maps.data.replays_analyzed}개를
-            분석했습니다.
+            현재 필터의 최근 최대 20개 중 화면 크기 조건에 맞는 Replay{" "}
+            {maps.data.replays_analyzed}개를 분석했습니다. 기록 도중 768px
+            경계를 넘은 세션은 별도 그룹이며, 기기 종류를 추정하지 않습니다.
             {maps.data.truncated
               ? " 처리 한도에 따라 일부 구간만 포함합니다."
               : ""}{" "}

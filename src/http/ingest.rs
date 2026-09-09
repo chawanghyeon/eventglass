@@ -108,6 +108,23 @@ async fn receive(
     body: Body,
     is_envelope: bool,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let stats = app.ingest_stats.clone();
+    let result = receive_inner(app, project_id, uri, headers, body, is_envelope).await;
+    stats.record(match &result {
+        Ok((status, _)) => status.as_u16(),
+        Err(error) => error.0.as_u16(),
+    });
+    result
+}
+
+async fn receive_inner(
+    app: AppState,
+    project_id: i64,
+    uri: Uri,
+    headers: HeaderMap,
+    body: Body,
+    is_envelope: bool,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     if app.indexer.as_ref().is_some_and(|indexer| !indexer.ready()) {
         return Err(ApiError(
             StatusCode::SERVICE_UNAVAILABLE,

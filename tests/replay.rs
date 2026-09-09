@@ -37,6 +37,14 @@ fn movement_uses_sample_time_viewport_and_page_and_ignores_iframe_coordinates() 
         analysis.pages["https://example.test/first"].movement["5,5"],
         1
     );
+    assert_eq!(
+        analysis.viewport_class,
+        eventglass::replay::ViewportClass::Mixed
+    );
+    assert_eq!(
+        analysis.pages["https://example.test/first"].examples[0].timestamp_ms,
+        1900
+    );
     let second = &analysis.pages["https://example.test/second"];
     assert_eq!(second.movement.values().sum::<u32>(), 1);
     assert_eq!(second.movement["10,10"], 1);
@@ -53,6 +61,9 @@ fn movement_uses_sample_time_viewport_and_page_and_ignores_iframe_coordinates() 
             .sum::<u32>(),
         1
     );
+    let mut maps = eventglass::replay::PageMaps::default();
+    maps.include(analysis);
+    assert!(maps.truncated, "maps must disclose missing segments");
 }
 
 #[test]
@@ -82,6 +93,25 @@ fn actual_desktop_and_mobile_product_detail_recordings_explain_observed_page_beh
             .iter()
             .find(|(url, _)| url.ends_with("/products/linen-shirt"))
             .expect("product detail page");
+        assert_eq!(
+            analysis.viewport_class,
+            if narrow {
+                eventglass::replay::ViewportClass::Narrow
+            } else {
+                eventglass::replay::ViewportClass::Wide
+            }
+        );
+        let example = product
+            .examples
+            .iter()
+            .find(|e| e.kind == "element" && e.key.contains("expand-review"))
+            .expect("real SDK click example");
+        assert!(
+            analysis
+                .timeline
+                .iter()
+                .any(|e| e.timestamp_ms == example.timestamp_ms && e.label == example.key)
+        );
         assert!(!url.contains("campaign"));
         assert_eq!(product.visits, 1);
         assert_eq!(product.sampled_replays, 1);
@@ -443,6 +473,29 @@ async fn durable_http_segments_are_atomic_idempotent_order_independent_and_autho
         ))
         .await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    for group in ["narrow", "wide", "mixed", "unknown"] {
+        let response = router
+            .clone()
+            .oneshot(get(format!(
+                "/api/replay-pages?project_id=1&viewport={group}"
+            )))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await?)?;
+        assert_eq!(
+            value["replays_analyzed"],
+            u32::from(analysis["viewport_class"] == group)
+        );
+        for page in value["pages"].as_object().unwrap().values() {
+            for sample in page["examples"].as_array().unwrap() {
+                assert_eq!(
+                    sample["replay_id"],
+                    detail["replay"]["metadata"]["replay_id"]
+                );
+            }
+        }
+    }
     // A conflicting retry rolls back a normal Event in the SAME envelope.
     let altered =
         String::from_utf8(PLAIN.to_vec())?.replace("replay-fixture@1", "replay-fixture@2");
@@ -462,6 +515,22 @@ async fn durable_http_segments_are_atomic_idempotent_order_independent_and_autho
             Ok(())
         })
         .await?;
+    let response = router
+        .clone()
+        .oneshot(get("/api/system/status".into()))
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let status: Value = serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await?)?;
+    assert_eq!(status["replay"]["active_replays"], "1");
+    assert_eq!(status["replay"]["segments"], "3");
+    assert_eq!(status["sentry_ingest_since_start"]["conflict"], "1");
+    assert!(
+        status["sentry_ingest_since_start"]["accepted"]
+            .as_str()
+            .unwrap()
+            .parse::<u32>()?
+            >= 3
+    );
     let core = state.clone().start_core().await?;
     let response = router
         .clone()

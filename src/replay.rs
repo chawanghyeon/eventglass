@@ -1,13 +1,69 @@
 //! Bounded, on-demand analysis of SDK events. Raw events remain solely in blob storage.
 use crate::sentry::replay::{event_timestamp_ms, frustration};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
 const MAX_TIMELINE: usize = 5000;
 const MAX_PAGES: usize = 500;
+const MAX_EXAMPLES: usize = 128;
+
+/// Classify the complete observed recording, never infer a device from its width.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewportClass {
+    #[default]
+    Unknown,
+    Narrow,
+    Wide,
+    Mixed,
+}
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplayExample {
+    pub kind: String,
+    pub key: String,
+    pub timestamp_ms: i64,
+    pub replay_id: String,
+}
+impl PageActivity {
+    fn example(&mut self, kind: &str, key: &str, timestamp_ms: i64) {
+        self.insert_example(ReplayExample {
+            kind: kind.into(),
+            key: key.into(),
+            timestamp_ms,
+            replay_id: String::new(),
+        });
+    }
+    fn insert_example(&mut self, example: ReplayExample) {
+        if self
+            .examples
+            .iter()
+            .any(|e| e.kind == example.kind && e.key == example.key)
+        {
+            return;
+        }
+        if self.examples.len() >= MAX_EXAMPLES {
+            // Dense movement must not crowd out actionable selectors/frustration.
+            let removable = self
+                .examples
+                .iter()
+                .position(|e| e.kind == "movement" && example.kind != "movement")
+                .or_else(|| {
+                    self.examples
+                        .iter()
+                        .position(|e| e.kind == "clicks" && example.kind == "frustration")
+                });
+            let Some(index) = removable else {
+                return;
+            };
+            self.examples.remove(index);
+        }
+        self.examples.push(example);
+    }
+}
 #[derive(Debug, Default, Serialize)]
 pub struct PageActivity {
+    pub examples: Vec<ReplayExample>,
     pub clicks: BTreeMap<String, u32>,
     pub movement: BTreeMap<String, u32>,
     pub elements: BTreeMap<String, u32>,
@@ -51,6 +107,7 @@ pub struct Visit {
 }
 #[derive(Debug, Default, Serialize)]
 pub struct Analysis {
+    pub viewport_class: ViewportClass,
     pub timeline: Vec<TimelineEvent>,
     pub journey: Vec<Visit>,
     pub pages: BTreeMap<String, PageActivity>,
@@ -145,6 +202,11 @@ impl Analysis {
                     {
                         page.max_scroll_viewports = page.max_scroll_viewports.max(y / height);
                         page.scroll_samples += 1;
+                        for threshold in [0, 1, 2, 3, 5] {
+                            if y / height >= f64::from(threshold) {
+                                page.example("scroll", &threshold.to_string(), time);
+                            }
+                        }
                     }
                 }
                 Some(4) => self.resize(data, time),
@@ -171,7 +233,9 @@ impl Analysis {
                             && (page.elements.len() < 1000 || page.elements.contains_key(&label))
                         {
                             *page.elements.entry(label.clone()).or_default() += 1;
+                            page.example("element", &label, time);
                             if let Some(depth) = depth {
+                                page.example("depth", &depth, time);
                                 let elements = page.depth_elements.entry(depth).or_default();
                                 if elements.len() < 50 || elements.contains_key(&label) {
                                     *elements.entry(label.clone()).or_default() += 1;
@@ -309,6 +373,16 @@ impl Analysis {
                 && let Some(page) = self.pages.get_mut(&url)
             {
                 add_frustration(&mut page.frustration, *signal);
+                for (kind, count) in [
+                    ("rage", signal.rage),
+                    ("dead", signal.dead),
+                    ("slow", signal.slow),
+                    ("multi", signal.multi),
+                ] {
+                    if count > 0 {
+                        page.example("frustration", kind, *time);
+                    }
+                }
             }
         }
         self.timeline.sort_by_key(|event| event.timestamp_ms);
@@ -360,6 +434,16 @@ impl Analysis {
     fn resize(&mut self, data: &Value, time: i64) {
         self.viewport = viewport(data);
         if let Some((width, height)) = self.viewport {
+            let group = if width < 768.0 {
+                ViewportClass::Narrow
+            } else {
+                ViewportClass::Wide
+            };
+            self.viewport_class = match self.viewport_class {
+                ViewportClass::Unknown => group,
+                previous if previous == group => previous,
+                _ => ViewportClass::Mixed,
+            };
             if self.viewport_history.len() >= 128 {
                 self.viewport_history.pop_front();
             }
@@ -418,8 +502,10 @@ impl Analysis {
         };
         if let Some(page) = self.pages.get_mut(&url) {
             if let Some(depth) = depth {
+                page.example("depth", &depth, time);
                 *page.depth_clicks.entry(depth).or_default() += 1;
             }
+            page.example(if click { "clicks" } else { "movement" }, &cell, time);
             let cells = if click {
                 &mut page.clicks
             } else {
@@ -550,13 +636,16 @@ pub struct PageMaps {
 impl PageMaps {
     pub fn include(&mut self, analysis: Analysis) {
         self.replays_analyzed += 1;
-        self.truncated |= analysis.truncated;
+        self.truncated |= analysis.truncated || !analysis.gaps.is_empty();
         for (url, page) in analysis.pages {
             if !self.pages.contains_key(&url) && self.pages.len() >= MAX_PAGES {
                 self.truncated = true;
                 continue;
             }
             let total = self.pages.entry(url).or_default();
+            for example in page.examples {
+                total.insert_example(example);
+            }
             for (a, b) in [
                 (&mut total.clicks, page.clicks),
                 (&mut total.movement, page.movement),

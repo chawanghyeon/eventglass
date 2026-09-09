@@ -15,6 +15,12 @@ pub(super) async fn list(
 ) -> ApiResult<Json<Value>> {
     let actor = authenticate(&state, &headers, false, false).await?;
     validate_filter(&filter)?;
+    if filter.viewport.is_some() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "viewport_filter_is_page_only",
+        ));
+    }
     let mut items = state
         .app
         .db
@@ -135,14 +141,21 @@ pub(super) async fn analysis(
         })
         .await?;
     let root = state.app.config.data_dir.clone();
+    let replay_id = replay.metadata.replay_id.clone();
     let analysis = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let _permit = permit;
-        crate::replay::analyze(
+        let mut analysis = crate::replay::analyze(
             &root,
             segments,
             replay.metadata.finished_at_ms,
             &mut crate::replay::ReadBudget::default(),
-        )
+        )?;
+        for page in analysis.pages.values_mut() {
+            for example in &mut page.examples {
+                example.replay_id = replay_id.clone();
+            }
+        }
+        Ok(analysis)
     })
     .await
     .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "replay_worker_failed"))??;
@@ -155,6 +168,7 @@ pub(super) async fn pages(
     Query(filter): Query<ReplayFilter>,
 ) -> ApiResult<Json<crate::replay::PageMaps>> {
     let actor = authenticate(&state, &headers, false, false).await?;
+    let viewport = filter.viewport;
     validate_filter(&filter)?;
     let permit = state
         .app
@@ -194,9 +208,16 @@ pub(super) async fn pages(
             let mut analysis = crate::replay::analyze(&root, segments, end, &mut budget)?;
             for page in analysis.pages.values_mut() {
                 page.replay_ids.push(id.clone());
+                for example in &mut page.examples {
+                    example.replay_id = id.clone();
+                }
             }
             let stop = analysis.truncated;
-            maps.include(analysis);
+            if viewport.is_none_or(|group| group == analysis.viewport_class) {
+                maps.include(analysis);
+            } else {
+                maps.truncated |= analysis.truncated;
+            }
             if stop {
                 break;
             }

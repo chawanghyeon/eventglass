@@ -251,8 +251,19 @@ pub fn doctor_connection(db: &Connection, data_dir: &Path) -> Result<DoctorRepor
     }
     // Verify each immutable recording sequentially, without retaining decoded sessions.
     for reference in crate::db::replays::blob_references(db)? {
-        crate::storage::replay::read(data_dir, &reference)
-            .with_context(|| format!("invalid Replay blob {}", reference.key))?;
+        if let Err(error) = crate::storage::replay::read(data_dir, &reference) {
+            // Standalone CLI doctor can overlap the server's live retention sweep.
+            // A removed reference is no longer a consistency obligation.
+            let referenced: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM replay_segments WHERE blob_sha256=?1)",
+                [&reference.sha256],
+                |row| row.get(0),
+            )?;
+            if referenced {
+                return Err(error)
+                    .with_context(|| format!("invalid Replay blob {}", reference.key));
+            }
+        }
     }
     Ok(DoctorReport {
         ok: true,
@@ -288,3 +299,69 @@ fn optional_file_size(path: &Path) -> Result<u64> {
 }
 
 use rusqlite::OptionalExtension;
+
+/// Completed Sentry transport requests since this process started. No payload or identity labels.
+#[derive(Default)]
+pub struct IngestStats {
+    counts: [std::sync::atomic::AtomicU64; 8],
+}
+impl IngestStats {
+    pub fn record(&self, status: u16) {
+        let bucket = match status {
+            200..=299 => 0,
+            400 | 415 | 422 => 1,
+            401 | 403 => 2,
+            409 => 3,
+            413 => 4,
+            429 => 5,
+            500..=599 => 6,
+            _ => 7,
+        };
+        self.counts[bucket].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    pub fn snapshot(&self) -> std::collections::BTreeMap<&'static str, String> {
+        [
+            "accepted",
+            "invalid_payload",
+            "unauthorized",
+            "conflict",
+            "too_large",
+            "busy",
+            "server_error",
+            "other",
+        ]
+        .into_iter()
+        .zip(
+            self.counts
+                .iter()
+                .map(|v| v.load(std::sync::atomic::Ordering::Relaxed).to_string()),
+        )
+        .collect()
+    }
+}
+
+#[derive(Serialize)]
+pub struct ReplayStatus {
+    pub active_replays: String,
+    pub partial_replays: String,
+    pub expired_replays: String,
+    pub segments: String,
+    /// Referenced compressed local bytes, deduplicated across sessions/projects.
+    pub referenced_bytes: String,
+    pub backup_pending: bool,
+}
+pub fn replay_status(db: &Connection, now: i64) -> Result<ReplayStatus> {
+    let (active, partial, expired): (i64,i64,i64) = db.query_row(
+        "SELECT coalesce(sum(expires_at_us>?1),0), coalesce(sum(expires_at_us>?1 AND segment_count<>max_segment_id+1),0), coalesce(sum(expires_at_us<=?1),0) FROM replays", [now],
+        |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
+    let segments: i64 = db.query_row("SELECT count(*) FROM replay_segments", [], |r| r.get(0))?;
+    let bytes: i64 = db.query_row("SELECT coalesce(sum(size),0) FROM (SELECT max(blob_size) AS size FROM replay_segments GROUP BY blob_sha256)", [], |r|r.get(0))?;
+    Ok(ReplayStatus {
+        active_replays: active.to_string(),
+        partial_replays: partial.to_string(),
+        expired_replays: expired.to_string(),
+        segments: segments.to_string(),
+        referenced_bytes: bytes.to_string(),
+        backup_pending: crate::db::replays::backup_pending(db)?,
+    })
+}

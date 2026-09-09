@@ -84,6 +84,16 @@ const aggregateResponse: AggregateResponse = {
 };
 const issuePage: IssuePage = { items: [], next_cursor: null };
 const systemStatus: SystemStatus = {
+  replay: {
+    active_replays: "0",
+    partial_replays: "0",
+    expired_replays: "0",
+    segments: "0",
+    referenced_bytes: "0",
+    backup_pending: false,
+  },
+  replay_maintenance: null,
+  sentry_ingest_since_start: {},
   version: "0.1.0",
   ready: true,
   ingest_accepting: true,
