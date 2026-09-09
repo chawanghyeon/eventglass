@@ -161,6 +161,24 @@ beforeEach(() => {
 });
 
 describe("LogsPage", () => {
+  it("applies quick time ranges only after the search is submitted", async () => {
+    vi.spyOn(endpoints, "logs").mockResolvedValue(page());
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "15분" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("2026-09-07");
+    await user.click(screen.getByRole("button", { name: "검색 적용" }));
+    await waitFor(() => {
+      const params = new URLSearchParams(
+        screen.getByTestId("location").textContent ?? "",
+      );
+      expect(
+        Date.parse(params.get("end") ?? "") -
+          Date.parse(params.get("start") ?? ""),
+      ).toBe(900000);
+    });
+  });
+
   it("subscribes with a native-search-compatible future date", async () => {
     const calls: string[] = [];
     vi.stubGlobal(
@@ -293,6 +311,7 @@ describe("LogsPage", () => {
     const query = screen.getByLabelText("검색어");
     await user.type(query, "database");
     expect(screen.getByTestId("location")).not.toHaveTextContent("database");
+    await user.click(screen.getByText("프로젝트 · 전체"));
     await user.click(screen.getByLabelText("Primary"));
     await user.click(screen.getByRole("button", { name: "검색 적용" }));
 

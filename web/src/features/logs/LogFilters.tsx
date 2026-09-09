@@ -50,22 +50,6 @@ export function LogFilters({
   return (
     <form className="log-filters" onSubmit={submit}>
       <div className="log-filters__primary">
-        <label>
-          시작 (RFC3339)
-          <input
-            onChange={(event) => setStart(event.target.value)}
-            required
-            value={start}
-          />
-        </label>
-        <label>
-          종료 (RFC3339)
-          <input
-            onChange={(event) => setEnd(event.target.value)}
-            required
-            value={end}
-          />
-        </label>
         <label className="log-filters__query">
           검색어
           <input
@@ -75,33 +59,97 @@ export function LogFilters({
             value={query}
           />
         </label>
+        <Button type="submit">검색 적용</Button>
       </div>
-      <fieldset className="log-projects">
-        <legend>프로젝트</legend>
-        <p>선택하지 않으면 접근 가능한 활성 프로젝트를 모두 검색합니다.</p>
-        <div>
-          {projects
-            .filter((project) => project.is_active)
-            .map((project) => (
-              <label key={project.id}>
-                <input
-                  checked={selectedProjects.includes(project.id)}
-                  onChange={(event) =>
-                    setSelectedProjects((current) =>
-                      event.target.checked
-                        ? [...current, project.id]
-                        : current.filter((id) => id !== project.id),
-                    )
-                  }
-                  type="checkbox"
-                />
-                {project.name}
-              </label>
-            ))}
+      <div className="search-periods" aria-label="빠른 기간">
+        <span>기간</span>
+        {[
+          [15, "15분"],
+          [60, "1시간"],
+          [360, "6시간"],
+          [1440, "24시간"],
+          [10080, "7일"],
+        ].map(([minutes, label]) => (
+          <Button
+            key={minutes}
+            type="button"
+            variant="quiet"
+            onClick={() => {
+              const now = new Date();
+              setStart(
+                new Date(now.getTime() - Number(minutes) * 60000).toISOString(),
+              );
+              setEnd(now.toISOString());
+            }}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      <details className="search-time">
+        <summary>
+          시간 범위 · {formatTime(start)} – {formatTime(end)}
+        </summary>
+        <div className="log-filters__vectors">
+          <label>
+            시작 (RFC3339)
+            <input
+              onChange={(event) => setStart(event.target.value)}
+              required
+              value={start}
+            />
+          </label>
+          <label>
+            종료 (RFC3339)
+            <input
+              onChange={(event) => setEnd(event.target.value)}
+              required
+              value={end}
+            />
+          </label>
         </div>
-      </fieldset>
+      </details>
       <details>
-        <summary>메타데이터 필터</summary>
+        <summary>
+          프로젝트 ·{" "}
+          {selectedProjects.length
+            ? `${selectedProjects.length}개 선택`
+            : "전체"}
+        </summary>
+        <fieldset className="log-projects">
+          <legend>프로젝트</legend>
+          <span className="muted">
+            {selectedProjects.length
+              ? `${selectedProjects.length}개 선택`
+              : "전체 프로젝트"}
+          </span>
+          <div>
+            {projects
+              .filter((project) => project.is_active)
+              .map((project) => (
+                <label key={project.id}>
+                  <input
+                    checked={selectedProjects.includes(project.id)}
+                    onChange={(event) =>
+                      setSelectedProjects((current) =>
+                        event.target.checked
+                          ? [...current, project.id]
+                          : current.filter((id) => id !== project.id),
+                      )
+                    }
+                    type="checkbox"
+                  />
+                  {project.name}
+                </label>
+              ))}
+          </div>
+        </fieldset>
+      </details>
+      <details>
+        <summary>
+          메타데이터 필터
+          {Object.values(filters).some(Boolean) ? " · 적용 조건 있음" : ""}
+        </summary>
         <div className="log-filters__vectors">
           {filterFields.map((field) => (
             <label key={field}>
@@ -120,9 +168,18 @@ export function LogFilters({
           ))}
         </div>
       </details>
-      <div className="button-row">
-        <Button type="submit">검색 적용</Button>
-      </div>
     </form>
   );
+}
+
+function formatTime(value: string): string {
+  const time = new Date(value);
+  return Number.isFinite(time.getTime())
+    ? time.toLocaleString("ko-KR", {
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "시간 선택";
 }

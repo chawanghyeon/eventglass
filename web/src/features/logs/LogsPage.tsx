@@ -153,7 +153,7 @@ export function LogsPage() {
         <div>
           <p className="eyebrow">검색</p>
           <h1>Logs</h1>
-          <p>활성 프로젝트의 로그와 오류를 같은 스냅샷에서 검색합니다.</p>
+          <p>메시지를 검색하고 오류의 원인을 확인하세요.</p>
         </div>
         {logs.data ? (
           <span className="count-badge">{logs.data.rows.length}개 표시</span>
@@ -264,10 +264,8 @@ export function LogsPage() {
         </Notice>
       ) : null}
       {logs.data ? (
-        <section
-          className="snapshot-panel"
-          aria-labelledby="logs-volume-heading"
-        >
+        <details className="disclosure">
+          <summary>시간별 분포</summary>
           <header>
             <div>
               <p className="eyebrow">동일 스냅샷</p>
@@ -294,7 +292,7 @@ export function LogsPage() {
               label="시간별 로그 건수"
             />
           ) : null}
-        </section>
+        </details>
       ) : null}
       {logs.data?.rows.length === 0 ? (
         <div className="empty-state">

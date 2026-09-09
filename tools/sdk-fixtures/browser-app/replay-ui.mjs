@@ -11,12 +11,13 @@ export async function checkReplayUi(page,baseUrl,dsn) {
   const bytes=await readFile(new URL('plain-0.envelope',root),'utf8');
   const id=JSON.parse(bytes.split('\n')[2]).replay_id;
   await page.goto(`${baseUrl}/replays?project=${project}`);
-  await page.getByRole('button',{name:'Sentry User Feedback',exact:true}).click();
+  await page.getByRole('button',{name:'사용자 피드백',exact:true}).click();
   await page.getByText('Replay fixture feedback',{exact:true}).waitFor();
   await page.locator(`a[href="/replays/${project}/${id}"]`).first().waitFor();
-  await page.getByRole('button',{name:'페이지별 Heatmaps'}).click();
-  await page.getByRole('heading',{name:'Page maps',exact:true}).waitFor();
+  await page.getByRole('button',{name:'페이지 분석'}).click();
+  await page.getByRole('heading',{name:'페이지 분석',exact:true}).waitFor();
   await page.getByRole('img',{name:/Click heatmap/}).waitFor();
+  await page.getByText('이동 경로와 관련 세션',{exact:true}).click();
   await page.locator(`a[href="/replays/${project}/${id}"]`).first().click();
   await page.getByRole('heading',{name:'Timeline',exact:true}).waitFor();
   await page.getByRole('link',{name:/^Error [a-f0-9]{32}$/}).waitFor();
@@ -33,6 +34,8 @@ export async function checkReplayUi(page,baseUrl,dsn) {
   await page.getByLabel('Speed',{exact:true}).selectOption('2');
   await page.getByLabel('Replay seek',{exact:true}).focus();
   await page.getByLabel('Replay seek',{exact:true}).press('End');
+  await page.getByText('이 세션의 페이지 분석',{exact:true}).click();
+  await page.getByText('요소별 클릭',{exact:true}).click();
   await page.getByRole('heading',{name:'Element clicks',exact:true}).waitFor();
   await page.getByText(/^(dead|rage) click$/).waitFor();
   await page.getByLabel('Map',{exact:true}).selectOption('movement');
@@ -99,10 +102,13 @@ async function checkShopping(page,baseUrl,project,key,root) {
     if(response.status!==202)throw Error(`Shopping replay ingest ${response.status}`);
   }
   await page.goto(`${baseUrl}/replays?project=${project}&environment=shopping-fixture&url=${encodeURIComponent('/products/linen-shirt')}`);
-  await page.getByRole('button',{name:'페이지별 Heatmaps'}).click();
+  await page.getByRole('button',{name:'페이지 분석'}).click();
   await page.getByRole('heading',{name:'상품·페이지 분석',exact:true}).waitFor();
   await page.getByRole('button',{name:productUrl,exact:true}).first().click();
   await page.locator('.replay-page-summary > div').first().getByText('2',{exact:true}).waitFor();
+  await page.getByText('스크롤 분석',{exact:true}).click();
+  await page.getByText('요소별 클릭',{exact:true}).click();
+  await page.getByText('이동 경로와 관련 세션',{exact:true}).click();
   await page.getByText('2–3 화면 높이',{exact:true}).waitFor();
   await page.getByText(/#expand-review/).first().waitFor();
   await page.getByText(/#add-to-cart/).first().waitFor();
@@ -111,6 +117,8 @@ async function checkShopping(page,baseUrl,project,key,root) {
   await page.getByRole('combobox',{name:'분석 화면 크기'}).selectOption('narrow');
   await page.locator('.replay-page-summary > div').first().getByText('1',{exact:true}).waitFor();
   await page.getByRole('button',{name:productUrl,exact:true}).first().click();
+  const elements = page.getByText('요소별 클릭',{exact:true});
+  if(!await elements.evaluate(el=>el.closest('details').open)) await elements.click();
   const target=page.getByRole('link',{name:/#expand-review/}).first();
   const href=await target.getAttribute('href');
   if(!href?.includes('?t='))throw Error('Missing exact replay timestamp link');
@@ -123,7 +131,7 @@ async function checkShopping(page,baseUrl,project,key,root) {
   await page.reload();
   await page.waitForFunction(expected=>Math.abs(Number(document.querySelector('input[aria-label="Replay seek"]')?.value)-expected)<2,expected);
   await page.goto(`${baseUrl}/replays?project=${project}&environment=shopping-fixture`);
-  await page.getByRole('button',{name:'페이지별 Heatmaps'}).click();
+  await page.getByRole('button',{name:'페이지 분석'}).click();
   await page.getByRole('heading',{name:'상품·페이지 분석',exact:true}).waitFor();
   await page.setViewportSize({width:390,height:844});
   const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth+1);

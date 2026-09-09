@@ -1,7 +1,6 @@
 import { FeedbackPanel } from "./FeedbackPanel";
-import { useState } from "react";
 import { PageMaps } from "./PageMaps";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearchParams } from "react-router-dom";
 import { describeApiError } from "../../api/client";
 import { Notice } from "../../components/Notice";
@@ -13,6 +12,7 @@ import { duration, userLabel } from "./presentation";
 
 export function ReplaysPage() {
   const session = useSession();
+  const cache = useQueryClient();
   const user = session.data;
   const projects = useQuery({
     ...projectsQuery(user?.id ?? "unknown"),
@@ -26,13 +26,32 @@ export function ReplaysPage() {
   const query = new URLSearchParams(params);
   query.delete("project");
   query.delete("viewport");
+  query.delete("view");
   if (project) query.set("project_id", project.id);
   const replays = useQuery({
     ...replaysQuery(user?.id ?? "unknown", query.toString()),
     enabled: !!user && !!project,
   });
-  const [showMaps, setShowMaps] = useState(false);
-  const [showFeedback, setShowFeedback] = useState(false);
+  const requestedView = params.get("view");
+  const view =
+    requestedView === "pages" || requestedView === "feedback"
+      ? requestedView
+      : "recordings";
+  const showMaps = view === "pages";
+  const showFeedback = view === "feedback";
+  const extraFilters = [
+    "environment",
+    "release",
+    "user",
+    "rage_click",
+    "dead_click",
+    "started_after_ms",
+    "started_before_ms",
+    "min_duration_ms",
+  ];
+  const activeFilterCount = extraFilters.filter((key) =>
+    params.has(key),
+  ).length;
   const mapQuery = new URLSearchParams(query);
   const viewport = params.get("viewport");
   if (viewport) mapQuery.set("viewport", viewport);
@@ -53,10 +72,38 @@ export function ReplaysPage() {
       <header className="page-heading">
         <div>
           <h1>Replays</h1>
-          <p>공식 Sentry SDK가 샘플링한 세션의 화면과 사용자 행동</p>
+          <p>방문을 재생하고, 페이지에서 막힌 지점을 찾으세요.</p>
         </div>
-        <Button onClick={() => void replays.refetch()}>새로고침</Button>
+        <Button
+          disabled={!project}
+          onClick={() => {
+            if (showMaps) void maps.refetch();
+            else if (showFeedback)
+              void cache.invalidateQueries({
+                queryKey: ["feedback", user?.id, project?.id],
+              });
+            else void replays.refetch();
+          }}
+        >
+          새로고침
+        </Button>
       </header>
+      <nav className="view-switcher" aria-label="Replay 보기">
+        {[
+          ["recordings", "세션 녹화"],
+          ["pages", "페이지 분석"],
+          ["feedback", "사용자 피드백"],
+        ].map(([value, label]) => (
+          <Button
+            key={value}
+            variant={view === value ? "primary" : "quiet"}
+            aria-pressed={view === value}
+            onClick={() => change("view", value)}
+          >
+            {label}
+          </Button>
+        ))}
+      </nav>
       {projects.isError && (
         <Notice tone="error">{describeApiError(projects.error)}</Notice>
       )}
@@ -75,93 +122,127 @@ export function ReplaysPage() {
             ))}
           </select>
         </label>
-        {[
-          ["environment", "Environment"],
-          ["release", "Release"],
-          ["url", "URL"],
-          ["user", "User"],
-        ].map(([name, label]) => (
-          <label key={name}>
-            {label}
-            <input
-              value={params.get(name) ?? ""}
-              onChange={(e) => change(name, e.target.value)}
-            />
-          </label>
-        ))}
-        {[
-          ["has_error", "Error"],
-          ["rage_click", "Rage click"],
-          ["dead_click", "Dead click"],
-        ].map(([name, label]) => (
-          <label key={name}>
-            {label}
-            <select
-              value={params.get(name) ?? ""}
-              onChange={(e) => change(name, e.target.value)}
-            >
-              <option value="">전체</option>
-              <option value="true">있음</option>
-              <option value="false">없음</option>
-            </select>
-          </label>
-        ))}
-        {[
-          ["started_after_ms", "세션 시작 이후"],
-          ["started_before_ms", "세션 시작 이전"],
-        ].map(([name, label]) => (
-          <label key={name}>
-            {label} (현지 시간)
-            <input
-              type="datetime-local"
-              value={localInput(params.get(name))}
-              onChange={(event) =>
-                change(
-                  name,
-                  event.target.value
-                    ? String(new Date(event.target.value).getTime())
-                    : "",
-                )
-              }
-            />
-          </label>
-        ))}
-        <label>
-          최소 시간 (초)
-          <input
-            type="number"
-            min="0"
-            value={
-              params.has("min_duration_ms")
-                ? Number(params.get("min_duration_ms")) / 1000
-                : ""
-            }
-            onChange={(e) =>
-              change(
-                "min_duration_ms",
-                e.target.value ? String(Number(e.target.value) * 1000) : "",
-              )
-            }
-          />
-        </label>
+        {!showFeedback && (
+          <>
+            <label>
+              URL
+              <input
+                placeholder="/products/…"
+                value={params.get("url") ?? ""}
+                onChange={(e) => change("url", e.target.value)}
+              />
+            </label>
+            <label>
+              Error
+              <select
+                value={params.get("has_error") ?? ""}
+                onChange={(e) => change("has_error", e.target.value)}
+              >
+                <option value="">전체</option>
+                <option value="true">있음</option>
+                <option value="false">없음</option>
+              </select>
+            </label>
+          </>
+        )}
       </div>
+      {!showFeedback && (
+        <details
+          className="disclosure"
+          open={activeFilterCount > 0 || undefined}
+        >
+          <summary>
+            추가 필터
+            {activeFilterCount ? ` · ${activeFilterCount}개 적용 중` : ""}
+          </summary>
+          <div className="replay-filters">
+            {[
+              ["environment", "Environment"],
+              ["release", "Release"],
+              ["user", "User"],
+            ].map(([name, label]) => (
+              <label key={name}>
+                {label}
+                <input
+                  value={params.get(name) ?? ""}
+                  onChange={(e) => change(name, e.target.value)}
+                />
+              </label>
+            ))}
+            {[
+              ["rage_click", "Rage click"],
+              ["dead_click", "Dead click"],
+            ].map(([name, label]) => (
+              <label key={name}>
+                {label}
+                <select
+                  value={params.get(name) ?? ""}
+                  onChange={(e) => change(name, e.target.value)}
+                >
+                  <option value="">전체</option>
+                  <option value="true">있음</option>
+                  <option value="false">없음</option>
+                </select>
+              </label>
+            ))}
+            {[
+              ["started_after_ms", "세션 시작 이후"],
+              ["started_before_ms", "세션 시작 이전"],
+            ].map(([name, label]) => (
+              <label key={name}>
+                {label} (현지 시간)
+                <input
+                  type="datetime-local"
+                  value={localInput(params.get(name))}
+                  onChange={(event) =>
+                    change(
+                      name,
+                      event.target.value
+                        ? String(new Date(event.target.value).getTime())
+                        : "",
+                    )
+                  }
+                />
+              </label>
+            ))}
+            <label>
+              최소 시간 (초)
+              <input
+                type="number"
+                min="0"
+                value={
+                  params.has("min_duration_ms")
+                    ? Number(params.get("min_duration_ms")) / 1000
+                    : ""
+                }
+                onChange={(e) =>
+                  change(
+                    "min_duration_ms",
+                    e.target.value ? String(Number(e.target.value) * 1000) : "",
+                  )
+                }
+              />
+            </label>
+          </div>
+        </details>
+      )}
       {!project && <Notice>활성 프로젝트를 선택해 주세요.</Notice>}
       {project && replays.isPending && <Notice>Replay를 불러오는 중…</Notice>}
       {replays.isError && (
         <Notice tone="error">{describeApiError(replays.error)}</Notice>
       )}
-      {replays.data && (
+      {!showMaps && !showFeedback && replays.data && (
         <>
           <div className="table-scroll">
             <table className="replay-table">
               <thead>
                 <tr>
-                  <th>User</th>
-                  <th>Started</th>
-                  <th>Duration</th>
-                  <th>URLs</th>
-                  <th>Errors</th>
-                  <th>Frustration</th>
+                  <th>사용자</th>
+                  <th>시작</th>
+                  <th>재생 시간</th>
+                  <th>페이지</th>
+                  <th>오류</th>
+                  <th>불편 신호</th>
                   <th>상태</th>
                 </tr>
               </thead>
@@ -190,13 +271,19 @@ export function ReplaysPage() {
                         ? `🔥 Rage ${r.frustration.rage} `
                         : ""}
                       {r.frustration.dead ? `Dead ${r.frustration.dead} ` : ""}
-                      {r.frustration.slow ? `Slow ${r.frustration.slow}` : ""}
-                      {!r.frustration.slow && !r.frustration.multi ? "—" : ""}
+                      {r.frustration.slow ? `Slow ${r.frustration.slow} ` : ""}
+                      {r.frustration.multi
+                        ? `Multi ${r.frustration.multi}`
+                        : ""}
+                      {!r.frustration.rage &&
+                      !r.frustration.dead &&
+                      !r.frustration.slow &&
+                      !r.frustration.multi
+                        ? "—"
+                        : ""}
                     </td>
-                    <td>
-                      {r.partial
-                        ? "Partial replay"
-                        : `${r.segment_count} segments`}
+                    <td title={`${r.segment_count}개 구간 수신`}>
+                      {r.partial ? "일부 누락" : "수신됨"}
                     </td>
                   </tr>
                 ))}
@@ -232,9 +319,6 @@ export function ReplaysPage() {
           )}
         </>
       )}
-      <Button disabled={!project} onClick={() => setShowMaps(!showMaps)}>
-        {showMaps ? "Page maps 닫기" : "페이지별 Heatmaps"}
-      </Button>
       {showMaps && (
         <label>
           분석 화면 크기
@@ -259,11 +343,9 @@ export function ReplaysPage() {
       )}
       {showMaps && maps.data && (
         <>
-          <h2>Page maps</h2>
+          <h2>페이지 분석</h2>
           <Notice>
-            현재 필터의 최근 최대 20개 중 화면 크기 조건에 맞는 Replay{" "}
-            {maps.data.replays_analyzed}개를 분석했습니다. 기록 도중 768px
-            경계를 넘은 세션은 별도 그룹이며, 기기 종류를 추정하지 않습니다.
+            최근 샘플 세션 {maps.data.replays_analyzed}개 분석 · 최대 20개.
             {maps.data.truncated
               ? " 처리 한도에 따라 일부 구간만 포함합니다."
               : ""}{" "}
@@ -272,18 +354,12 @@ export function ReplaysPage() {
           <PageMaps pages={maps.data.pages} project={project?.id} />
         </>
       )}
-      <Button
-        disabled={!project}
-        onClick={() => setShowFeedback(!showFeedback)}
-      >
-        Sentry User Feedback
-      </Button>
       {showFeedback && project && user && (
         <FeedbackPanel user={user.id} project={project.id} />
       )}
       <p className="muted">
-        Duration은 마지막 관측 시점까지입니다. 종료 확정·전체 방문자 수를
-        의미하지 않습니다. 조회 가능 기간 30일.
+        최근 30일의 샘플 세션입니다. 재생 시간은 마지막 관측 시점까지이며 전체
+        방문자 통계가 아닙니다.
       </p>
     </section>
   );

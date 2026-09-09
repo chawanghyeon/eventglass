@@ -1473,7 +1473,21 @@ textarea {
     display: none;
   }
   .sidebar nav {
-    justify-self: center;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+    display: flex;
+    overflow-x: auto;
+    min-width: 0;
+    gap: 0.3rem;
+  }
+  .sidebar nav a {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+  .sidebar__bottom {
+    grid-column: 3;
+    grid-row: 1;
   }
   .sidebar nav a {
     padding: 0.6rem 0.8rem;
@@ -1747,4 +1761,80 @@ textarea {
   text-align: left;
   cursor: pointer;
   overflow-wrap: anywhere;
+}
+
+.view-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 0.75rem;
+}
+.disclosure {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 0.85rem 1rem;
+  background: var(--paper);
+}
+.disclosure > summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+.disclosure[open] > summary {
+  margin-bottom: 1rem;
+}
+.disclosure > .replay-table {
+  width: 100%;
+}
+.disclosure code {
+  overflow-wrap: anywhere;
+}
+
+.search-periods {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.search-periods > span {
+  color: var(--muted);
+  margin-right: 0.4rem;
+}
+.search-periods .button {
+  padding: 0.4rem 0.75rem;
+}
+.log-filters__query {
+  grid-column: 1 / -1;
+}
+.search-time summary {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.log-filters__primary {
+  display: flex;
+  align-items: end;
+}
+.log-filters__primary > label {
+  flex: 1;
+  min-width: 0;
+}
+.log-filters__primary > .button {
+  flex: 0 0 auto;
+}
+.log-projects {
+  margin-top: 0.75rem;
+}
+@media (max-width: 480px) {
+  .log-filters__primary {
+    flex-wrap: wrap;
+  }
+  .log-filters__primary > label {
+    flex-basis: 100%;
+  }
+}
+
+.replay-table thead th {
+  white-space: nowrap;
 }

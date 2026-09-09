@@ -72,7 +72,7 @@ export function ExplorePage() {
         <div>
           <p className="eyebrow">분석</p>
           <h1>Explore</h1>
-          <p>공통 검색 범위에서 정확한 metric과 bucket을 계산합니다.</p>
+          <p>로그의 건수와 수치를 비교하고 추이를 확인하세요.</p>
         </div>
         {aggregate.data ? (
           <span className="count-badge">{aggregate.data.record_count}건</span>

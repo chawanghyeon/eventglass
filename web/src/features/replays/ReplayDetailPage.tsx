@@ -203,10 +203,12 @@ export function ReplayDetailPage() {
           )}
         </div>
       </div>
-      <h2>Page activity</h2>
-      {analysis.data && (
-        <PageMaps pages={analysis.data.pages} project={project} />
-      )}
+      <details className="disclosure">
+        <summary>이 세션의 페이지 분석</summary>
+        {analysis.data && (
+          <PageMaps pages={analysis.data.pages} project={project} />
+        )}
+      </details>
     </section>
   );
 }
