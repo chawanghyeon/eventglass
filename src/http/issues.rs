@@ -1,5 +1,7 @@
 //! Issue HTTP validation, authentication, and response conversion.
 
+use super::ApiJson;
+
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -188,7 +190,7 @@ pub(super) async fn update_issue(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-    Json(input): Json<IssueUpdate>,
+    ApiJson(input): ApiJson<IssueUpdate>,
 ) -> ApiResult<Json<crate::db::issues::Issue>> {
     issue_id(&id)?;
     let principal = authenticate(&state, &headers, true, false).await?;

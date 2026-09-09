@@ -1,5 +1,7 @@
 //! Project HTTP DTOs and response conversion. Transactions live in db::projects.
 
+use super::ApiJson;
+
 use super::{ApiError, ApiResult, HttpState, auth::authenticate};
 use axum::{
     Json,
@@ -32,7 +34,7 @@ pub(super) struct ProjectInput {
 pub(super) async fn create_project(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<ProjectInput>,
+    ApiJson(input): ApiJson<ProjectInput>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let principal = authenticate(&state, &headers, true, true).await?;
     if input.slug.is_empty()
@@ -64,7 +66,7 @@ pub(super) async fn update_project(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(id): Path<i64>,
-    Json(input): Json<ProjectUpdate>,
+    ApiJson(input): ApiJson<ProjectUpdate>,
 ) -> ApiResult<StatusCode> {
     let p = authenticate(&state, &headers, true, true).await?;
     state

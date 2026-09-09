@@ -646,6 +646,31 @@ async fn project_keys_remain_manageable_after_reload_and_are_admin_only() -> any
         db.execute_batch("INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'keys','Keys',0,0); INSERT INTO users(email,password_hash,role,created_at_us,updated_at_us) SELECT 'member@example.test',password_hash,'member',0,0 FROM users WHERE role='admin'")?;
         Ok(())
     }).await?;
+    let permit = fixture.state.query_permit.clone().acquire_owned().await?;
+    let busy = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/system/doctor",
+            Value::Null,
+            Some(&owner),
+        ))
+        .await?;
+    assert_eq!(busy.status(), StatusCode::TOO_MANY_REQUESTS);
+    drop(permit);
+    let doctor = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/system/doctor",
+            Value::Null,
+            Some(&owner),
+        ))
+        .await?;
+    assert_eq!(doctor.status(), StatusCode::OK);
+    assert_eq!(json_body(doctor).await?["ok"], true);
     let member = login(&fixture, "member@example.test", PASSWORD).await?;
     let created = fixture
         .router
@@ -751,5 +776,38 @@ async fn offline_admin_reset_replaces_password_and_revokes_existing_sessions() -
             .is_err()
     );
     login(&fixture, "member@example.test", &password).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn malformed_admin_json_has_the_standard_error_envelope() -> anyhow::Result<()> {
+    let fixture = fixture().await?;
+    for (content_type, payload, expected) in [
+        ("application/json", "{", StatusCode::BAD_REQUEST),
+        (
+            "application/json",
+            "{\"email\":1,\"password\":false}",
+            StatusCode::BAD_REQUEST,
+        ),
+        ("text/plain", "{}", StatusCode::UNSUPPORTED_MEDIA_TYPE),
+    ] {
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/auth/login")
+                    .header(header::ORIGIN, ORIGIN)
+                    .header(header::CONTENT_TYPE, content_type)
+                    .body(Body::from(payload))?,
+            )
+            .await?;
+        assert_eq!(response.status(), expected);
+        let body = json_body(response).await?;
+        assert_eq!(body["error"]["code"], "invalid_json_request");
+        assert_eq!(body["error"]["retryable"], false);
+        assert!(uuid::Uuid::parse_str(body["error"]["request_id"].as_str().unwrap()).is_ok());
+    }
     Ok(())
 }

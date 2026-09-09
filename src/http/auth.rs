@@ -1,5 +1,7 @@
 //! Authentication HTTP DTOs, header checks, cookies, and response conversion.
 
+use super::ApiJson;
+
 use axum::{
     Json,
     extract::{Path, State},
@@ -148,7 +150,7 @@ pub(super) struct SetupInput {
 pub(super) async fn setup(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<SetupInput>,
+    ApiJson(input): ApiJson<SetupInput>,
 ) -> ApiResult<StatusCode> {
     check_origin(&headers, &state)?;
     record_attempt(&state, crate::auth::AttemptKind::Setup)?;
@@ -189,7 +191,7 @@ pub(super) struct Credentials {
 pub(super) async fn login(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<Credentials>,
+    ApiJson(input): ApiJson<Credentials>,
 ) -> ApiResult<Response> {
     check_origin(&headers, &state)?;
     record_attempt(&state, crate::auth::AttemptKind::Login)?;
@@ -307,7 +309,7 @@ pub(super) struct CreateUserInput {
 pub(super) async fn create_user(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<CreateUserInput>,
+    ApiJson(input): ApiJson<CreateUserInput>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let principal = authenticate(&state, &headers, true, true).await?;
     let email = crate::auth::normalize_credentials(&input.email, &input.password).ok_or(
@@ -349,7 +351,7 @@ pub(super) async fn update_user(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(id): Path<i64>,
-    Json(input): Json<UpdateUserInput>,
+    ApiJson(input): ApiJson<UpdateUserInput>,
 ) -> ApiResult<StatusCode> {
     let principal = authenticate(&state, &headers, true, true).await?;
     if input.role.is_none() && input.is_active.is_none() {

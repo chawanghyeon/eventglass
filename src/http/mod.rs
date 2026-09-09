@@ -45,6 +45,31 @@ pub(super) struct HttpState {
     pub(super) auth_attempts: Arc<crate::auth::AttemptLimiter>,
 }
 
+/// Keep extractor failures in the same public envelope as handler failures.
+pub(super) struct ApiJson<T>(pub T);
+
+impl<S, T> axum::extract::FromRequest<S> for ApiJson<T>
+where
+    S: Send + Sync,
+    T: serde::de::DeserializeOwned,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(request: axum::extract::Request, state: &S) -> Result<Self, ApiError> {
+        Json::<T>::from_request(request, state)
+            .await
+            .map(|Json(value)| Self(value))
+            .map_err(|error| {
+                let status = match error.status() {
+                    StatusCode::PAYLOAD_TOO_LARGE => StatusCode::PAYLOAD_TOO_LARGE,
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    _ => StatusCode::BAD_REQUEST,
+                };
+                ApiError(status, "invalid_json_request")
+            })
+    }
+}
+
 #[derive(Debug)]
 pub struct ApiError(pub StatusCode, pub &'static str);
 

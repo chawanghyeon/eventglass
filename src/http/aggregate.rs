@@ -1,4 +1,6 @@
 //! Fixed Explore aggregate DTO mapped to the shared read scope and native aggregation.
+use super::ApiJson;
+
 use super::{
     ApiError, ApiResult, HttpState,
     search::{
@@ -150,7 +152,7 @@ fn native_error(error: &AggregateError) -> ApiError {
 pub(super) async fn post_aggregate(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<AggregateInput>,
+    ApiJson(input): ApiJson<AggregateInput>,
 ) -> ApiResult<Json<Value>> {
     let started = std::time::Instant::now();
     if input.metrics.len() > 8 || input.group_by.len() > 2 {

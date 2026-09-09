@@ -87,6 +87,7 @@ const errorMessages: Record<string, string> = {
   bucket_limit_exceeded:
     "집계 구간이 너무 많습니다. 시간 범위나 그룹 수를 줄여 주세요.",
   authentication_required: "세션이 만료되었습니다. 다시 로그인해 주세요.",
+  invalid_json_request: "요청 형식과 입력값을 확인해 주세요.",
   invalid_credentials: "이메일 또는 비밀번호가 올바르지 않습니다.",
   invalid_credentials_format: "이메일과 비밀번호 형식을 확인해 주세요.",
   invalid_aggregate_request: "집계 조건을 확인해 주세요.",

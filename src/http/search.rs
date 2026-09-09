@@ -1,4 +1,6 @@
 //! Search HTTP contract: authentication, canonical scope, opaque paging, safe projection.
+use super::ApiJson;
+
 use super::{ApiError, ApiResult, HttpState, auth::authenticate};
 use crate::{
     db::search::{self as authorization, Authorization, ScopeError},
@@ -176,7 +178,7 @@ pub(super) fn format_timestamp(value: i64) -> ApiResult<String> {
 pub(super) async fn post_search(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<SearchInput>,
+    ApiJson(input): ApiJson<SearchInput>,
 ) -> ApiResult<Json<Value>> {
     execute(state, headers, input).await
 }

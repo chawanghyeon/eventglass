@@ -32,10 +32,26 @@ pub(super) async fn doctor(
 ) -> ApiResult<Json<Value>> {
     authenticate(&state, &headers, false, true).await?;
     let data_dir = state.app.config.data_dir.clone();
-    let report = state
+    // Hashing shard files must never occupy the single SQLite mutation worker.
+    let permit = state
         .app
-        .db
-        .call(move |db| crate::operations::doctor_connection(db, &data_dir))
-        .await?;
+        .query_permit
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| super::ApiError(axum::http::StatusCode::TOO_MANY_REQUESTS, "query_busy"))?;
+    let report = super::run_native(permit, std::time::Duration::from_secs(30), move || {
+        crate::operations::doctor(&data_dir)
+    })
+    .await
+    .map_err(|error| match error {
+        super::NativeTaskFailure::Timeout => {
+            super::ApiError(axum::http::StatusCode::GATEWAY_TIMEOUT, "doctor_timeout")
+        }
+        super::NativeTaskFailure::Join => super::ApiError(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            "doctor_unavailable",
+        ),
+    })??;
+    authenticate(&state, &headers, false, true).await?;
     Ok(Json(json!(report)))
 }

@@ -1,5 +1,7 @@
 //! Administrator alert configuration and delivery inspection endpoints.
 
+use super::ApiJson;
+
 use super::{ApiError, ApiResult, HttpState, auth::authenticate};
 use crate::alerts::{Condition, Configuration, Destination};
 use axum::{
@@ -87,7 +89,7 @@ pub(super) async fn list(
 pub(super) async fn create(
     State(state): State<HttpState>,
     headers: HeaderMap,
-    Json(input): Json<AlertInput>,
+    ApiJson(input): ApiJson<AlertInput>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     let principal = authenticate(&state, &headers, true, true).await?;
     let configuration = input.configuration()?;
@@ -105,7 +107,7 @@ pub(super) async fn update(
     State(state): State<HttpState>,
     headers: HeaderMap,
     Path(id): Path<i64>,
-    Json(input): Json<AlertUpdate>,
+    ApiJson(input): ApiJson<AlertUpdate>,
 ) -> ApiResult<Json<Value>> {
     let principal = authenticate(&state, &headers, true, true).await?;
     let revision = input.revision;
