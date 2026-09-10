@@ -430,6 +430,63 @@ mod tests {
             .execute("UPDATE runtime_state SET active_shard_id=?1", [&id])
             .expect("select malformed active shard");
         assert!(startup(&database).is_err());
+
+        let (_directory, database) = fixture();
+        let id = uuid::Uuid::new_v4().to_string();
+        database
+            .execute(
+                "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                     first_record_received_at_us,last_applied_inbox_id,record_count,created_at_us)
+                 VALUES(?1,?2,?3,?4,'active',x'80',0,1,0)",
+                params![
+                    id,
+                    crate::search::schema::APPLICATION_SCHEMA_VERSION,
+                    FORMAT_VERSION,
+                    crate::search::schema::TOKENIZER_VERSION
+                ],
+            )
+            .expect("seed malformed rollover timestamp");
+        database
+            .execute("UPDATE runtime_state SET active_shard_id=?1", [&id])
+            .expect("select malformed rollover shard");
+        assert!(rotation_plan(&database, &id, None, 1).is_err());
+
+        let (_directory, database) = fixture();
+        let id = uuid::Uuid::new_v4().to_string();
+        database
+            .execute(
+                "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                     last_applied_inbox_id,created_at_us)
+                 VALUES(?1,?2,?3,?4,'active',0,0)",
+                params![
+                    id,
+                    crate::search::schema::APPLICATION_SCHEMA_VERSION,
+                    FORMAT_VERSION,
+                    crate::search::schema::TOKENIZER_VERSION
+                ],
+            )
+            .expect("seed update failure shard");
+        database
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_shard_size BEFORE UPDATE OF size_bytes ON shards
+                 BEGIN SELECT RAISE(FAIL, 'damaged'); END;",
+            )
+            .expect("install failed size update fixture");
+        assert!(rotation_plan(&database, &id, Some(1), 1).is_err());
+
+        let database = Connection::open_in_memory().expect("open malformed sealed catalog");
+        database
+            .execute_batch(
+                "CREATE TABLE runtime_state(
+                     singleton INTEGER,installation_id TEXT,last_applied_inbox_id INTEGER,
+                     last_applied_ingest_seq INTEGER,next_ingest_seq INTEGER,active_shard_id TEXT);
+                 CREATE TABLE shards(
+                     id TEXT,state TEXT,schema_version INTEGER,format_version TEXT,
+                     last_applied_inbox_id INTEGER);
+                 INSERT INTO runtime_state VALUES(1,'installation',0,0,1,NULL);",
+            )
+            .expect("seed malformed sealed catalog schema");
+        assert!(startup(&database).is_err());
     }
 
     #[test]

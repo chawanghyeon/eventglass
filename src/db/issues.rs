@@ -174,19 +174,18 @@ pub fn list(
          LIMIT ?5"
     );
     let mut statement = db.prepare(&sql)?;
-    let mut items = statement
-        .query_map(
-            params![
-                project_id,
-                status,
-                cursor_time,
-                cursor_id,
-                fetch_limit,
-                query
-            ],
-            issue_from_row,
-        )?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let rows = statement.query_map(
+        params![
+            project_id,
+            status,
+            cursor_time,
+            cursor_id,
+            fetch_limit,
+            query
+        ],
+        issue_from_row,
+    )?;
+    let mut items = rows.collect::<std::result::Result<Vec<_>, _>>()?;
     let has_more = items.len() > limit;
     items.truncate(limit);
     let next_cursor = has_more.then(|| {
@@ -237,19 +236,18 @@ pub fn occurrences(
          ORDER BY occurred_at_us DESC,ingest_seq DESC
          LIMIT ?4",
     )?;
-    let mut items = statement
-        .query_map(
-            params![issue_id, cursor_time, cursor_seq, fetch_limit],
-            |row| {
-                Ok(Occurrence {
-                    record_id: row.get(0)?,
-                    source_event_id: row.get(1)?,
-                    ingest_seq: row.get::<_, i64>(2)?.to_string(),
-                    occurred_at_us: row.get::<_, i64>(3)?.to_string(),
-                })
-            },
-        )?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let rows = statement.query_map(
+        params![issue_id, cursor_time, cursor_seq, fetch_limit],
+        |row| {
+            Ok(Occurrence {
+                record_id: row.get(0)?,
+                source_event_id: row.get(1)?,
+                ingest_seq: row.get::<_, i64>(2)?.to_string(),
+                occurred_at_us: row.get::<_, i64>(3)?.to_string(),
+            })
+        },
+    )?;
+    let mut items = rows.collect::<std::result::Result<Vec<_>, _>>()?;
     let has_more = items.len() > limit;
     items.truncate(limit);
     let next_cursor = has_more.then(|| {
