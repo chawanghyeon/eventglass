@@ -232,15 +232,8 @@ pub(super) async fn post_aggregate(
         indexer.aggregate(&candidate_ids, &request)
     })
     .await
-    .map_err(|failure| match failure {
-        super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
-        super::NativeTaskFailure::Join => unavailable(),
-    })?
-    .map_err(|error| {
-        error
-            .downcast_ref::<AggregateError>()
-            .map_or_else(unavailable, native_error)
-    })?;
+    .map_err(native_failure)?
+    .map_err(aggregate_failure)?;
     revalidate_read(&state, &headers, &auth).await?;
     let read_token = state
         .app
@@ -257,6 +250,19 @@ pub(super) async fn post_aggregate(
         "buckets":result.buckets.map(buckets),"warnings":result.warnings,"read_token":read_token,"watermark":watermark.to_string(),
         "complete":true,"took_ms":started.elapsed().as_millis().to_string(),"searched_shards":searched_shards.to_string(),"hydrated_shards":hydrated_shards.to_string()}),
     ))
+}
+
+fn native_failure(failure: super::NativeTaskFailure) -> ApiError {
+    match failure {
+        super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
+        super::NativeTaskFailure::Join => unavailable(),
+    }
+}
+
+fn aggregate_failure(error: anyhow::Error) -> ApiError {
+    error
+        .downcast_ref::<AggregateError>()
+        .map_or_else(unavailable, native_error)
 }
 
 #[cfg(test)]
@@ -380,6 +386,22 @@ mod tests {
 
     #[test]
     fn aggregate_response_mapping_preserves_types_children_and_error_statuses() {
+        assert_eq!(
+            native_failure(super::super::NativeTaskFailure::Timeout).0,
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            native_failure(super::super::NativeTaskFailure::Join).0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            aggregate_failure(anyhow::Error::from(AggregateError::InvalidRequest("bad"))).0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            aggregate_failure(anyhow::anyhow!("private detail")).0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
         let values = [
             metric_value(MetricValue::Count {
                 name: "count".into(),
