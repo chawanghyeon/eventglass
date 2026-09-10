@@ -65,6 +65,33 @@ fn wire_error(error: sentry::SentryError) -> ApiError {
     }
 }
 
+fn reserve_error(error: anyhow::Error) -> ApiError {
+    match error.downcast_ref::<crate::storage::budget::ReserveError>() {
+        Some(crate::storage::budget::ReserveError::Exhausted) => {
+            ApiError(StatusCode::TOO_MANY_REQUESTS, "disk_reserve")
+        }
+        _ => ApiError(StatusCode::SERVICE_UNAVAILABLE, "disk_unavailable"),
+    }
+}
+
+fn acceptance_error(error: anyhow::Error) -> ApiError {
+    match error.downcast_ref::<ingest::IngestError>() {
+        Some(ingest::IngestError::Unauthorized) => {
+            ApiError(StatusCode::UNAUTHORIZED, "invalid_ingest_key")
+        }
+        Some(ingest::IngestError::TooLarge) => {
+            ApiError(StatusCode::PAYLOAD_TOO_LARGE, "ingest_too_large")
+        }
+        Some(ingest::IngestError::InvalidRecord) => {
+            ApiError(StatusCode::BAD_REQUEST, "invalid_record")
+        }
+        Some(ingest::IngestError::InboxFull) => {
+            ApiError(StatusCode::TOO_MANY_REQUESTS, "inbox_full")
+        }
+        None => ApiError::from(error),
+    }
+}
+
 fn key_from_transport(uri: &Uri, headers: &HeaderMap) -> ApiResult<Option<String>> {
     let mut key = None;
     let mut add = |candidate: &str| -> ApiResult<()> {
@@ -179,14 +206,7 @@ async fn receive_inner(
             let _held = &permit;
             let disk_reservation = disk_budget
                 .reserve(2 * limits.decoded_bytes as u64)
-                .map_err(|error| {
-                    match error.downcast_ref::<crate::storage::budget::ReserveError>() {
-                        Some(crate::storage::budget::ReserveError::Exhausted) => {
-                            ApiError(StatusCode::TOO_MANY_REQUESTS, "disk_reserve")
-                        }
-                        _ => ApiError(StatusCode::SERVICE_UNAVAILABLE, "disk_unavailable"),
-                    }
-                })?;
+                .map_err(reserve_error)?;
             let decoded = sentry::decode_body(&wire, encoding, &limits).map_err(wire_error)?;
             let auth = if is_envelope {
                 sentry::envelope_auth(&decoded).map_err(wire_error)?
@@ -288,21 +308,7 @@ async fn receive_inner(
             )
         })
         .await
-        .map_err(|error| match error.downcast_ref::<ingest::IngestError>() {
-            Some(ingest::IngestError::Unauthorized) => {
-                ApiError(StatusCode::UNAUTHORIZED, "invalid_ingest_key")
-            }
-            Some(ingest::IngestError::TooLarge) => {
-                ApiError(StatusCode::PAYLOAD_TOO_LARGE, "ingest_too_large")
-            }
-            Some(ingest::IngestError::InvalidRecord) => {
-                ApiError(StatusCode::BAD_REQUEST, "invalid_record")
-            }
-            Some(ingest::IngestError::InboxFull) => {
-                ApiError(StatusCode::TOO_MANY_REQUESTS, "inbox_full")
-            }
-            None => ApiError::from(error),
-        })?;
+        .map_err(acceptance_error)?;
     if let Some(indexer) = &app.indexer {
         indexer.wake();
     }
@@ -395,5 +401,50 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-sentry-auth", HeaderValue::from_bytes(b"\xff").unwrap());
         assert!(key_from_transport(&"/".parse().unwrap(), &headers).is_err());
+    }
+
+    #[test]
+    fn storage_and_acceptance_failures_have_stable_public_contracts() {
+        let exhausted = reserve_error(crate::storage::budget::ReserveError::Exhausted.into());
+        assert_eq!(
+            (exhausted.0, exhausted.1),
+            (StatusCode::TOO_MANY_REQUESTS, "disk_reserve")
+        );
+        let unavailable = reserve_error(crate::storage::budget::ReserveError::Unavailable.into());
+        assert_eq!(
+            (unavailable.0, unavailable.1),
+            (StatusCode::SERVICE_UNAVAILABLE, "disk_unavailable")
+        );
+
+        for (error, status, code) in [
+            (
+                ingest::IngestError::Unauthorized,
+                StatusCode::UNAUTHORIZED,
+                "invalid_ingest_key",
+            ),
+            (
+                ingest::IngestError::TooLarge,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "ingest_too_large",
+            ),
+            (
+                ingest::IngestError::InvalidRecord,
+                StatusCode::BAD_REQUEST,
+                "invalid_record",
+            ),
+            (
+                ingest::IngestError::InboxFull,
+                StatusCode::TOO_MANY_REQUESTS,
+                "inbox_full",
+            ),
+        ] {
+            let mapped = acceptance_error(error.into());
+            assert_eq!((mapped.0, mapped.1), (status, code));
+        }
+        let internal = acceptance_error(anyhow::anyhow!("private failure"));
+        assert_eq!(
+            (internal.0, internal.1),
+            (StatusCode::SERVICE_UNAVAILABLE, "storage_unavailable")
+        );
     }
 }
