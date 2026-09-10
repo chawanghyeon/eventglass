@@ -124,6 +124,17 @@ async fn authorization_epoch(fixture: &Fixture) -> anyhow::Result<i64> {
 #[tokio::test]
 async fn setup_token_expiry_tampering_and_password_contract_fail_closed() -> anyhow::Result<()> {
     let fixture = fixture().await?;
+    let malformed = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/api/setup",
+            json!({"token":"short","email":"owner@example.test","password":PASSWORD}),
+            None,
+        ))
+        .await?;
+    assert_eq!(malformed.status(), StatusCode::FORBIDDEN);
     let expired_token = eventglass::http::issue_setup_token(&fixture.state).await?;
     let stored_setting = fixture
         .state
@@ -233,6 +244,36 @@ async fn setup_token_expiry_tampering_and_password_contract_fail_closed() -> any
             json_body(response).await?["error"]["code"],
             "invalid_credentials"
         );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn user_mutation_dtos_reject_empty_invalid_and_ambiguous_input() -> anyhow::Result<()> {
+    let fixture = fixture().await?;
+    setup(&fixture, "owner@example.test", PASSWORD).await?;
+    let owner = login(&fixture, "owner@example.test", PASSWORD).await?;
+
+    for (method, path, body) in [
+        (
+            "POST",
+            "/api/users",
+            json!({"email":"invalid","password":SECOND_PASSWORD,"role":"member"}),
+        ),
+        (
+            "POST",
+            "/api/users",
+            json!({"email":"valid@example.test","password":SECOND_PASSWORD,"role":"owner"}),
+        ),
+        ("PATCH", "/api/users/1", json!({})),
+        ("PATCH", "/api/users/1", json!({"role":"owner"})),
+    ] {
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(request(method, path, body, Some(&owner)))
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     Ok(())
 }

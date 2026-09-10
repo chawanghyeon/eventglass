@@ -38,17 +38,18 @@ fn check_origin(headers: &HeaderMap, state: &HttpState) -> ApiResult<()> {
 }
 
 fn record_attempt(state: &HttpState, kind: crate::auth::AttemptKind) -> ApiResult<()> {
-    state
-        .auth_attempts
-        .record(kind)
-        .map_err(|error| match error {
-            crate::auth::AttemptError::Limited => {
-                ApiError(StatusCode::TOO_MANY_REQUESTS, "auth_rate_limited")
-            }
-            crate::auth::AttemptError::Unavailable => {
-                ApiError(StatusCode::SERVICE_UNAVAILABLE, "rate_limit_unavailable")
-            }
-        })
+    state.auth_attempts.record(kind).map_err(attempt_error)
+}
+
+fn attempt_error(error: crate::auth::AttemptError) -> ApiError {
+    match error {
+        crate::auth::AttemptError::Limited => {
+            ApiError(StatusCode::TOO_MANY_REQUESTS, "auth_rate_limited")
+        }
+        crate::auth::AttemptError::Unavailable => {
+            ApiError(StatusCode::SERVICE_UNAVAILABLE, "rate_limit_unavailable")
+        }
+    }
 }
 
 fn session_token(headers: &HeaderMap) -> ApiResult<String> {
@@ -100,6 +101,12 @@ fn json_no_store(value: Value) -> Response {
     let mut response = Json(value).into_response();
     no_store(&mut response);
     response
+}
+
+fn require_session_created(created: bool) -> ApiResult<()> {
+    created
+        .then_some(())
+        .ok_or(ApiError(StatusCode::UNAUTHORIZED, "invalid_credentials"))
 }
 
 pub(super) async fn authenticate(
@@ -240,9 +247,7 @@ pub(super) async fn login(
             )
         })
         .await?;
-    if !created {
-        return Err(ApiError(StatusCode::UNAUTHORIZED, "invalid_credentials"));
-    }
+    require_session_created(created)?;
     let mut response = (
         [(
             header::SET_COOKIE,
@@ -379,4 +384,102 @@ pub(super) async fn update_user(
         })
         .await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::HeaderValue;
+    use std::sync::Arc;
+
+    async fn state(base_url: &str) -> (tempfile::TempDir, HttpState) {
+        let directory = tempfile::tempdir().expect("temporary auth directory");
+        let app = crate::app::AppState::open(crate::config::Config {
+            addr: "127.0.0.1:0".parse().expect("loopback address"),
+            data_dir: directory.path().to_owned(),
+            base_url: base_url.parse().expect("test origin"),
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        })
+        .await
+        .expect("open auth test state");
+        (
+            directory,
+            HttpState {
+                app,
+                auth_attempts: Arc::new(crate::auth::AttemptLimiter::default()),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn header_cookie_origin_and_attempt_errors_fail_closed() {
+        let (_directory, http) = state("http://localhost:8080").await;
+        let (_secure_directory, https) = state("https://example.test").await;
+
+        let mut headers = HeaderMap::new();
+        assert!(one_header(&headers, "x-test").is_none());
+        headers.insert("x-test", HeaderValue::from_static("one"));
+        assert_eq!(one_header(&headers, "x-test"), Some("one"));
+        headers.append("x-test", HeaderValue::from_static("two"));
+        assert!(one_header(&headers, "x-test").is_none());
+
+        let mut origin = HeaderMap::new();
+        origin.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("http://localhost:8080"),
+        );
+        assert!(check_origin(&origin, &http).is_ok());
+        origin.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://attacker.test"),
+        );
+        assert!(check_origin(&origin, &http).is_err());
+
+        let token = "a".repeat(64);
+        let mut cookies = HeaderMap::new();
+        cookies.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("ignored; eventglass_session={token}; malformed"))
+                .expect("valid cookie header"),
+        );
+        assert_eq!(session_token(&cookies).expect("session token"), token);
+        cookies.append(
+            header::COOKIE,
+            HeaderValue::from_static(
+                "eventglass_session=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+        );
+        assert!(session_token(&cookies).is_err());
+
+        for raw in ["eventglass_session=short", "other=value", "malformed"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::COOKIE,
+                HeaderValue::from_str(raw).expect("valid negative cookie"),
+            );
+            assert!(session_token(&headers).is_err());
+        }
+        let mut non_utf8 = HeaderMap::new();
+        non_utf8.insert(
+            header::COOKIE,
+            HeaderValue::from_bytes(b"\xff").expect("opaque header bytes"),
+        );
+        assert!(session_token(&non_utf8).is_err());
+
+        assert!(!session_cookie(&http, &token, 1).contains("; Secure"));
+        assert!(session_cookie(&https, &token, 1).ends_with("; Secure"));
+        assert_eq!(
+            json_no_store(json!({"ok":true})).headers()[header::CACHE_CONTROL],
+            "no-store"
+        );
+
+        let limited = attempt_error(crate::auth::AttemptError::Limited);
+        assert_eq!(limited.0, StatusCode::TOO_MANY_REQUESTS);
+        let unavailable = attempt_error(crate::auth::AttemptError::Unavailable);
+        assert_eq!(unavailable.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert!(require_session_created(true).is_ok());
+        assert!(require_session_created(false).is_err());
+    }
 }
