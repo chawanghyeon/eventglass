@@ -291,7 +291,8 @@ pub fn router(app: AppState) -> Router {
 
 #[cfg(test)]
 mod tests {
-    use super::{NativeTaskFailure, run_native};
+    use super::{ApiError, NativeTaskFailure, no_store, run_native, security_headers};
+    use axum::{body::to_bytes, http::StatusCode, response::IntoResponse};
     use std::{sync::Arc, time::Duration};
     use tokio::sync::Semaphore;
 
@@ -322,5 +323,157 @@ mod tests {
         })
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn native_task_reports_success_operation_error_and_panics() {
+        for result in [Ok::<_, &'static str>(7), Err("operation")] {
+            let permit = Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap();
+            assert_eq!(
+                run_native(permit, Duration::from_secs(1), move || result).await,
+                Ok(result)
+            );
+        }
+        let permit = Arc::new(Semaphore::new(1)).acquire_owned().await.unwrap();
+        assert_eq!(
+            run_native(permit, Duration::from_secs(1), || -> Result<(), ()> {
+                panic!("join failure fixture")
+            })
+            .await,
+            Err(NativeTaskFailure::Join)
+        );
+    }
+
+    #[tokio::test]
+    async fn error_envelopes_and_security_headers_are_stable() {
+        let response = ApiError(StatusCode::TOO_MANY_REQUESTS, "busy").into_response();
+        assert_eq!(response.headers()["retry-after"], "60");
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(body["error"]["code"], "busy");
+        assert_eq!(body["error"]["retryable"], true);
+        assert!(body["error"]["request_id"].as_str().is_some());
+
+        let response = no_store(StatusCode::OK.into_response()).await;
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        let response = security_headers(response).await;
+        for name in [
+            "content-security-policy",
+            "strict-transport-security",
+            "x-content-type-options",
+            "x-frame-options",
+            "referrer-policy",
+            "permissions-policy",
+        ] {
+            assert!(response.headers().contains_key(name));
+        }
+    }
+
+    #[test]
+    fn database_errors_map_to_non_sensitive_http_contracts() {
+        use crate::db::{
+            alerts::AlertError, auth::AuthDbError, projects::ManagementError, replays::ReplayError,
+        };
+        let cases: Vec<(anyhow::Error, StatusCode, &str)> = vec![
+            (
+                AuthDbError::Forbidden.into(),
+                StatusCode::FORBIDDEN,
+                "admin_required",
+            ),
+            (
+                AuthDbError::SetupCompleted.into(),
+                StatusCode::CONFLICT,
+                "setup_completed",
+            ),
+            (
+                AuthDbError::SetupUnauthorized.into(),
+                StatusCode::FORBIDDEN,
+                "setup_not_authorized",
+            ),
+            (
+                AuthDbError::Conflict.into(),
+                StatusCode::CONFLICT,
+                "user_exists",
+            ),
+            (
+                AuthDbError::NotFound.into(),
+                StatusCode::NOT_FOUND,
+                "user_not_found",
+            ),
+            (
+                AuthDbError::LastAdmin.into(),
+                StatusCode::CONFLICT,
+                "last_admin_required",
+            ),
+            (
+                AuthDbError::InvalidRole.into(),
+                StatusCode::BAD_REQUEST,
+                "invalid_role",
+            ),
+            (
+                ManagementError::Forbidden.into(),
+                StatusCode::FORBIDDEN,
+                "admin_required",
+            ),
+            (
+                ManagementError::Conflict.into(),
+                StatusCode::CONFLICT,
+                "project_exists",
+            ),
+            (
+                ManagementError::NotFound.into(),
+                StatusCode::NOT_FOUND,
+                "project_or_key_not_found",
+            ),
+            (
+                AlertError::Forbidden.into(),
+                StatusCode::FORBIDDEN,
+                "admin_required",
+            ),
+            (
+                AlertError::Invalid.into(),
+                StatusCode::BAD_REQUEST,
+                "invalid_alert",
+            ),
+            (
+                AlertError::NotFound.into(),
+                StatusCode::NOT_FOUND,
+                "alert_not_found",
+            ),
+            (
+                AlertError::RevisionConflict.into(),
+                StatusCode::CONFLICT,
+                "alert_revision_conflict",
+            ),
+            (
+                ReplayError::Conflict.into(),
+                StatusCode::CONFLICT,
+                "replay_segment_conflict",
+            ),
+            (
+                ReplayError::TooLarge.into(),
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "replay_too_large",
+            ),
+            (
+                ReplayError::Forbidden.into(),
+                StatusCode::FORBIDDEN,
+                "replay_access_denied",
+            ),
+            (
+                ReplayError::NotFound.into(),
+                StatusCode::NOT_FOUND,
+                "replay_not_found",
+            ),
+            (
+                anyhow::anyhow!("private path"),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "storage_unavailable",
+            ),
+        ];
+        for (error, status, code) in cases {
+            let error = ApiError::from(error);
+            assert_eq!((error.0, error.1), (status, code));
+        }
     }
 }
