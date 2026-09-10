@@ -276,20 +276,14 @@ mod transport_tests {
             b"1234"
         );
 
-        for encoding in [ContentEncoding::Gzip, ContentEncoding::Deflate] {
-            let compressed = match encoding {
-                ContentEncoding::Gzip => {
-                    let mut writer = GzEncoder::new(Vec::new(), Compression::fast());
-                    writer.write_all(b"hello").unwrap();
-                    writer.finish().unwrap()
-                }
-                ContentEncoding::Deflate => {
-                    let mut writer = ZlibEncoder::new(Vec::new(), Compression::fast());
-                    writer.write_all(b"hello").unwrap();
-                    writer.finish().unwrap()
-                }
-                ContentEncoding::Identity => unreachable!(),
-            };
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::fast());
+        gzip.write_all(b"hello").unwrap();
+        let mut deflate = ZlibEncoder::new(Vec::new(), Compression::fast());
+        deflate.write_all(b"hello").unwrap();
+        for (encoding, compressed) in [
+            (ContentEncoding::Gzip, gzip.finish().unwrap()),
+            (ContentEncoding::Deflate, deflate.finish().unwrap()),
+        ] {
             limits.decoded_bytes = 5;
             assert_eq!(
                 decode_body(&compressed, encoding, &limits).unwrap(),
@@ -387,5 +381,15 @@ mod transport_tests {
             normalize_envelope(feedback.as_bytes(), &project, Uuid::nil(), 0, &limits),
             Err(SentryError::Malformed(_))
         ));
+
+        let valid_feedback = br#"{"event_id":"00000000000000000000000000000000","contexts":{"feedback":{"message":"safe","replay_id":"11111111111111111111111111111111"}}}"#;
+        let feedback = format!(
+            "{{}}\n{{\"type\":\"feedback\",\"length\":{}}}\n{}",
+            valid_feedback.len(),
+            std::str::from_utf8(valid_feedback).unwrap()
+        );
+        let normalized =
+            normalize_envelope(feedback.as_bytes(), &project, Uuid::nil(), 0, &limits).unwrap();
+        assert_eq!(normalized.feedback.len(), 1);
     }
 }
