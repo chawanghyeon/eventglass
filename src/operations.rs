@@ -344,6 +344,42 @@ impl IngestStats {
 mod tests {
     use super::*;
 
+    fn disk() -> crate::storage::budget::DiskStatus {
+        crate::storage::budget::DiskStatus {
+            total_bytes: 100,
+            free_bytes: 80,
+            reserved_bytes: 10,
+            minimum_free_bytes: 20,
+            ingest_accepting: true,
+        }
+    }
+
+    fn database() -> (tempfile::TempDir, Connection) {
+        let root = tempfile::tempdir().expect("operations directory");
+        let db = crate::db::open(&root.path().join("meta.db")).expect("operations database");
+        db.execute(
+            "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+             VALUES(1,?1,?2,1)",
+            rusqlite::params![
+                uuid::Uuid::new_v4().to_string(),
+                uuid::Uuid::new_v4().to_string()
+            ],
+        )
+        .expect("operations runtime");
+        (root, db)
+    }
+
+    fn active(db: &Connection, id: &str) {
+        db.execute(
+            "INSERT INTO shards(
+                 id,schema_version,format_version,tokenizer_version,state,
+                 last_applied_inbox_id,record_count,size_bytes,created_at_us)
+             VALUES(?1,1,'7',1,'active',0,0,0,1)",
+            [id],
+        )
+        .expect("active shard row");
+    }
+
     #[test]
     fn operational_file_sizes_reject_non_regular_and_io_failures() -> Result<()> {
         let root = tempfile::tempdir()?;
@@ -364,6 +400,59 @@ mod tests {
             stats.record(status);
         }
         assert!(stats.snapshot().values().all(|count| count == "1"));
+    }
+
+    #[test]
+    fn status_propagates_each_catalog_failure_and_maps_disk_values() {
+        let (root, db) = database();
+        let view = status(&db, root.path(), disk(), true, false).expect("healthy status");
+        assert_eq!(view.disk.total_bytes, "100");
+        assert_eq!(view.disk.free_bytes, "80");
+        assert_eq!(view.disk.reserved_bytes, "10");
+        assert_eq!(view.disk.minimum_free_bytes, "20");
+
+        for table in ["runtime_state", "shards", "alert_deliveries"] {
+            let (root, db) = database();
+            db.execute_batch(&format!("PRAGMA foreign_keys=OFF; DROP TABLE {table}"))
+                .expect("damage status schema");
+            assert!(status(&db, root.path(), disk(), true, true).is_err());
+        }
+    }
+
+    #[test]
+    fn doctor_rejects_invalid_identities_and_each_shard_state_violation() {
+        let (root, db) = database();
+        db.execute(
+            "UPDATE runtime_state SET installation_id='invalid' WHERE singleton=1",
+            [],
+        )
+        .expect("damage installation identity");
+        assert!(doctor_connection(&db, root.path()).is_err());
+
+        let (root, db) = database();
+        active(&db, "active");
+        assert!(doctor_connection(&db, root.path()).is_err());
+
+        let shard_root = root.path().join("shards");
+        let shard = shard_root.join("active");
+        std::fs::create_dir_all(&shard).expect("active shard directory");
+        std::fs::write(shard.join(crate::storage::manifest::NAME), b"sealed")
+            .expect("unexpected active manifest");
+        assert!(doctor_connection(&db, root.path()).is_err());
+
+        std::fs::remove_file(shard.join(crate::storage::manifest::NAME))
+            .expect("remove active manifest");
+        db.execute_batch(
+            "PRAGMA ignore_check_constraints=ON;
+             UPDATE shards SET state='remote_only' WHERE id='active'",
+        )
+        .expect("force remote-only state");
+        assert!(doctor_connection(&db, root.path()).is_err());
+
+        std::fs::remove_dir(&shard).expect("remove remote-only directory");
+        db.execute("UPDATE shards SET state='unknown' WHERE id='active'", [])
+            .expect("force unsupported state");
+        assert!(doctor_connection(&db, root.path()).is_err());
     }
 }
 

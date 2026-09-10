@@ -694,6 +694,17 @@ mod tests {
     use super::*;
     use crate::model::Boundary;
 
+    fn config(path: &Path) -> crate::config::Config {
+        crate::config::Config {
+            addr: "127.0.0.1:0".parse().expect("loopback address"),
+            data_dir: path.to_owned(),
+            base_url: "http://localhost:8080".parse().expect("base URL"),
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        }
+    }
+
     fn empty_candidate(root: &Path, installation: &str, id: &str) {
         let path = root.join("shards").join(id);
         std::fs::create_dir(&path).expect("candidate directory");
@@ -762,5 +773,75 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn public_indexer_views_searches_pins_and_shutdown_are_consistent() {
+        use crate::search::{
+            aggregate::{AggregateRequest, MetricSpec},
+            query::{QueryScope, SearchRequest, TimeField},
+        };
+
+        let directory = tempfile::tempdir().expect("Indexer service directory");
+        let app = crate::app::AppState::open(config(directory.path()))
+            .await
+            .expect("application state");
+        let indexer = Indexer::start(app.db.clone(), directory.path())
+            .await
+            .expect("Indexer start");
+        assert!(indexer.ready());
+        indexer.wake();
+        let _updates = indexer.subscribe();
+        let active = indexer.snapshot().expect("published active shard");
+        let ids = vec![active.shard_id.clone()];
+        let pins = indexer.pin_shards(&ids).expect("active shard pin");
+        assert_eq!(pins[0].published().shard_id, active.shard_id);
+        assert!(indexer.pin_shards(&["missing".into()]).is_err());
+        let _registry = indexer.registry();
+
+        let scope = QueryScope {
+            project_ids: vec![1],
+            start_us: 0,
+            end_us: 1,
+            watermark: 0,
+            time_field: TimeField::ReceivedAt,
+        };
+        let request = SearchRequest {
+            query: String::new(),
+            scope: scope.clone(),
+            filters: Vec::new(),
+            cursor: None,
+            limit: 1,
+        };
+        assert!(
+            indexer
+                .search(&ids, &request)
+                .expect("empty search")
+                .rows
+                .is_empty()
+        );
+        assert!(
+            indexer
+                .search_live(&ids, &request, 0)
+                .expect("empty live search")
+                .rows
+                .is_empty()
+        );
+        assert!(indexer.search(&["missing".into()], &request).is_err());
+        let aggregate = AggregateRequest {
+            query: String::new(),
+            scope,
+            filters: Vec::new(),
+            metrics: vec![MetricSpec::Count {
+                name: "count".into(),
+            }],
+            group_by: Vec::new(),
+            histogram: None,
+        };
+        assert!(indexer.aggregate(&ids, &aggregate).is_ok());
+        assert!(indexer.aggregate(&["missing".into()], &aggregate).is_err());
+
+        indexer.shutdown().await.expect("first shutdown");
+        indexer.shutdown().await.expect("idempotent shutdown");
     }
 }

@@ -110,22 +110,12 @@ pub fn finalize(db: &mut Connection, shard_id: &str, batch: PreparedBatch) -> Re
     }
 
     update_shard(&tx, shard_id, expected, &batch)?;
-    let inbox_bytes = checked_usize_to_i64(
-        batch
-            .chunks
-            .iter()
-            .try_fold(0usize, |total, chunk| total.checked_add(chunk.bytes))
-            .context("Inbox byte total overflow")?,
+    let inbox_bytes = checked_sum_usize(
+        batch.chunks.iter().map(|chunk| chunk.bytes),
         "Inbox byte total",
     )?;
-    let inbox_records = checked_usize_to_i64(
-        batch
-            .chunks
-            .iter()
-            .try_fold(0usize, |total, chunk| {
-                total.checked_add(chunk.payload.records.len())
-            })
-            .context("Inbox record total overflow")?,
+    let inbox_records = checked_sum_usize(
+        batch.chunks.iter().map(|chunk| chunk.payload.records.len()),
         "Inbox record total",
     )?;
     ensure!(
@@ -854,6 +844,14 @@ fn checked_usize_to_i64(value: usize, name: &str) -> Result<i64> {
     i64::try_from(value).with_context(|| format!("{name} exceeds SQLite integer range"))
 }
 
+fn checked_sum_usize(values: impl IntoIterator<Item = usize>, name: &str) -> Result<i64> {
+    let total = values
+        .into_iter()
+        .try_fold(0usize, usize::checked_add)
+        .with_context(|| format!("{name} overflow"))?;
+    checked_usize_to_i64(total, name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -913,10 +911,23 @@ mod tests {
         database
             .execute(
                 "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
-                 VALUES(1,'installation','generation',2)",
+                 VALUES(1,'installation','generation',1)",
                 [],
             )
             .expect("seed Indexer runtime");
+        database
+            .execute_batch(
+                "INSERT INTO projects(id,slug,name,created_at_us,updated_at_us)
+                 VALUES(1,'project','Project',1,1);
+                 INSERT INTO project_keys(id,project_id,public_key,created_at_us)
+                 VALUES(1,1,'public-key',1);
+                 INSERT INTO shards(
+                    id,schema_version,format_version,tokenizer_version,state,
+                    last_applied_inbox_id,record_count,size_bytes,created_at_us)
+                 VALUES('active',1,'7',1,'active',0,0,0,1);
+                 UPDATE runtime_state SET active_shard_id='active' WHERE singleton=1;",
+            )
+            .expect("seed Indexer project and shard");
         (directory, database)
     }
 
@@ -947,6 +958,8 @@ mod tests {
         assert!(prepare(&database, &Limits::default()).is_err());
 
         assert!(checked_usize_to_i64(usize::MAX, "fixture").is_err());
+        assert_eq!(checked_sum_usize([1, 2, 3], "fixture").unwrap(), 6);
+        assert!(checked_sum_usize([usize::MAX, 1], "fixture").is_err());
         assert!(build_batch(&database, Vec::new()).is_err());
         assert!(
             expected_boundary(&PreparedBatch {
@@ -985,5 +998,87 @@ mod tests {
         let mut invalid_log = record(RecordKind::Log);
         invalid_log.issue_id = Some("c".repeat(64));
         assert!(validate_record(&invalid_log).is_err());
+    }
+
+    #[test]
+    fn prepare_bounds_batches_and_rejects_changed_normalized_metadata() {
+        let (_directory, mut database) = runtime_database();
+        let mut first = record(RecordKind::Log);
+        first.ingest_seq = 0;
+        first.record_id = "1".repeat(64);
+        let mut second = first.clone();
+        second.record_id = "2".repeat(64);
+        crate::db::ingest::accept(
+            &mut database,
+            crate::db::ingest::IngestProject {
+                id: 1,
+                slug: "project".into(),
+                public_key: "public-key".into(),
+            },
+            "bounded",
+            vec![first, second],
+            &Limits {
+                chunk_records: 1,
+                batch_records: 1,
+                ..Limits::default()
+            },
+        )
+        .expect("accept bounded chunks");
+        let batch = prepare(
+            &database,
+            &Limits {
+                chunk_records: 1,
+                batch_records: 1,
+                ..Limits::default()
+            },
+        )
+        .expect("prepare bounded batch")
+        .expect("one bounded batch");
+        assert_eq!(batch.chunks.len(), 1);
+
+        database
+            .execute(
+                "UPDATE inbox SET received_at_us=received_at_us+1 WHERE id=1",
+                [],
+            )
+            .expect("damage normalized metadata");
+        assert!(
+            prepare(
+                &database,
+                &Limits {
+                    chunk_records: 1,
+                    batch_records: 1,
+                    ..Limits::default()
+                }
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn duplicate_occurrence_and_event_delivery_are_idempotent() {
+        let (_directory, database) = runtime_database();
+        database
+            .execute(
+                "INSERT INTO alerts(
+                    id,project_id,name,condition_type,condition_json,destination_type,
+                    destination_json,created_at_us,updated_at_us)
+                 VALUES(1,1,'new issue','new_issue','{}','webhook','{}',1,1)",
+                [],
+            )
+            .expect("event alert");
+        let error = record(RecordKind::Error);
+        let mut deliveries = 0;
+        finalize_error(&database, "active", &error, &mut deliveries).expect("first occurrence");
+        assert_eq!(deliveries, 1);
+        finalize_error(&database, "active", &error, &mut deliveries).expect("duplicate occurrence");
+        assert_eq!(deliveries, 1);
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM alert_deliveries", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("delivery count"),
+            1
+        );
     }
 }
