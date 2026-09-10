@@ -526,3 +526,124 @@ pub(super) async fn revalidate_read(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_dto_helpers_reject_ambiguous_values_and_map_all_errors() {
+        assert_eq!(ProjectId::Number(7).parse().unwrap(), 7);
+        assert_eq!(ProjectId::Decimal("8".into()).parse().unwrap(), 8);
+        for project in [
+            ProjectId::Number(0),
+            ProjectId::Number(-1),
+            ProjectId::Decimal(String::new()),
+            ProjectId::Decimal("+1".into()),
+            ProjectId::Decimal("999999999999999999999999".into()),
+        ] {
+            assert_eq!(project.parse().unwrap_err().1, "invalid_search_request");
+        }
+
+        let mut filters = Filters {
+            kinds: vec!["log".into(), "error".into(), "log".into()],
+            services: vec!["service".into()],
+            levels: vec!["warning".into()],
+            environments: vec!["production".into()],
+            releases: vec!["v1".into()],
+            loggers: vec!["app".into()],
+        };
+        filters.canonicalize().unwrap();
+        assert_eq!(filters.kinds, ["error", "log"]);
+        assert_eq!(filters.native().len(), 6);
+        filters.kinds = vec!["transaction".into()];
+        assert!(filters.canonicalize().is_err());
+        filters.kinds.clear();
+        filters.services = vec!["x".into(); 65];
+        assert!(filters.canonicalize().is_err());
+        filters.services = vec!["x".repeat(8193)];
+        assert!(filters.canonicalize().is_err());
+
+        for (error, status, code) in [
+            (
+                TokenError::Invalid,
+                StatusCode::BAD_REQUEST,
+                "invalid_search_token",
+            ),
+            (
+                TokenError::Expired,
+                StatusCode::GONE,
+                "search_token_expired",
+            ),
+            (
+                TokenError::GenerationChanged,
+                StatusCode::CONFLICT,
+                "storage_generation_changed",
+            ),
+            (
+                TokenError::AuthorizationChanged,
+                StatusCode::FORBIDDEN,
+                "search_authorization_changed",
+            ),
+        ] {
+            let mapped = token_error(error);
+            assert_eq!((mapped.0, mapped.1), (status, code));
+        }
+        for (error, status, code) in [
+            (
+                anyhow::Error::from(ScopeError::Forbidden),
+                StatusCode::FORBIDDEN,
+                "search_access_denied",
+            ),
+            (
+                anyhow::Error::from(ScopeError::Invalid),
+                StatusCode::BAD_REQUEST,
+                "invalid_search_request",
+            ),
+            (
+                anyhow::Error::from(ScopeError::TooLarge),
+                StatusCode::BAD_REQUEST,
+                "invalid_search_request",
+            ),
+            (
+                anyhow::anyhow!("private"),
+                StatusCode::SERVICE_UNAVAILABLE,
+                "search_unavailable",
+            ),
+        ] {
+            let mapped = scope_error(error);
+            assert_eq!((mapped.0, mapped.1), (status, code));
+        }
+    }
+
+    #[test]
+    fn timestamp_hash_and_token_context_helpers_preserve_exact_values() {
+        assert_eq!(timestamp("1970-01-01T00:00:01.123456Z").unwrap(), 1_123_456);
+        assert!(timestamp("not-a-time").is_err());
+        assert!(format_timestamp(i64::MAX).is_err());
+        assert_eq!(format_timestamp(0).unwrap(), "1970-01-01T00:00:00Z");
+        assert_eq!(hash(&serde_json::json!({"a": 1})).unwrap().len(), 64);
+
+        struct Failing;
+        impl Serialize for Failing {
+            fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom("fixture"))
+            }
+        }
+        assert!(hash(&Failing).is_err());
+        let authorization = Authorization {
+            projects: vec![1],
+            storage_generation: "generation".into(),
+            epoch: 3,
+            hash: "authorization".into(),
+        };
+        let context = context(&authorization, "request".into());
+        assert_eq!(context.storage_generation, "generation");
+        assert_eq!(context.authorization_epoch, 3);
+        assert_eq!(context.authorization_hash, "authorization");
+        assert_eq!(context.request_hash, "request");
+    }
+}
