@@ -355,11 +355,7 @@ pub fn aggregate_lazy<G: AsRef<SearchShard>>(
             shard.searcher.search(query.as_ref(), &(Count, collector))?;
         let shard_count =
             u64::try_from(shard_count).map_err(|_| AggregateError::UnexpectedNativeResult)?;
-        record_count = record_count.checked_add(shard_count).ok_or_else(|| {
-            AggregateError::NumericOverflow {
-                metric: "record_count".to_owned(),
-            }
-        })?;
+        record_count = add_record_count(record_count, shard_count)?;
         merged.merge_fruits(intermediate)?;
     }
     let native_result = merged.into_final_result(native_request, limits)?;
@@ -392,6 +388,14 @@ pub fn aggregate_lazy<G: AsRef<SearchShard>>(
         buckets,
         warnings,
     })
+}
+
+fn add_record_count(total: u64, shard: u64) -> Result<u64> {
+    total
+        .checked_add(shard)
+        .ok_or_else(|| AggregateError::NumericOverflow {
+            metric: "record_count".to_owned(),
+        })
 }
 
 fn validate_request(request: &AggregateRequest) -> Result<()> {
@@ -909,6 +913,11 @@ mod tests {
         ));
         let native = AggregateError::from(TantivyError::InvalidArgument("bad".into()));
         assert!(matches!(native, AggregateError::Native(_)));
+        assert_eq!(add_record_count(1, 2).expect("bounded count"), 3);
+        assert!(matches!(
+            add_record_count(u64::MAX, 1),
+            Err(AggregateError::NumericOverflow { metric }) if metric == "record_count"
+        ));
     }
 
     #[test]
