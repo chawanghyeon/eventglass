@@ -274,3 +274,31 @@ async fn directory_lock_excludes_second_instance() -> anyhow::Result<()> {
     assert!(AppState::open((*state.config).clone()).await.is_err());
     Ok(())
 }
+
+#[tokio::test]
+async fn readiness_tracks_the_real_indexer_lifecycle() -> anyhow::Result<()> {
+    let (_dir, state, router) = app().await?;
+    let unavailable = router
+        .oneshot(Request::get("/readyz").body(Body::empty())?)
+        .await?;
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = serde_json::from_slice(&to_bytes(unavailable.into_body(), 1024).await?)?;
+    assert_eq!(body["ready"], false);
+
+    let state = state.start_core().await?;
+    let ready = eventglass::http::router(state.clone())
+        .oneshot(Request::get("/readyz").body(Body::empty())?)
+        .await?;
+    assert_eq!(ready.status(), StatusCode::OK);
+    let body: Value = serde_json::from_slice(&to_bytes(ready.into_body(), 1024).await?)?;
+    assert_eq!(body["ready"], true);
+    state
+        .replay_maintenance
+        .as_ref()
+        .unwrap()
+        .shutdown()
+        .await?;
+    state.alerts.as_ref().unwrap().shutdown().await?;
+    state.indexer.as_ref().unwrap().shutdown().await?;
+    Ok(())
+}
