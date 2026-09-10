@@ -801,6 +801,17 @@ mod tests {
         }
     }
 
+    fn config(path: &std::path::Path) -> crate::config::Config {
+        crate::config::Config {
+            addr: "127.0.0.1:0".parse().expect("loopback address"),
+            data_dir: path.to_owned(),
+            base_url: "http://localhost:8080".parse().expect("base URL"),
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        }
+    }
+
     #[test]
     fn alert_configuration_validation_covers_every_condition_and_destination_boundary() {
         assert_eq!(received_time(), TimeBasis::ReceivedAt);
@@ -926,6 +937,73 @@ mod tests {
             .unwrap()
             .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn coordinator_loops_stop_cleanly_and_surface_database_failures() {
+        let directory = tempfile::tempdir().expect("alert loop directory");
+        let app = crate::app::AppState::open(config(directory.path()))
+            .await
+            .expect("alert application state");
+        let indexer = crate::indexer::Indexer::start(app.db.clone(), directory.path())
+            .await
+            .expect("alert Indexer");
+
+        let (_stop, stopped) = tokio::sync::watch::channel(true);
+        sender_loop(app.db.clone(), WebhookSender::local_test(), stopped).await;
+        let (_stop, stopped) = tokio::sync::watch::channel(true);
+        evaluation_loop(
+            app.db.clone(),
+            indexer.clone(),
+            app.query_permit.clone(),
+            None,
+            stopped,
+        )
+        .await;
+
+        app.db
+            .call(|db| {
+                db.execute_batch(
+                    "PRAGMA foreign_keys=OFF; DROP TABLE alert_deliveries; DROP TABLE alerts",
+                )
+                .expect("drop alert loop tables");
+                anyhow::Ok(())
+            })
+            .await
+            .expect("damage alert loop tables");
+
+        let (stop, receiver) = tokio::sync::watch::channel(false);
+        let stop_task = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            let _ = stop.send(true);
+        });
+        sender_loop(app.db.clone(), WebhookSender::local_test(), receiver).await;
+        stop_task.await.expect("sender stop task");
+
+        let (stop, receiver) = tokio::sync::watch::channel(false);
+        let stop_task = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            let _ = stop.send(true);
+        });
+        evaluation_loop(
+            app.db.clone(),
+            indexer.clone(),
+            app.query_permit.clone(),
+            None,
+            receiver,
+        )
+        .await;
+        stop_task.await.expect("evaluation stop task");
+
+        let coordinator = AlertCoordinator::start(
+            app.db.clone(),
+            indexer.clone(),
+            app.query_permit.clone(),
+            None,
+        )
+        .expect("alert coordinator");
+        drop(coordinator);
+        indexer.shutdown().await.expect("Indexer shutdown");
     }
 
     #[test]

@@ -993,4 +993,92 @@ mod tests {
         assert!(finish_evaluation(&mut missing_alerts, &pending, 0, 1).is_err());
         assert!(fail_evaluation(&missing_alerts, &pending, "failure").is_err());
     }
+
+    #[test]
+    fn threshold_bounds_and_revision_triggers_fail_closed() {
+        let (_directory, mut missing_projects) = database();
+        let id = create(&mut missing_projects, 1, &configuration(), 0).expect("alert");
+        missing_projects
+            .execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE projects")
+            .expect("drop projects");
+        assert!(update(&mut missing_projects, 1, id, 0, &configuration(), 1).is_err());
+
+        let (_directory, mut missing_alerts) = database();
+        missing_alerts
+            .execute_batch(
+                "PRAGMA foreign_keys=OFF; DROP TABLE alert_deliveries; DROP TABLE alerts",
+            )
+            .expect("drop alert tables");
+        assert!(update(&mut missing_alerts, 1, 1, 0, &configuration(), 1).is_err());
+        assert!(delete(&mut missing_alerts, 1, 1, 0, 1).is_err());
+
+        let (_directory, mut too_many_alerts) = database();
+        let condition = serde_json::to_string(&configuration().condition).expect("condition JSON");
+        let destination =
+            serde_json::to_string(&configuration().destination).expect("destination JSON");
+        too_many_alerts
+            .execute(
+                "WITH RECURSIVE ids(value) AS (SELECT 1 UNION ALL SELECT value+1 FROM ids WHERE value<1001)
+                 INSERT INTO alerts(
+                    id,name,condition_type,condition_json,destination_type,destination_json,
+                    enabled,created_at_us,updated_at_us)
+                 SELECT value,'bulk','error_count',?1,'webhook',?2,1,0,0 FROM ids",
+                params![condition, destination],
+            )
+            .expect("bulk threshold alerts");
+        assert!(reserve_evaluation(&mut too_many_alerts, 60_000_000).is_err());
+
+        let (_directory, mut missing_runtime) = database();
+        create(&mut missing_runtime, 1, &configuration(), 0).expect("runtime alert");
+        missing_runtime
+            .execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE runtime_state")
+            .expect("drop runtime state");
+        assert!(reserve_evaluation(&mut missing_runtime, 60_000_000).is_err());
+
+        let (_directory, mut changed_reservation) = database();
+        create(&mut changed_reservation, 1, &configuration(), 0).expect("reservation alert");
+        changed_reservation
+            .execute_batch(
+                "CREATE TRIGGER ignore_alert_reservation
+                 BEFORE UPDATE OF pending_evaluation_end_us ON alerts
+                 BEGIN SELECT RAISE(IGNORE); END;",
+            )
+            .expect("reservation race trigger");
+        assert!(reserve_evaluation(&mut changed_reservation, 60_000_000).is_err());
+
+        let (_directory, mut missing_scope) = database();
+        create(&mut missing_scope, 1, &configuration(), 0).expect("scoped alert");
+        missing_scope
+            .execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE projects")
+            .expect("drop scope projects");
+        assert!(reserve_evaluation(&mut missing_scope, 60_000_000).is_err());
+
+        let (_directory, mut too_many_projects) = database();
+        let mut global = configuration();
+        global.project_id = None;
+        create(&mut too_many_projects, 1, &global, 0).expect("global alert");
+        too_many_projects
+            .execute(
+                "WITH RECURSIVE ids(value) AS (SELECT 2 UNION ALL SELECT value+1 FROM ids WHERE value<1001)
+                 INSERT INTO projects(id,slug,name,is_active,created_at_us,updated_at_us)
+                 SELECT value,printf('p%d',value),'Project',1,0,0 FROM ids",
+                [],
+            )
+            .expect("bulk active projects");
+        assert!(reserve_evaluation(&mut too_many_projects, 60_000_000).is_err());
+
+        let (_directory, mut changed_completion) = database();
+        create(&mut changed_completion, 1, &configuration(), 0).expect("completion alert");
+        let pending = reserve_evaluation(&mut changed_completion, 60_000_000)
+            .expect("reserve completion")
+            .expect("pending completion");
+        changed_completion
+            .execute_batch(
+                "CREATE TRIGGER ignore_alert_completion
+                 BEFORE UPDATE OF last_evaluated_at_us ON alerts
+                 BEGIN SELECT RAISE(IGNORE); END;",
+            )
+            .expect("completion race trigger");
+        assert!(finish_evaluation(&mut changed_completion, &pending, 0, 60_000_000).is_err());
+    }
 }
