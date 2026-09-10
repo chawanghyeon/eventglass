@@ -278,10 +278,7 @@ async fn catch_up(
             indexer.search_live(&candidate_ids, &request, after)
         })
         .await
-        .map_err(|failure| match failure {
-            super::NativeTaskFailure::Timeout => "live_query_timeout",
-            super::NativeTaskFailure::Join => "live_unavailable",
-        })?
+        .map_err(live_task_failure)?
         .map_err(|_| "live_unavailable")?;
         super::search::revalidate_read(state, headers, &session.auth)
             .await
@@ -303,6 +300,13 @@ async fn catch_up(
             checkpoint(state, session, target, sender).await?;
             return Ok(CatchUp::Complete);
         }
+    }
+}
+
+fn live_task_failure(failure: super::NativeTaskFailure) -> &'static str {
+    match failure {
+        super::NativeTaskFailure::Timeout => "live_query_timeout",
+        super::NativeTaskFailure::Join => "live_unavailable",
     }
 }
 
@@ -411,7 +415,7 @@ async fn send_json_with_timeout(
 
 #[cfg(test)]
 mod tests {
-    use super::{Event, Infallible, send_json_with_timeout};
+    use super::{Event, Infallible, MAX_EVENT_BYTES, live_task_failure, send_json_with_timeout};
     use std::time::Duration;
     use tokio::sync::mpsc;
 
@@ -423,6 +427,26 @@ mod tests {
         assert_eq!(
             send_json_with_timeout(&sender, "record", None, "{}", Duration::from_millis(20),).await,
             Err("live_client_too_slow")
+        );
+
+        assert_eq!(
+            send_json_with_timeout(
+                &sender,
+                "record",
+                None,
+                &"x".repeat(MAX_EVENT_BYTES),
+                Duration::from_millis(20),
+            )
+            .await,
+            Err("live_record_too_large")
+        );
+        assert_eq!(
+            live_task_failure(super::super::NativeTaskFailure::Timeout),
+            "live_query_timeout"
+        );
+        assert_eq!(
+            live_task_failure(super::super::NativeTaskFailure::Join),
+            "live_unavailable"
         );
     }
 }
