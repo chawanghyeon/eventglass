@@ -206,6 +206,23 @@ async fn setup_session_dsn_csrf_revoke_logout() -> anyhow::Result<()> {
             )?))
             .await?
     );
+
+    let core = state.clone().start_core().await?;
+    let operational = eventglass::http::router(core.clone());
+    for path in ["/api/system/status", "/api/system/doctor"] {
+        let response = operational
+            .clone()
+            .oneshot(request("GET", path, Value::Null, Some(&cookie), None))
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await?)?;
+        assert!(body.is_object(), "{path}");
+    }
+    core.replay_maintenance.as_ref().unwrap().shutdown().await?;
+    core.alerts.as_ref().unwrap().shutdown().await?;
+    core.indexer.as_ref().unwrap().shutdown().await?;
+
     let logout = router
         .clone()
         .oneshot(request(
