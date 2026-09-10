@@ -761,24 +761,24 @@ mod tests {
         result
     }
 
-    fn threshold_condition(kind: &str) -> Condition {
+    fn threshold_condition(error: bool) -> Condition {
         let fields = (String::new(), 60, 1, 0, TimeBasis::ReceivedAt);
-        match kind {
-            "error" => Condition::ErrorCount {
+        if error {
+            Condition::ErrorCount {
                 query: fields.0,
                 window_seconds: fields.1,
                 threshold: fields.2,
                 cooldown_seconds: fields.3,
                 time_basis: fields.4,
-            },
-            "log" => Condition::LogCount {
+            }
+        } else {
+            Condition::LogCount {
                 query: fields.0,
                 window_seconds: fields.1,
                 threshold: fields.2,
                 cooldown_seconds: fields.3,
                 time_basis: fields.4,
-            },
-            _ => unreachable!(),
+            }
         }
     }
 
@@ -788,8 +788,8 @@ mod tests {
         for (condition, kind) in [
             (Condition::NewIssue, "new_issue"),
             (Condition::Regression, "regression"),
-            (threshold_condition("error"), "error_count"),
-            (threshold_condition("log"), "log_count"),
+            (threshold_condition(true), "error_count"),
+            (threshold_condition(false), "log_count"),
         ] {
             assert_eq!(condition.kind(), kind);
             assert!(condition.validate().is_ok());
@@ -856,7 +856,7 @@ mod tests {
         let mut configuration = Configuration {
             name: "production errors".into(),
             project_id: Some(1),
-            condition: threshold_condition("error"),
+            condition: threshold_condition(true),
             destination: valid,
             enabled: true,
         };
@@ -1080,7 +1080,8 @@ mod tests {
                 db.execute_batch(
                     "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
                      VALUES(1,'admin@example.test','x','admin',1,0,0)",
-                )?;
+                )
+                .expect("seed alert test user");
                 let configuration = Configuration {
                     name: "Delivery".into(),
                     project_id: None,
@@ -1096,7 +1097,8 @@ mod tests {
                          next_retry_at_us,created_at_us)
                      VALUES('delivery',?1,'delivery',?2,'pending',0,0,0)",
                     rusqlite::params![alert, payload],
-                )?;
+                )
+                .expect("seed alert delivery");
                 Ok(())
             })
             .await?;
@@ -1126,11 +1128,13 @@ mod tests {
 
     async fn delivery_state(db: &crate::db::worker::DbWorker) -> Result<(String, Option<i64>)> {
         db.call(|database| {
-            Ok(database.query_row(
-                "SELECT state,last_status_code FROM alert_deliveries WHERE id='delivery'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?)
+            Ok(database
+                .query_row(
+                    "SELECT state,last_status_code FROM alert_deliveries WHERE id='delivery'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("read delivery state"))
         })
         .await
     }

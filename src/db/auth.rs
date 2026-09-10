@@ -329,9 +329,10 @@ pub fn reset_admin_password(db: &mut Connection, email: &str, hash: &str, now: i
 mod tests {
     use super::*;
 
-    fn database() -> Result<(tempfile::TempDir, Connection)> {
-        let directory = tempfile::tempdir()?;
-        let connection = crate::db::open(&directory.path().join("meta.db"))?;
+    fn database() -> (tempfile::TempDir, Connection) {
+        let directory = tempfile::tempdir().expect("temporary auth database");
+        let connection =
+            crate::db::open(&directory.path().join("meta.db")).expect("open auth test database");
         connection.execute(
             "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
              VALUES(1,?1,?2,1)",
@@ -339,12 +340,13 @@ mod tests {
                 uuid::Uuid::new_v4().to_string(),
                 uuid::Uuid::new_v4().to_string()
             ],
-        )?;
-        Ok((directory, connection))
+        )
+        .expect("initialize runtime state");
+        (directory, connection)
     }
 
     #[test]
-    fn error_display_role_validation_conflict_and_noop_are_explicit() -> Result<()> {
+    fn error_display_role_validation_conflict_and_noop_are_explicit() {
         for error in [
             AuthDbError::Forbidden,
             AuthDbError::SetupCompleted,
@@ -356,18 +358,18 @@ mod tests {
         ] {
             assert!(!error.to_string().is_empty());
         }
-        let (_directory, mut db) = database()?;
+        let (_directory, mut db) = database();
         db.execute(
             "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
              VALUES(1,'admin@example.test','hash','admin',1,1,1),
                    (2,'member@example.test','hash','member',1,1,1)",
             [],
-        )?;
+        )
+        .expect("seed users");
         assert!(create_user(&mut db, 1, "x@example.test", "hash", "owner", 2).is_err());
         assert!(create_user(&mut db, 1, "member@example.test", "hash", "member", 2).is_err());
-        update_user(&mut db, 1, 2, None, None, 2)?;
-        assert_eq!(list_users(&db, 1)?.len(), 2);
+        update_user(&mut db, 1, 2, None, None, 2).expect("no-op update");
+        assert_eq!(list_users(&db, 1).expect("list users").len(), 2);
         assert!(list_users(&db, 2).is_err());
-        Ok(())
     }
 }

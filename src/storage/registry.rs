@@ -155,19 +155,21 @@ mod tests {
             std::fs::create_dir(&path)?;
             let mut active = ActiveShard::create(&path, &installation, &id, Boundary::default())?;
             active.publish(Boundary::default())?;
-            active.seal(
-                &path,
-                ShardStats {
-                    record_count: 0,
-                    min_timestamp_us: None,
-                    max_timestamp_us: None,
-                    min_received_at_us: None,
-                    max_received_at_us: None,
-                    min_ingest_seq: None,
-                    max_ingest_seq: None,
-                },
-                1,
-            )?;
+            active
+                .seal(
+                    &path,
+                    ShardStats {
+                        record_count: 0,
+                        min_timestamp_us: None,
+                        max_timestamp_us: None,
+                        min_received_at_us: None,
+                        max_received_at_us: None,
+                        min_ingest_seq: None,
+                        max_ingest_seq: None,
+                    },
+                    1,
+                )
+                .expect("seal registry fixture");
             ids.push(id);
         }
         let registry = Registry::new(directory.path(), installation);

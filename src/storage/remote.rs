@@ -1085,21 +1085,26 @@ mod tests {
             installation_id,
             &shard_id,
             Boundary::default(),
-        )?;
-        active.publish(Boundary::default())?;
-        active.seal(
-            &shard_source,
-            ShardStats {
-                record_count: 0,
-                min_timestamp_us: None,
-                max_timestamp_us: None,
-                min_received_at_us: None,
-                max_received_at_us: None,
-                min_ingest_seq: None,
-                max_ingest_seq: None,
-            },
-            1,
-        )?;
+        )
+        .expect("create restore fixture shard");
+        active
+            .publish(Boundary::default())
+            .expect("publish restore fixture shard");
+        active
+            .seal(
+                &shard_source,
+                ShardStats {
+                    record_count: 0,
+                    min_timestamp_us: None,
+                    max_timestamp_us: None,
+                    min_received_at_us: None,
+                    max_received_at_us: None,
+                    min_ingest_seq: None,
+                    max_ingest_seq: None,
+                },
+                1,
+            )
+            .expect("seal restore fixture shard");
         let archive_path = root.join("shard.tar.gz");
         let archive = archive::create(
             &shard_source,
@@ -1107,7 +1112,8 @@ mod tests {
             installation_id,
             &shard_id,
             || false,
-        )?;
+        )
+        .expect("archive restore fixture shard");
 
         let database_path = root.join("source.db");
         let database = db::open(&database_path)?;
@@ -1116,43 +1122,58 @@ mod tests {
             "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
              VALUES(1,?1,?2,1)",
             rusqlite::params![installation_id, generation],
-        )?;
+        )
+        .expect("initialize restore runtime state");
         database.execute(
             "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
              VALUES(1,'restore@example.test','hash','admin',1,1,1)",
             [],
-        )?;
+        )
+        .expect("seed restore user");
         database.execute(
             "INSERT INTO sessions(token_hash,user_id,expires_at_us,created_at_us,last_seen_at_us)
              VALUES('old-session',1,100,1,1)",
             [],
-        )?;
-        database.execute(
-            "INSERT INTO settings(key,value_json,updated_at_us)
+        )
+        .expect("seed restore session");
+        database
+            .execute(
+                "INSERT INTO settings(key,value_json,updated_at_us)
              VALUES('token_hmac_v1','[1,2,3]',1)",
-            [],
-        )?;
-        database.execute(
-            "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                [],
+            )
+            .expect("seed restore signing key");
+        database
+            .execute(
+                "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
                 last_applied_inbox_id,record_count,size_bytes,created_at_us,sealed_at_us)
              VALUES(?1,1,?2,1,'local',0,0,?3,1,1)",
-            rusqlite::params![
-                shard_id,
-                crate::db::shards::FORMAT_VERSION,
-                i64::try_from(crate::storage::manifest::local_size(
-                    &shard_source,
-                    &crate::storage::manifest::verify(&shard_source, installation_id, &shard_id,)?,
-                )?)?
-            ],
-        )?;
+                rusqlite::params![
+                    shard_id,
+                    crate::db::shards::FORMAT_VERSION,
+                    i64::try_from(
+                        crate::storage::manifest::local_size(
+                            &shard_source,
+                            &crate::storage::manifest::verify(
+                                &shard_source,
+                                installation_id,
+                                &shard_id
+                            )
+                            .expect("verify restore fixture manifest"),
+                        )
+                        .expect("measure restore fixture shard")
+                    )
+                    .expect("fixture shard size fits i64")
+                ],
+            )
+            .expect("seed restore shard catalog");
         drop(database);
         let checkpoint_id = uuid::Uuid::new_v4().to_string();
         let snapshot_path = root.join("snapshot.db");
-        let snapshot = PinnedSnapshot::open(&database_path)?.backup_to(
-            &snapshot_path,
-            SnapshotLimits::default(),
-            || false,
-        )?;
+        let snapshot = PinnedSnapshot::open(&database_path)
+            .expect("open pinned restore fixture")
+            .backup_to(&snapshot_path, SnapshotLimits::default(), || false)
+            .expect("create restore fixture snapshot");
         Ok(LocalCheckpoint {
             replay_files: Vec::new(),
             document: CheckpointDocument {
@@ -1311,19 +1332,23 @@ mod tests {
             0
         );
         assert_eq!(
-            restored_db.query_row(
-                "SELECT count(*) FROM settings WHERE key='token_hmac_v1'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )?,
+            restored_db
+                .query_row(
+                    "SELECT count(*) FROM settings WHERE key='token_hmac_v1'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("read restored signing key count"),
             0
         );
         assert_ne!(
-            restored_db.query_row(
-                "SELECT storage_generation FROM runtime_state WHERE singleton=1",
-                [],
-                |row| row.get::<_, String>(0),
-            )?,
+            restored_db
+                .query_row(
+                    "SELECT storage_generation FROM runtime_state WHERE singleton=1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .expect("read restored generation"),
             old_generation
         );
         assert!(data_dir.join("quarantine").is_dir());
