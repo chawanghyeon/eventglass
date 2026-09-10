@@ -372,6 +372,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closed_coordinator_and_launched_failure_are_bounded() {
+        let root = tempfile::tempdir().expect("backup failure directory");
+        let app = crate::app::AppState::open(crate::config::Config {
+            addr: "127.0.0.1:0".parse().expect("loopback address"),
+            data_dir: root.path().to_owned(),
+            base_url: "http://localhost:8080".parse().expect("base URL"),
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        })
+        .await
+        .expect("backup application state");
+        let closed = BackupCoordinator::new(
+            app.db.clone(),
+            root.path(),
+            Arc::new(MemoryStore::default()),
+            app.disk_budget.clone(),
+        );
+        closed.inner.gate.close();
+        assert!(closed.begin_cut().await.is_err());
+
+        let launched = BackupCoordinator::new(
+            app.db.clone(),
+            root.path(),
+            Arc::new(MemoryStore::default()),
+            app.disk_budget.clone(),
+        );
+        let job = launched
+            .begin_cut()
+            .await
+            .expect("backup handshake")
+            .expect("backup job");
+        job.launch();
+        launched.shutdown().await;
+        assert_eq!(
+            launched.inner.disk.reserved_bytes().expect("released disk"),
+            0
+        );
+    }
+
+    #[tokio::test]
     async fn replay_only_ingest_checkpoints_zero_index_boundary_and_doctor_checks_blobs()
     -> Result<()> {
         let root = tempfile::tempdir()?;

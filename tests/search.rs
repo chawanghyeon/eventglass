@@ -3,6 +3,8 @@ use std::collections::BTreeSet;
 use eventglass::{
     model::{Record, RecordKind},
     search::{
+        active::Published,
+        detail,
         query::{
             I64Bound, JsonScalar, KeywordField, QueryScope, RowCursor, SearchError, SearchRequest,
             SearchShard, TimeField, TypedFilter, search, search_live,
@@ -408,5 +410,25 @@ fn query_clause_and_request_limits_are_enforced() -> anyhow::Result<()> {
         search(&[shard], &invalid_limit),
         Err(SearchError::InvalidRequest("invalid_limit"))
     ));
+    Ok(())
+}
+
+#[test]
+fn exact_detail_preserves_optional_correlation_fields() -> anyhow::Result<()> {
+    let row = record(7, 1, 100, "detail");
+    let record_id = row.record_id.clone();
+    let (_directory, shard) = shard("active", &[row])?;
+    let published = Published {
+        shard_id: shard.id,
+        boundary: eventglass::model::Boundary {
+            inbox_id: 1,
+            ingest_seq: 7,
+        },
+        searcher: shard.searcher,
+    };
+    let detail = detail::load(&published, 1, &record_id, 7)?.expect("exact detail");
+    assert_eq!(detail.correlation.trace_id.as_deref(), Some("trace-7"));
+    assert_eq!(detail.correlation.request_id.as_deref(), Some("request-7"));
+    assert_eq!(detail.correlation.user_id.as_deref(), Some("user-7"));
     Ok(())
 }

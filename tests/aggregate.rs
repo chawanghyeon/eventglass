@@ -106,6 +106,23 @@ fn numeric_metric(page: &[MetricValue], name: &str) -> (Option<f64>, Option<u64>
 }
 
 #[test]
+fn aggregate_rejects_a_shard_with_a_non_production_schema() -> Result<()> {
+    let mut builder = tantivy::schema::Schema::builder();
+    builder.add_text_field("wrong", tantivy::schema::TEXT);
+    let index = Index::create_in_ram(builder.build());
+    let shard = SearchShard {
+        id: "wrong-schema".into(),
+        searcher: index.reader()?.searcher(),
+    };
+    let error = aggregate(&[shard], &request(Vec::new())).unwrap_err();
+    assert!(matches!(
+        error,
+        AggregateError::Search(eventglass::search::query::SearchError::SchemaMismatch { .. })
+    ));
+    Ok(())
+}
+
+#[test]
 fn distributed_merge_finds_a_winner_outside_every_local_top_one() -> Result<()> {
     let mut next_seq = 1;
     let mut adversarial = |local: &str| {

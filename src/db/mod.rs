@@ -298,4 +298,51 @@ mod tests {
                 .contains("foreign key")
         );
     }
+
+    #[test]
+    fn database_entry_points_propagate_corrupt_sqlite_and_migration_failures() {
+        let directory = tempfile::tempdir().expect("database failure directory");
+        let corrupt = directory.path().join("corrupt.db");
+        std::fs::write(&corrupt, b"not sqlite").expect("corrupt database bytes");
+        assert!(inspect(&corrupt).is_err());
+        assert!(open(&corrupt).is_err());
+
+        let empty = directory.path().join("empty.db");
+        drop(Connection::open(&empty).expect("empty SQLite database"));
+        assert!(inspect(&empty).is_err());
+
+        let readonly = directory.path().join("readonly.db");
+        drop(Connection::open(&readonly).expect("readonly fixture"));
+        let mut connection =
+            Connection::open_with_flags(&readonly, OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .expect("readonly connection");
+        assert!(migrate(&mut connection).is_err());
+
+        let malformed = directory.path().join("malformed-version.db");
+        let mut connection = Connection::open(&malformed).expect("malformed migration database");
+        connection
+            .execute_batch(
+                "CREATE TABLE schema_migrations(version BLOB,checksum TEXT,applied_at_us INTEGER);
+                 INSERT INTO schema_migrations VALUES(x'80','bad',0);",
+            )
+            .expect("malformed migration row");
+        assert!(migrate(&mut connection).is_err());
+
+        let conflict = directory.path().join("conflicting-upgrade.db");
+        let mut connection = Connection::open(&conflict).expect("conflicting migration database");
+        connection
+            .execute_batch(INITIAL_SCHEMA)
+            .expect("install v1 schema");
+        let checksum = format!("{:x}", Sha256::digest(INITIAL_SCHEMA.as_bytes()));
+        connection
+            .execute(
+                "INSERT INTO schema_migrations(version,checksum,applied_at_us) VALUES(1,?1,0)",
+                [checksum],
+            )
+            .expect("install v1 migration record");
+        connection
+            .execute("CREATE TABLE replays(conflict INTEGER)", [])
+            .expect("conflicting v2 table");
+        assert!(migrate(&mut connection).is_err());
+    }
 }
