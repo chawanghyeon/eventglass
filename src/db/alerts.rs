@@ -678,3 +678,199 @@ pub fn fail_evaluation(
         ],
     )? == 1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::alerts::TimeBasis;
+
+    fn database() -> (tempfile::TempDir, Connection) {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::db::open(&directory.path().join("meta.db")).unwrap();
+        db.execute_batch(
+            "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
+             VALUES(1,'admin@example.test','x','admin',1,0,0),
+                   (2,'member@example.test','x','member',1,0,0);
+             INSERT INTO projects(id,slug,name,is_active,created_at_us,updated_at_us)
+             VALUES(1,'one','One',1,0,0)",
+        )
+        .unwrap();
+        (directory, db)
+    }
+
+    fn configuration() -> Configuration {
+        Configuration {
+            name: "Errors".into(),
+            project_id: Some(1),
+            condition: Condition::ErrorCount {
+                query: String::new(),
+                window_seconds: 60,
+                threshold: 1,
+                cooldown_seconds: 0,
+                time_basis: TimeBasis::ReceivedAt,
+            },
+            destination: Destination::Webhook {
+                url: "https://example.test/hook".into(),
+            },
+            enabled: true,
+        }
+    }
+
+    fn assert_alert_error(error: anyhow::Error, expected: AlertError) {
+        let actual = error.downcast_ref::<AlertError>().unwrap();
+        assert_eq!(actual.to_string(), expected.to_string());
+        assert!(std::error::Error::source(actual).is_none());
+    }
+
+    #[test]
+    fn administrative_failures_distinguish_invalid_forbidden_missing_and_conflict() {
+        let (_directory, mut db) = database();
+        assert_alert_error(list(&db, 2).unwrap_err(), AlertError::Forbidden);
+
+        let mut invalid = configuration();
+        invalid.name.clear();
+        assert_alert_error(
+            create(&mut db, 1, &invalid, 1).unwrap_err(),
+            AlertError::Invalid,
+        );
+        let mut unknown_project = configuration();
+        unknown_project.project_id = Some(99);
+        assert_alert_error(
+            create(&mut db, 1, &unknown_project, 1).unwrap_err(),
+            AlertError::Invalid,
+        );
+
+        let id = create(&mut db, 1, &configuration(), 1).unwrap();
+        assert!(get(&db, 1, id).unwrap().is_some());
+        assert!(get(&db, 1, 999).unwrap().is_none());
+        assert_alert_error(
+            update(&mut db, 1, id, -1, &configuration(), 2).unwrap_err(),
+            AlertError::Invalid,
+        );
+        assert_alert_error(
+            update(&mut db, 1, id, 99, &configuration(), 2).unwrap_err(),
+            AlertError::RevisionConflict,
+        );
+        assert_alert_error(
+            update(&mut db, 1, 999, 0, &configuration(), 2).unwrap_err(),
+            AlertError::NotFound,
+        );
+        assert_alert_error(
+            update(&mut db, 1, id, 0, &unknown_project, 2).unwrap_err(),
+            AlertError::Invalid,
+        );
+        assert_alert_error(
+            delete(&mut db, 1, id, 99, 2).unwrap_err(),
+            AlertError::RevisionConflict,
+        );
+        assert_alert_error(
+            delete(&mut db, 1, 999, 0, 2).unwrap_err(),
+            AlertError::NotFound,
+        );
+        for limit in [0, 501] {
+            assert_alert_error(deliveries(&db, 1, limit).unwrap_err(), AlertError::Invalid);
+        }
+        assert_alert_error(
+            retry(&mut db, 1, "missing", 3).unwrap_err(),
+            AlertError::NotFound,
+        );
+    }
+
+    #[test]
+    fn corrupt_alert_and_delivery_json_fail_closed() {
+        let (_directory, mut db) = database();
+        let id = create(&mut db, 1, &configuration(), 1).unwrap();
+        db.execute("UPDATE alerts SET condition_json='{' WHERE id=?1", [id])
+            .unwrap();
+        assert!(list(&db, 1).is_err());
+        db.execute(
+            "UPDATE alerts SET condition_json=?1,destination_json='{' WHERE id=?2",
+            params![
+                serde_json::to_string(&configuration().condition).unwrap(),
+                id
+            ],
+        )
+        .unwrap();
+        assert!(get(&db, 1, id).is_err());
+
+        db.execute(
+            "INSERT INTO alert_deliveries(id,alert_id,dedupe_key,payload_json,state,attempts,
+                 next_retry_at_us,created_at_us)
+             VALUES('delivery',?1,'dedupe','{','pending',0,0,0)",
+            [id],
+        )
+        .unwrap();
+        assert!(deliveries(&db, 1, 10).is_err());
+    }
+
+    #[test]
+    fn delivery_completion_covers_sent_retry_failed_stale_and_overflow() {
+        let (_directory, mut db) = database();
+        let alert_id = create(&mut db, 1, &configuration(), 1).unwrap();
+        for id in ["sent", "retry", "failed"] {
+            db.execute(
+                "INSERT INTO alert_deliveries(id,alert_id,dedupe_key,payload_json,state,attempts,
+                     next_retry_at_us,created_at_us)
+                 VALUES(?1,?2,?1,'{}','pending',0,0,0)",
+                params![id, alert_id],
+            )
+            .unwrap();
+        }
+        let due = due_delivery(&db, 0).unwrap().unwrap();
+        assert_eq!(due.attempts, 0);
+
+        let sent = DueDelivery {
+            id: "sent".into(),
+            payload_json: "{}".into(),
+            attempts: 0,
+        };
+        assert!(finish_delivery(&db, &sent, DeliveryResult::Sent { status: 204 }, 10).unwrap());
+        assert!(!finish_delivery(&db, &sent, DeliveryResult::Sent { status: 204 }, 11).unwrap());
+
+        let retrying = DueDelivery {
+            id: "retry".into(),
+            payload_json: "{}".into(),
+            attempts: 0,
+        };
+        assert!(
+            finish_delivery(
+                &db,
+                &retrying,
+                DeliveryResult::Retry {
+                    status: Some(429),
+                    next_retry_at_us: 99,
+                    error: "retry"
+                },
+                10
+            )
+            .unwrap()
+        );
+
+        let failed = DueDelivery {
+            id: "failed".into(),
+            payload_json: "{}".into(),
+            attempts: 0,
+        };
+        assert!(
+            finish_delivery(
+                &db,
+                &failed,
+                DeliveryResult::Failed {
+                    status: None,
+                    error: "failed"
+                },
+                10
+            )
+            .unwrap()
+        );
+        let overflow = DueDelivery {
+            id: "missing".into(),
+            payload_json: "{}".into(),
+            attempts: u32::MAX,
+        };
+        assert_alert_error(
+            finish_delivery(&db, &overflow, DeliveryResult::Sent { status: 200 }, 10).unwrap_err(),
+            AlertError::Invalid,
+        );
+    }
+}
