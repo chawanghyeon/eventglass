@@ -180,3 +180,71 @@ async fn sdk_transaction_ack_reaches_index_without_creating_an_issue() -> anyhow
     indexer.shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn store_and_transport_metadata_fail_closed_at_every_public_boundary() -> anyhow::Result<()> {
+    let (_dir, _state, router) = app().await?;
+    let event = json!({
+        "event_id": "fedcba9876543210fedcba9876543210", // pragma: allowlist secret -- event ID fixture
+        "message": "store event",
+        "timestamp": 1788860000.0
+    })
+    .to_string();
+    let accepted = router
+        .clone()
+        .oneshot(
+            Request::post("/api/1/store/?sentry_key=public-test-key")
+                .body(Body::from(event.clone()))?,
+        )
+        .await?;
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    let receipt: Value = serde_json::from_slice(&to_bytes(accepted.into_body(), 8192).await?)?;
+    assert_eq!(receipt["id"], "fedcba9876543210fedcba9876543210"); // pragma: allowlist secret -- event ID fixture
+
+    for (request, status) in [
+        (
+            Request::post("/api/0/store/?sentry_key=public-test-key")
+                .body(Body::from(event.clone()))?,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            Request::post("/api/1/store/?sentry_key=wrong").body(Body::from(event.clone()))?,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            Request::post("/api/1/store/")
+                .header("content-encoding", "br")
+                .body(Body::from(event.clone()))?,
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+        ),
+        (
+            Request::post("/api/1/store/")
+                .header("content-length", "invalid")
+                .body(Body::from(event.clone()))?,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            Request::post("/api/1/store/")
+                .header("content-length", (21 * 1024 * 1024).to_string())
+                .body(Body::from(event.clone()))?,
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+        (
+            Request::post("/api/1/store/?sentry_key=public-test-key").body(Body::from("[]"))?,
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        assert_eq!(router.clone().oneshot(request).await?.status(), status);
+    }
+
+    let missing_key = router
+        .clone()
+        .oneshot(Request::post("/api/1/store/").body(Body::from(event))?)
+        .await?;
+    assert_eq!(missing_key.status(), StatusCode::UNAUTHORIZED);
+    let mismatched_project = router
+        .oneshot(Request::post("/api/2/envelope/").body(Body::from(envelope("public-test-key")))?)
+        .await?;
+    assert_eq!(mismatched_project.status(), StatusCode::UNAUTHORIZED);
+    Ok(())
+}
