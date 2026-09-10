@@ -692,7 +692,9 @@ mod tests {
              VALUES(1,'admin@example.test','x','admin',1,0,0),
                    (2,'member@example.test','x','member',1,0,0);
              INSERT INTO projects(id,slug,name,is_active,created_at_us,updated_at_us)
-             VALUES(1,'one','One',1,0,0)",
+             VALUES(1,'one','One',1,0,0);
+             INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+             VALUES(1,'test-installation','test-generation',1)",
         )
         .unwrap();
         (directory, db)
@@ -870,6 +872,60 @@ mod tests {
         };
         assert_alert_error(
             finish_delivery(&db, &overflow, DeliveryResult::Sent { status: 200 }, 10).unwrap_err(),
+            AlertError::Invalid,
+        );
+    }
+
+    #[test]
+    fn threshold_reservation_covers_scopes_no_trigger_failure_and_stale_completion() {
+        let (_directory, mut db) = database();
+        let id = create(&mut db, 1, &configuration(), 0).unwrap();
+        let pending = reserve_evaluation(&mut db, 60_000_000).unwrap().unwrap();
+        assert_eq!(pending.alert_id, id);
+        assert_eq!(pending.project_ids, vec![1]);
+        assert!(finish_evaluation(&mut db, &pending, 0, 60_000_000).unwrap());
+
+        let pending = reserve_evaluation(&mut db, 120_000_000).unwrap().unwrap();
+        assert!(fail_evaluation(&db, &pending, "query_incomplete").unwrap());
+        let mut stale = pending.clone();
+        stale.revision += 1;
+        assert!(!fail_evaluation(&db, &stale, "query_incomplete").unwrap());
+        assert!(!finish_evaluation(&mut db, &stale, 1, 120_000_000).unwrap());
+
+        db.execute(
+            "UPDATE alerts SET enabled=0,pending_evaluation_end_us=NULL,pending_cut_seq=NULL WHERE id=?1",
+            [id],
+        )
+        .unwrap();
+        let inactive_id = create(&mut db, 1, &configuration(), 0).unwrap();
+        db.execute("UPDATE projects SET is_active=0 WHERE id=1", [])
+            .unwrap();
+        let inactive = reserve_evaluation(&mut db, 60_000_000).unwrap().unwrap();
+        assert_eq!(inactive.alert_id, inactive_id);
+        assert!(inactive.project_ids.is_empty());
+        assert!(finish_evaluation(&mut db, &inactive, 0, 60_000_000).unwrap());
+        db.execute("UPDATE projects SET is_active=1 WHERE id=1", [])
+            .unwrap();
+        let mut global = configuration();
+        global.project_id = None;
+        let global_id = create(&mut db, 1, &global, 0).unwrap();
+        let pending = reserve_evaluation(&mut db, 60_000_000).unwrap().unwrap();
+        assert_eq!(pending.alert_id, global_id);
+        assert_eq!(pending.project_ids, vec![1]);
+
+        let invalid = PendingEvaluation {
+            alert_id: global_id,
+            revision: 0,
+            project_ids: vec![1],
+            project_id: None,
+            condition: Condition::NewIssue,
+            destination: global.destination,
+            evaluation_end_us: 60_000_000,
+            cut_seq: 0,
+            last_triggered_at_us: None,
+        };
+        assert_alert_error(
+            finish_evaluation(&mut db, &invalid, 1, 60_000_000).unwrap_err(),
             AlertError::Invalid,
         );
     }

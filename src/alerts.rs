@@ -1060,4 +1060,116 @@ mod tests {
             crate::db::alerts::DeliveryResult::Failed { .. }
         ));
     }
+
+    async fn delivery_worker(
+        payload: String,
+    ) -> Result<(tempfile::TempDir, crate::db::worker::DbWorker)> {
+        let directory = tempfile::tempdir()?;
+        let state = crate::app::AppState::open(crate::config::Config {
+            addr: "127.0.0.1:0".parse()?,
+            data_dir: directory.path().to_owned(),
+            base_url: "http://localhost:8080".parse()?,
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        })
+        .await?;
+        state
+            .db
+            .call(move |db| {
+                db.execute_batch(
+                    "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
+                     VALUES(1,'admin@example.test','x','admin',1,0,0)",
+                )?;
+                let configuration = Configuration {
+                    name: "Delivery".into(),
+                    project_id: None,
+                    condition: Condition::NewIssue,
+                    destination: Destination::Webhook {
+                        url: "https://example.test/hook".into(),
+                    },
+                    enabled: true,
+                };
+                let alert = crate::db::alerts::create(db, 1, &configuration, 0)?;
+                db.execute(
+                    "INSERT INTO alert_deliveries(id,alert_id,dedupe_key,payload_json,state,attempts,
+                         next_retry_at_us,created_at_us)
+                     VALUES('delivery',?1,'delivery',?2,'pending',0,0,0)",
+                    rusqlite::params![alert, payload],
+                )?;
+                Ok(())
+            })
+            .await?;
+        Ok((directory, state.db))
+    }
+
+    async fn status_worker(
+        response: Option<Vec<u8>>,
+    ) -> Result<(tempfile::TempDir, crate::db::worker::DbWorker)> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        if let Some(response) = response {
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 4096];
+                let _ = socket.read(&mut request).await.unwrap();
+                socket.write_all(&response).await.unwrap();
+            });
+        } else {
+            drop(listener);
+        }
+        delivery_worker(format!(
+            r#"{{"destination":{{"type":"webhook","url":"http://{address}/hook"}},"message":"test"}}"#
+        ))
+        .await
+    }
+
+    async fn delivery_state(db: &crate::db::worker::DbWorker) -> Result<(String, Option<i64>)> {
+        db.call(|database| {
+            Ok(database.query_row(
+                "SELECT state,last_status_code FROM alert_deliveries WHERE id='delivery'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?)
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn delivery_once_durably_classifies_payload_status_and_transport_outcomes() -> Result<()>
+    {
+        let sender = WebhookSender::local_test();
+
+        let (_directory, db) = delivery_worker("{".into()).await?;
+        assert!(sender.deliver_once(&db).await?);
+        assert_eq!(delivery_state(&db).await?.0, "failed");
+        assert!(!sender.deliver_once(&db).await?);
+
+        for (response, state, status) in [
+            (
+                b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                "sent",
+                Some(204),
+            ),
+            (
+                b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                "failed",
+                Some(400),
+            ),
+            (
+                b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+                "pending",
+                Some(429),
+            ),
+        ] {
+            let (_directory, db) = status_worker(Some(response)).await?;
+            assert!(sender.deliver_once(&db).await?);
+            assert_eq!(delivery_state(&db).await?, (state.into(), status));
+        }
+
+        let (_directory, db) = status_worker(None).await?;
+        assert!(sender.deliver_once(&db).await?);
+        assert_eq!(delivery_state(&db).await?.0, "pending");
+        Ok(())
+    }
 }
