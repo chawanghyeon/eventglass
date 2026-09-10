@@ -180,18 +180,21 @@ mod tests {
         db.execute(
             "UPDATE schema_migrations SET version=99 WHERE version=2",
             [],
-        )?;
+        )
+        .expect("mark fixture schema as newer");
         drop(db);
         assert!(open(&path).unwrap_err().to_string().contains("unsupported"));
         let db = Connection::open(&path)?;
         db.execute(
             "UPDATE schema_migrations SET version=2 WHERE version=99",
             [],
-        )?;
+        )
+        .expect("restore fixture schema version");
         db.execute(
             "UPDATE schema_migrations SET checksum='changed' WHERE version=1",
             [],
-        )?;
+        )
+        .expect("corrupt fixture migration checksum");
         drop(db);
         assert!(open(&path).unwrap_err().to_string().contains("checksum"));
         Ok(())
@@ -207,7 +210,8 @@ mod tests {
         db.execute(
             "INSERT INTO schema_migrations(version,checksum,applied_at_us) VALUES(1,?1,0)",
             [&original],
-        )?;
+        )
+        .expect("install v1 migration fixture");
         db.execute_batch("INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'upgrade','Preserve',0,0);")?;
         drop(db);
         let db = open(&path)?;
@@ -216,7 +220,8 @@ mod tests {
                 "SELECT checksum FROM schema_migrations WHERE version=1",
                 [],
                 |r| r.get::<_, String>(0)
-            )?,
+            )
+            .expect("read original v1 checksum"),
             original
         );
         assert_eq!(
@@ -240,9 +245,8 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("meta.db");
         let db = Connection::open(&path)?;
-        db.execute_batch(
-            "CREATE TABLE precious(value TEXT); INSERT INTO precious VALUES('keep');",
-        )?;
+        db.execute_batch("CREATE TABLE precious(value TEXT); INSERT INTO precious VALUES('keep');")
+            .expect("create unknown schema fixture");
         drop(db);
         assert!(open(&path).is_err());
         let db = Connection::open(&path)?;
@@ -251,5 +255,47 @@ mod tests {
             "keep"
         );
         Ok(())
+    }
+
+    #[test]
+    fn inspection_rejects_non_files_newer_versions_and_foreign_key_damage() {
+        let directory = tempfile::tempdir().expect("temporary inspection directory");
+        assert!(inspect(directory.path()).is_err());
+
+        let path = directory.path().join("meta.db");
+        let db = open(&path).expect("open inspection fixture");
+        db.execute(
+            "UPDATE schema_migrations SET version=99 WHERE version=2",
+            [],
+        )
+        .expect("mark inspected fixture as newer");
+        drop(db);
+        assert!(
+            inspect(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported")
+        );
+
+        let db = Connection::open(&path).expect("open fixture without connection policy");
+        db.pragma_update(None, "foreign_keys", "OFF")
+            .expect("disable fixture foreign key enforcement");
+        db.execute(
+            "UPDATE schema_migrations SET version=2 WHERE version=99",
+            [],
+        )
+        .expect("restore inspected schema version");
+        db.execute(
+            "INSERT INTO sessions(token_hash,user_id,expires_at_us,created_at_us,last_seen_at_us) VALUES('broken',999,1,1,1)",
+            [],
+        )
+        .expect("insert foreign key violation with checks disabled");
+        drop(db);
+        assert!(
+            inspect(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("foreign key")
+        );
     }
 }
