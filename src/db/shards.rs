@@ -350,3 +350,122 @@ pub fn adopt_initial(
     tx.commit()?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::manifest::ShardStats;
+
+    fn fixture() -> (tempfile::TempDir, Connection) {
+        let directory = tempfile::tempdir().expect("temporary shard database");
+        let database =
+            crate::db::open(&directory.path().join("meta.db")).expect("open shard database");
+        database
+            .execute(
+                "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+                 VALUES(1,'installation','generation',1)",
+                [],
+            )
+            .expect("seed shard runtime");
+        (directory, database)
+    }
+
+    fn manifest(shard_id: &str) -> Manifest {
+        Manifest {
+            manifest_version: 1,
+            installation_id: "installation".into(),
+            shard_id: shard_id.into(),
+            schema_version: crate::search::schema::APPLICATION_SCHEMA_VERSION,
+            normalizer_version: 1,
+            tokenizer_version: crate::search::schema::TOKENIZER_VERSION,
+            tantivy_version: tantivy::version_string().to_owned(),
+            index_format_version: 7,
+            boundary: Boundary::default(),
+            stats: ShardStats {
+                record_count: 0,
+                min_timestamp_us: None,
+                max_timestamp_us: None,
+                min_received_at_us: None,
+                max_received_at_us: None,
+                min_ingest_seq: None,
+                max_ingest_seq: None,
+            },
+            sealed_at_us: 1,
+            files: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn damaged_catalog_and_rotation_state_fail_closed() {
+        let database = Connection::open_in_memory().expect("open empty catalog");
+        assert!(local_catalog(&database).is_err());
+        assert!(catalog_ids(&database).is_err());
+
+        let (_directory, database) = fixture();
+        assert!(rotation_plan(&database, "missing", Some(1), 0).is_err());
+        assert!(rotation_plan(&database, "missing", None, 0).is_err());
+
+        let database = Connection::open_in_memory().expect("open malformed runtime catalog");
+        database
+            .execute_batch(
+                "CREATE TABLE runtime_state(
+                     singleton INTEGER,installation_id BLOB,last_applied_inbox_id INTEGER,
+                     last_applied_ingest_seq INTEGER,active_shard_id TEXT);
+                 INSERT INTO runtime_state VALUES(1,x'80',0,0,NULL);",
+            )
+            .expect("seed malformed runtime catalog");
+        assert!(startup(&database).is_err());
+
+        let (_directory, database) = fixture();
+        let id = uuid::Uuid::new_v4().to_string();
+        database
+            .execute(
+                "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                     last_applied_inbox_id,created_at_us)
+                 VALUES(?1,x'80',?2,?3,'active',0,0)",
+                params![id, FORMAT_VERSION, crate::search::schema::TOKENIZER_VERSION],
+            )
+            .expect("seed malformed active shard metadata");
+        database
+            .execute("UPDATE runtime_state SET active_shard_id=?1", [&id])
+            .expect("select malformed active shard");
+        assert!(startup(&database).is_err());
+    }
+
+    #[test]
+    fn seal_rejects_corrupt_statistics_and_unsupported_states() {
+        let (_directory, mut database) = fixture();
+        let id = uuid::Uuid::new_v4().to_string();
+        database
+            .execute(
+                "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                     last_applied_inbox_id,record_count,created_at_us)
+                 VALUES(?1,?2,?3,?4,'remote_only',0,0,0)",
+                params![
+                    id,
+                    crate::search::schema::APPLICATION_SCHEMA_VERSION,
+                    FORMAT_VERSION,
+                    crate::search::schema::TOKENIZER_VERSION
+                ],
+            )
+            .expect("seed unsupported seal state");
+        assert!(finalize_seal(&mut database, &manifest(&id), 0).is_err());
+
+        let (_directory, mut database) = fixture();
+        let id = uuid::Uuid::new_v4().to_string();
+        database
+            .execute(
+                "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                     last_applied_inbox_id,record_count,created_at_us)
+                 VALUES(?1,?2,?3,?4,'local',0,x'80',0)",
+                params![
+                    id,
+                    crate::search::schema::APPLICATION_SCHEMA_VERSION,
+                    FORMAT_VERSION,
+                    crate::search::schema::TOKENIZER_VERSION
+                ],
+            )
+            .expect("seed corrupt shard statistics");
+        assert!(finalize_seal(&mut database, &manifest(&id), 0).is_err());
+    }
+}
