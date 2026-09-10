@@ -144,6 +144,71 @@ async fn alert_http_contract_enforces_csrf_revision_and_soft_delete() -> anyhow:
     let (_, listed) = call(&router, Method::GET, "/api/alerts", &cookie, None, None).await?;
     assert_eq!(listed["items"][0]["name"], "API errors");
 
+    let delivery_id = "a".repeat(64);
+    let delivery_alert = id.parse::<i64>()?;
+    let inserted_id = delivery_id.clone();
+    app.db
+        .call(move |db| {
+            db.execute(
+                "INSERT INTO alert_deliveries(id,alert_id,dedupe_key,payload_json,state,attempts,
+                     next_retry_at_us,created_at_us,last_error)
+                 VALUES(?1,?2,'http-delivery','{}','failed',1,0,0,'failed')",
+                rusqlite::params![inserted_id, delivery_alert],
+            )?;
+            Ok(())
+        })
+        .await?;
+    let (status, deliveries) = call(
+        &router,
+        Method::GET,
+        "/api/alert-deliveries",
+        &cookie,
+        None,
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(deliveries["items"][0]["id"], delivery_id);
+    assert_eq!(
+        call(
+            &router,
+            Method::GET,
+            "/api/alert-deliveries?limit=0",
+            &cookie,
+            None,
+            None,
+        )
+        .await?
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &router,
+            Method::POST,
+            "/api/alert-deliveries/not-a-digest/retry",
+            &cookie,
+            Some(csrf),
+            None,
+        )
+        .await?
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        call(
+            &router,
+            Method::POST,
+            &format!("/api/alert-deliveries/{delivery_id}/retry"),
+            &cookie,
+            Some(csrf),
+            None,
+        )
+        .await?
+        .0,
+        StatusCode::NO_CONTENT
+    );
+
     let mut update = alert("API logs", false);
     update["revision"] = json!(0);
     assert_eq!(
