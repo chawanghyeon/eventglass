@@ -1355,16 +1355,70 @@ mod tests {
         );
     }
 
+    #[test]
+    fn snapshot_validation_rejects_runtime_types_and_missing_catalog() {
+        let installation_id = uuid::Uuid::new_v4().to_string();
+        let typed_root = tempfile::tempdir().expect("typed snapshot root");
+        let typed = restorable_candidate(typed_root.path(), &installation_id, 1)
+            .expect("typed snapshot fixture");
+        let database =
+            rusqlite::Connection::open(&typed.snapshot_path).expect("open typed snapshot");
+        database
+            .execute(
+                "UPDATE runtime_state SET installation_id=x'80' WHERE singleton=1",
+                [],
+            )
+            .expect("damage runtime identity type");
+        drop(database);
+        assert!(validate_snapshot(&typed.snapshot_path, &typed.document.cut).is_err());
+
+        let missing_root = tempfile::tempdir().expect("missing catalog snapshot root");
+        let missing = restorable_candidate(missing_root.path(), &installation_id, 2)
+            .expect("missing catalog snapshot fixture");
+        let database =
+            rusqlite::Connection::open(&missing.snapshot_path).expect("open missing snapshot");
+        database
+            .execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE shards")
+            .expect("drop snapshot shard catalog");
+        drop(database);
+        assert!(validate_snapshot(&missing.snapshot_path, &missing.document.cut).is_err());
+    }
+
     #[tokio::test]
     async fn checkpoint_is_published_only_after_every_data_object() -> Result<()> {
         let root = tempfile::tempdir()?;
         let installation_id = uuid::Uuid::new_v4().to_string();
         let mut candidate = candidate(root.path(), &installation_id)?;
+        let replay_bytes = b"immutable replay".to_vec();
+        let replay_hash = sha256(&replay_bytes);
+        let replay_key = format!("replay-blobs/{replay_hash}.zlib");
+        let replay_path = root.path().join("replay.zlib");
+        std::fs::write(&replay_path, &replay_bytes)?;
+        candidate.document.cut.replay_blobs = vec![ObjectReference {
+            key: replay_key.clone(),
+            size: replay_bytes.len() as u64,
+            sha256: replay_hash,
+        }];
+        candidate.replay_files = vec![(replay_key.clone(), replay_path)];
         let store = MemoryStore::default();
         ensure_installation(&store, &installation(&installation_id), true).await?;
         let latest = publish(&store, &candidate).await?;
         assert_eq!(latest.checkpoint_id, candidate.document.checkpoint_id);
         assert_eq!(publish(&store, &candidate).await?, latest);
+        let mut next = candidate.clone();
+        next.document.checkpoint_id = uuid::Uuid::new_v4().to_string();
+        next.document.sequence += 1;
+        next.document.snapshot.key = format!("snapshots/{}.db", next.document.checkpoint_id);
+        publish(&store, &next).await?;
+        assert_eq!(
+            store
+                .writes()
+                .iter()
+                .filter(|key| *key == &replay_key)
+                .count(),
+            1,
+            "completed checkpoint reuses the immutable Replay object"
+        );
         let writes = store.writes();
         let checkpoint = checkpoint_key(&candidate.document.checkpoint_id);
         assert!(

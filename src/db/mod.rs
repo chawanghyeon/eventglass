@@ -360,7 +360,7 @@ mod tests {
 
         assert!(validate_integrity("corrupt").is_err());
 
-        for denied_select in [0, 1] {
+        for denied_select in [0, 2] {
             let mut connection = Connection::open_in_memory().expect("migration query database");
             let selects = Arc::new(AtomicUsize::new(0));
             let observed = Arc::clone(&selects);

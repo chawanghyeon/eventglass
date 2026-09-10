@@ -165,14 +165,7 @@ pub fn create(
     configuration.validate().map_err(|_| AlertError::Invalid)?;
     let tx = db.transaction()?;
     require_admin(&tx, actor)?;
-    if let Some(project) = configuration.project_id {
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND is_active=1)",
-            [project],
-            |row| row.get(0),
-        )?;
-        ensure!(exists, AlertError::Invalid);
-    }
+    require_active_project(&tx, configuration.project_id)?;
     tx.execute(
         "INSERT INTO alerts(project_id,name,condition_type,condition_json,destination_type,
              destination_json,enabled,created_at_us,updated_at_us)
@@ -206,14 +199,7 @@ pub fn update(
     }
     let tx = db.transaction()?;
     require_admin(&tx, actor)?;
-    if let Some(project) = configuration.project_id {
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND is_active=1)",
-            [project],
-            |row| row.get(0),
-        )?;
-        ensure!(exists, AlertError::Invalid);
-    }
+    require_active_project(&tx, configuration.project_id)?;
     if tx.execute(
         "UPDATE alerts SET project_id=?1,name=?2,condition_type=?3,condition_json=?4,
              destination_type='webhook',destination_json=?5,enabled=?6,revision=revision+1,
@@ -233,11 +219,7 @@ pub fn update(
         ],
     )? == 0
     {
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM alerts WHERE id=?1 AND deleted_at_us IS NULL)",
-            [id],
-            |row| row.get(0),
-        )?;
+        let exists = alert_exists(&tx, id)?;
         return Err(if exists {
             AlertError::RevisionConflict
         } else {
@@ -271,11 +253,7 @@ pub fn delete(
         params![now_us, id, expected_revision],
     )? == 0
     {
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM alerts WHERE id=?1 AND deleted_at_us IS NULL)",
-            [id],
-            |row| row.get(0),
-        )?;
+        let exists = alert_exists(&tx, id)?;
         return Err(if exists {
             AlertError::RevisionConflict
         } else {
@@ -290,6 +268,35 @@ pub fn delete(
     )?;
     tx.commit()?;
     Ok(())
+}
+
+fn require_active_project(db: &Connection, project: Option<i64>) -> Result<()> {
+    match project {
+        None => Ok(()),
+        Some(project) => {
+            let exists = db
+                .query_row(
+                    "SELECT 1 FROM projects WHERE id=?1 AND is_active=1",
+                    [project],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            ensure!(exists, AlertError::Invalid);
+            Ok(())
+        }
+    }
+}
+
+fn alert_exists(db: &Connection, id: i64) -> Result<bool> {
+    Ok(db
+        .query_row(
+            "SELECT 1 FROM alerts WHERE id=?1 AND deleted_at_us IS NULL",
+            [id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
 }
 
 pub fn deliveries(db: &Connection, actor: i64, limit: usize) -> Result<Vec<Delivery>> {

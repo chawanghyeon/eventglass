@@ -397,6 +397,14 @@ async fn durable_http_segments_are_atomic_idempotent_order_independent_and_autho
         .oneshot(Request::get(&path).body(Body::empty())?)
         .await?;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let partial_pages = router
+        .clone()
+        .oneshot(get("/api/replay-pages?project_id=1".into()))
+        .await?;
+    assert_eq!(partial_pages.status(), StatusCode::OK);
+    let partial_pages: Value =
+        serde_json::from_slice(&to_bytes(partial_pages.into_body(), 1_000_000).await?)?;
+    assert_eq!(partial_pages["truncated"], true);
     let response = router
         .clone()
         .oneshot(
@@ -587,6 +595,29 @@ async fn durable_http_segments_are_atomic_idempotent_order_independent_and_autho
         feedback["items"][0]["contexts"]["feedback"]["message"],
         "Replay fixture feedback"
     );
+    let blob = state
+        .db
+        .call(|db| {
+            db.query_row(
+                "SELECT blob_sha256 FROM replay_segments ORDER BY segment_id LIMIT 1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(Into::into)
+        })
+        .await?;
+    let blob_path = state
+        .config
+        .data_dir
+        .join(format!("replay-blobs/{blob}.zlib"));
+    let original_blob = std::fs::read(&blob_path)?;
+    std::fs::write(&blob_path, b"corrupt replay")?;
+    let damaged = router
+        .clone()
+        .oneshot(get(format!("{path}/analysis")))
+        .await?;
+    assert_eq!(damaged.status(), StatusCode::SERVICE_UNAVAILABLE);
+    std::fs::write(blob_path, original_blob)?;
     core.alerts.as_ref().unwrap().shutdown().await?;
     core.indexer.as_ref().unwrap().shutdown().await?;
     // Public ingest key never grants access to recordings; disabled projects lose access.

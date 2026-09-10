@@ -360,6 +360,31 @@ mod tests {
                 .await?;
             drop(pin);
         }
+        let backup = crate::storage::backup::BackupCoordinator::new(
+            app.db.clone(),
+            root.path(),
+            Arc::new(crate::storage::backup::tests::MemoryStore::default()),
+            app.disk_budget.clone(),
+        );
+        let backup_job = backup
+            .begin_cut()
+            .await
+            .expect("maintenance exclusion backup handshake")
+            .expect("maintenance exclusion backup job");
+        assert!(
+            sweep(
+                &app.db,
+                root.path().to_owned(),
+                cursor.clone(),
+                &app.ingress_permit,
+                &app.query_permit,
+                Some(&backup)
+            )
+            .await
+            .expect("maintenance exclusion sweep")
+            .is_none()
+        );
+        drop(backup_job);
         assert!(
             sweep(
                 &app.db,

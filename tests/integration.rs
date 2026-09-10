@@ -222,6 +222,22 @@ async fn setup_session_dsn_csrf_revoke_logout() -> anyhow::Result<()> {
     core.replay_maintenance.as_ref().unwrap().shutdown().await?;
     core.alerts.as_ref().unwrap().shutdown().await?;
     core.indexer.as_ref().unwrap().shutdown().await?;
+    core.db
+        .call(|db| {
+            db.execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE replays")?;
+            Ok(())
+        })
+        .await?;
+    let damaged_status = operational
+        .oneshot(request(
+            "GET",
+            "/api/system/status",
+            Value::Null,
+            Some(&cookie),
+            None,
+        ))
+        .await?;
+    assert_eq!(damaged_status.status(), StatusCode::SERVICE_UNAVAILABLE);
 
     let logout = router
         .clone()

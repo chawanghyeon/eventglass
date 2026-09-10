@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -10,11 +11,50 @@ use eventglass::{
     model::Boundary,
     search::active::ActiveShard,
     sentry::{self, ProjectContext},
-    storage::manifest::{self, ShardStats},
+    storage::{
+        cold::ColdStorage,
+        manifest::{self, ShardStats},
+        s3::{ObjectMetadata, ObjectPage, ObjectStore},
+    },
 };
 use rusqlite::params;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use tower::ServiceExt;
+
+struct UnusedStore;
+
+#[async_trait]
+impl ObjectStore for UnusedStore {
+    async fn list(&self, _continuation: Option<String>) -> anyhow::Result<ObjectPage> {
+        unreachable!()
+    }
+    async fn get_small(&self, _relative: &str, _max_bytes: u64) -> anyhow::Result<Vec<u8>> {
+        unreachable!()
+    }
+    async fn put_if_absent(&self, _relative: &str, _bytes: Vec<u8>) -> anyhow::Result<()> {
+        unreachable!()
+    }
+    async fn put_bytes(&self, _relative: &str, _bytes: Vec<u8>) -> anyhow::Result<()> {
+        unreachable!()
+    }
+    async fn put_file(
+        &self,
+        _relative: &str,
+        _path: &std::path::Path,
+        _sha: &str,
+    ) -> anyhow::Result<()> {
+        unreachable!()
+    }
+    async fn download(
+        &self,
+        _relative: &str,
+        _destination: &std::path::Path,
+        _max_bytes: u64,
+    ) -> anyhow::Result<ObjectMetadata> {
+        unreachable!()
+    }
+}
 
 async fn call(
     router: &Router,
@@ -233,6 +273,37 @@ async fn add_matching_local_shard(
 }
 fn query() -> Value {
     json!({"projects":["1"],"start":"2026-09-07T00:00:00Z","end":"2026-09-09T00:00:00Z","query":"","limit":1})
+}
+
+#[tokio::test]
+async fn http_search_hydrates_candidate_set_when_cold_storage_is_configured() -> anyhow::Result<()>
+{
+    let (directory, mut app, _router, cookie) = fixture().await?;
+    let installation = app
+        .db
+        .call(|db| {
+            db.query_row(
+                "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(Into::into)
+        })
+        .await?;
+    app.cold = Some(ColdStorage::new(
+        app.db.clone(),
+        directory.path(),
+        installation.clone(),
+        Arc::new(UnusedStore),
+        eventglass::storage::registry::Registry::new(directory.path(), installation),
+        app.disk_budget.clone(),
+    ));
+    let router = eventglass::http::router(app.clone());
+    let (status, result) = call(&router, "/api/explore/search", &cookie, query()).await?;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["rows"], json!([]));
+    app.indexer.as_ref().unwrap().shutdown().await?;
+    Ok(())
 }
 
 #[tokio::test]

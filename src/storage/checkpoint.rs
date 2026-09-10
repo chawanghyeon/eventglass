@@ -230,13 +230,8 @@ impl PinnedSnapshot {
                     wal.saturating_sub(initial_wal) <= limits.wal_growth_bytes,
                     "checkpoint WAL growth budget exceeded"
                 );
-                match backup.step(limits.pages_per_step)? {
-                    StepResult::Done => break,
-                    StepResult::More => {}
-                    StepResult::Busy | StepResult::Locked => {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                    _ => anyhow::bail!("unsupported SQLite backup result"),
+                if backup_step_finished(backup.step(limits.pages_per_step)?) {
+                    break;
                 }
             }
         }
@@ -275,6 +270,18 @@ impl PinnedSnapshot {
             size,
             sha256: format!("{:x}", sha.finalize()),
         })
+    }
+}
+
+fn backup_step_finished(result: StepResult) -> bool {
+    match result {
+        StepResult::Done => true,
+        StepResult::More => false,
+        // Busy, locked and future retryable statuses remain bounded by the outer deadline.
+        _ => {
+            std::thread::sleep(Duration::from_millis(5));
+            false
+        }
     }
 }
 
@@ -454,6 +461,40 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_queries_propagate_catalog_type_and_authorizer_failures() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+        let typed_root = tempfile::tempdir().expect("typed checkpoint directory");
+        let (typed_path, typed_writer) = database(typed_root.path());
+        typed_writer
+            .execute_batch(
+                "PRAGMA ignore_check_constraints=ON;
+                 INSERT INTO shards(
+                    id,schema_version,format_version,tokenizer_version,state,
+                    last_applied_inbox_id,record_count,size_bytes,created_at_us)
+                 VALUES('typed-size',1,'7',1,'local',0,0,'not-a-number',1)",
+            )
+            .expect("insert nonnumeric shard size");
+        let typed = PinnedSnapshot::open(&typed_path).expect("open typed checkpoint");
+        assert!(typed.temporary_bytes().is_err());
+
+        let denied_root = tempfile::tempdir().expect("denied checkpoint directory");
+        let (denied_path, _writer) = database(denied_root.path());
+        let denied = PinnedSnapshot::open(&denied_path).expect("open denied checkpoint");
+        denied
+            .source
+            .authorizer(Some(|context: AuthContext<'_>| {
+                if matches!(context.action, AuthAction::Select) {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .expect("install checkpoint authorizer");
+        assert!(denied.recovery_checkpoints().is_err());
+    }
+
+    #[test]
     fn small_backup_steps_finish_and_zero_deadline_never_publishes() {
         let root = tempfile::tempdir().expect("stepped backup directory");
         let (path, writer) = database(root.path());
@@ -492,5 +533,9 @@ mod tests {
                 .is_err()
         );
         assert!(!expired.exists());
+        assert!(backup_step_finished(StepResult::Done));
+        assert!(!backup_step_finished(StepResult::More));
+        assert!(!backup_step_finished(StepResult::Busy));
+        assert!(!backup_step_finished(StepResult::Locked));
     }
 }

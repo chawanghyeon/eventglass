@@ -26,6 +26,8 @@ pub struct AppState {
     pub cold: Option<crate::storage::cold::ColdStorage>,
     pub tokens: Arc<crate::search::tokens::TokenCodec>,
     pub disk_budget: crate::storage::budget::DiskBudget,
+    #[cfg(test)]
+    reject_alert_start: bool,
     _directory_lock: Arc<File>,
 }
 
@@ -95,6 +97,8 @@ impl AppState {
             ingest_stats: Arc::new(crate::operations::IngestStats::default()),
             tokens: Arc::new(crate::search::tokens::TokenCodec::new(token_key)),
             disk_budget,
+            #[cfg(test)]
+            reject_alert_start: false,
             _directory_lock: lock,
         })
     }
@@ -144,6 +148,8 @@ impl AppState {
                 self.disk_budget.clone(),
             ));
         }
+        #[cfg(test)]
+        anyhow::ensure!(!self.reject_alert_start, "injected alert startup failure");
         self.alerts = Some(crate::alerts::AlertCoordinator::start(
             self.db.clone(),
             indexer.clone(),
@@ -194,6 +200,16 @@ mod tests {
         app.alerts.as_ref().unwrap().shutdown().await?;
         app.indexer.as_ref().unwrap().shutdown().await?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn alert_start_failure_prevents_a_partially_started_core() {
+        let directory = tempfile::tempdir().expect("invalid webhook policy directory");
+        let mut app = AppState::open(config(directory.path().to_owned()))
+            .await
+            .expect("open application before policy validation");
+        app.reject_alert_start = true;
+        assert!(app.start_core().await.is_err());
     }
 
     #[cfg(not(feature = "s3"))]

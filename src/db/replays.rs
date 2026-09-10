@@ -600,4 +600,27 @@ mod tests {
         assert!(replay.partial);
         assert_eq!(replay.frustration.rage, 3);
     }
+
+    #[test]
+    fn associations_reject_a_non_text_feedback_payload() {
+        let (_directory, database) = database();
+        let replay = ReplaySummary {
+            project_id: "1".into(),
+            metadata: metadata(0),
+            segment_count: 1,
+            max_segment_id: 0,
+            recording_bytes: 1,
+            partial: false,
+            frustration: Frustration::default(),
+        };
+        let event_id = "f".repeat(32);
+        database
+            .execute(
+                "INSERT INTO feedback(project_id,event_id,replay_id,timestamp_ms,expires_at_us,payload)
+                 VALUES(1,?1,?2,0,10,x'80')",
+                params![event_id, replay.metadata.replay_id],
+            )
+            .expect("insert damaged feedback payload");
+        assert!(associations(&database, 1, &replay, 0).is_err());
+    }
 }

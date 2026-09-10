@@ -254,11 +254,14 @@ pub fn doctor_connection(db: &Connection, data_dir: &Path) -> Result<DoctorRepor
         if let Err(error) = crate::storage::replay::read(data_dir, &reference) {
             // Standalone CLI doctor can overlap the server's live retention sweep.
             // A removed reference is no longer a consistency obligation.
-            let referenced: bool = db.query_row(
-                "SELECT EXISTS(SELECT 1 FROM replay_segments WHERE blob_sha256=?1)",
-                [&reference.sha256],
-                |row| row.get(0),
-            )?;
+            let referenced = db
+                .query_row(
+                    "SELECT 1 FROM replay_segments WHERE blob_sha256=?1 LIMIT 1",
+                    [&reference.sha256],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
             if referenced {
                 return Err(error)
                     .with_context(|| format!("invalid Replay blob {}", reference.key));
@@ -390,6 +393,16 @@ mod tests {
         assert!(file_size(root.path()).is_err());
         assert!(optional_file_size(root.path()).is_err());
         assert!(file_size(&root.path().join("missing")).is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let closed = root.path().join("closed");
+            std::fs::create_dir(&closed)?;
+            std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000))?;
+            let result = optional_file_size(&closed.join("child"));
+            std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o700))?;
+            assert!(result.is_err());
+        }
         Ok(())
     }
 
@@ -430,6 +443,14 @@ mod tests {
         assert!(doctor_connection(&db, root.path()).is_err());
 
         let (root, db) = database();
+        db.execute(
+            "UPDATE runtime_state SET installation_id=x'80' WHERE singleton=1",
+            [],
+        )
+        .expect("damage installation identity type");
+        assert!(doctor_connection(&db, root.path()).is_err());
+
+        let (root, db) = database();
         active(&db, "active");
         assert!(doctor_connection(&db, root.path()).is_err());
 
@@ -452,6 +473,34 @@ mod tests {
         std::fs::remove_dir(&shard).expect("remove remote-only directory");
         db.execute("UPDATE shards SET state='unknown' WHERE id='active'", [])
             .expect("force unsupported state");
+        assert!(doctor_connection(&db, root.path()).is_err());
+    }
+
+    #[test]
+    fn doctor_rejects_a_still_referenced_missing_replay_blob() {
+        let (root, db) = database();
+        let replay_id = "a".repeat(32);
+        let hash = "0".repeat(64);
+        db.execute_batch(
+            "INSERT INTO projects(id,slug,name,created_at_us,updated_at_us)
+             VALUES(1,'replay','Replay',0,0)",
+        )
+        .expect("insert replay project");
+        db.execute(
+            "INSERT INTO replays(
+                project_id,replay_id,started_at_ms,finished_at_ms,expires_at_us,metadata,
+                segment_count,max_segment_id,recording_bytes)
+             VALUES(1,?1,0,1,10,'{}',1,0,1)",
+            [replay_id.as_str()],
+        )
+        .expect("insert replay");
+        db.execute(
+            "INSERT INTO replay_segments(
+                project_id,replay_id,segment_id,blob_sha256,blob_size,metadata_sha256)
+             VALUES(1,?1,0,?2,1,?3)",
+            rusqlite::params![replay_id, hash, "1".repeat(64)],
+        )
+        .expect("insert missing replay reference");
         assert!(doctor_connection(&db, root.path()).is_err());
     }
 

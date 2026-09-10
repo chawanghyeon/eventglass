@@ -1311,4 +1311,23 @@ mod tests {
         assert_eq!(delivery_state(&db).await?.0, "pending");
         Ok(())
     }
+
+    #[test]
+    fn poisoned_coordinator_task_list_still_signals_stop_on_drop() {
+        let (stop, _receiver) = tokio::sync::watch::channel(false);
+        let control = std::sync::Arc::new(CoordinatorControl {
+            stop,
+            joins: std::sync::Mutex::new(Vec::new()),
+        });
+        let poison = std::sync::Arc::clone(&control);
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = poison.joins.lock().expect("lock coordinator task list");
+                panic!("poison coordinator task list");
+            })
+            .join()
+            .is_err()
+        );
+        drop(control);
+    }
 }

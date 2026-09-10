@@ -87,6 +87,14 @@ pub fn recover_batch(
 
 /// Finalize the already committed native batch. No network or native work belongs in this call.
 pub fn finalize(db: &mut Connection, shard_id: &str, batch: PreparedBatch) -> Result<Boundary> {
+    let inbox_bytes = checked_sum_usize(
+        batch.chunks.iter().map(|chunk| chunk.bytes),
+        "Inbox byte total",
+    )?;
+    let inbox_records = checked_sum_usize(
+        batch.chunks.iter().map(|chunk| chunk.payload.records.len()),
+        "Inbox record total",
+    )?;
     let expected = expected_boundary(&batch)?;
     let tx = db.transaction()?;
     let current = applied(&tx)?;
@@ -110,14 +118,6 @@ pub fn finalize(db: &mut Connection, shard_id: &str, batch: PreparedBatch) -> Re
     }
 
     update_shard(&tx, shard_id, expected, &batch)?;
-    let inbox_bytes = checked_sum_usize(
-        batch.chunks.iter().map(|chunk| chunk.bytes),
-        "Inbox byte total",
-    )?;
-    let inbox_records = checked_sum_usize(
-        batch.chunks.iter().map(|chunk| chunk.payload.records.len()),
-        "Inbox record total",
-    )?;
     ensure!(
         tx.execute(
             "UPDATE runtime_state
@@ -960,6 +960,18 @@ mod tests {
         assert!(checked_usize_to_i64(usize::MAX, "fixture").is_err());
         assert_eq!(checked_sum_usize([1, 2, 3], "fixture").unwrap(), 6);
         assert!(checked_sum_usize([usize::MAX, 1], "fixture").is_err());
+        let mut overflowing = PreparedBatch {
+            chunks: vec![
+                chunk(record(RecordKind::Log)),
+                chunk(record(RecordKind::Log)),
+            ],
+            records: Vec::new(),
+            boundary: Boundary::default(),
+        };
+        overflowing.chunks[0].bytes = usize::MAX;
+        overflowing.chunks[1].bytes = 1;
+        let mut unused = Connection::open_in_memory().expect("overflow finalize database");
+        assert!(finalize(&mut unused, "unused", overflowing).is_err());
         assert!(build_batch(&database, Vec::new()).is_err());
         assert!(
             expected_boundary(&PreparedBatch {

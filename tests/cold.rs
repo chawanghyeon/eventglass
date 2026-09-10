@@ -390,5 +390,6 @@ async fn cold_hydration_is_single_flight_verified_and_atomic() -> Result<()> {
         .await?;
     assert!(cold.reclaim_for_ingest(&app.disk_budget).await.is_err());
     assert!(cold.ensure_local(&ids).await.is_err());
+    assert!(cold.evict_remote_verified(&ids[0]).await.is_err());
     Ok(())
 }

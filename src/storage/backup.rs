@@ -278,7 +278,7 @@ impl Drop for RemoveDirectory {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{
         model::Boundary,
@@ -294,7 +294,7 @@ mod tests {
     use std::{collections::BTreeMap, fs::File, sync::Mutex};
 
     #[derive(Default)]
-    struct MemoryStore(Mutex<BTreeMap<String, Vec<u8>>>);
+    pub(crate) struct MemoryStore(Mutex<BTreeMap<String, Vec<u8>>>);
 
     impl MemoryStore {
         fn put(&self, key: &str, bytes: Vec<u8>, absent: bool) -> Result<()> {

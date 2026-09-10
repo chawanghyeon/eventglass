@@ -204,6 +204,127 @@ async fn cataloged_missing_native_directory_never_reinitializes() -> Result<()> 
 }
 
 #[tokio::test]
+async fn startup_finalizes_a_native_commit_that_is_ahead_of_sqlite() -> Result<()> {
+    let (dir, app) = app().await?;
+    let records = sentry::normalize_store(
+        b"{\"event_id\":\"99999999999999999999999999999999\",\"message\":\"recover committed native batch\"}",
+        &ProjectContext {
+            project_id: 1,
+            slug: "test".into(),
+            public_key: "public".into(),
+            scrub_keys: vec![],
+        },
+        uuid::Uuid::new_v4(),
+        eventglass::model::now_us()?,
+        &Default::default(),
+    )?
+    .records;
+    app.db
+        .call(move |db| {
+            ingest::accept(
+                db,
+                IngestProject {
+                    id: 1,
+                    slug: "test".into(),
+                    public_key: "public".into(),
+                },
+                "native-ahead-recovery",
+                records,
+                &Default::default(),
+            )
+        })
+        .await?;
+    let batch = app
+        .db
+        .call(|db| eventglass::db::indexer::prepare(db, &Default::default()))
+        .await?
+        .expect("prepared native recovery batch");
+    let installation = app
+        .db
+        .call(|db| {
+            db.query_row(
+                "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(Into::into)
+        })
+        .await?;
+    let shard_id = uuid::Uuid::new_v4().to_string();
+    let catalog_id = shard_id.clone();
+    app.db
+        .call(move |db| {
+            eventglass::db::shards::adopt_initial(db, &catalog_id, Boundary::default(), 1)
+        })
+        .await?;
+    let path = dir.path().join("shards").join(&shard_id);
+    std::fs::create_dir_all(&path)?;
+    let mut native = ActiveShard::create(&path, &installation, &shard_id, Boundary::default())?;
+    native.publish(Boundary::default())?;
+    native.commit(&batch.records, batch.boundary)?;
+    drop(native);
+
+    let app = app.start_core().await?;
+    let indexer = app.indexer.as_ref().unwrap();
+    assert_eq!(indexer.snapshot()?.boundary, batch.boundary);
+    assert_eq!(indexer.snapshot()?.searcher.num_docs(), 1);
+    let durable = app
+        .db
+        .call(|db| {
+            Ok((
+                eventglass::db::indexer::applied(db)?,
+                db.query_row("SELECT count(*) FROM inbox", [], |row| row.get::<_, i64>(0))?,
+            ))
+        })
+        .await?;
+    assert_eq!(durable, (batch.boundary, 0));
+    indexer.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn runtime_database_failure_marks_the_indexer_unavailable() -> Result<()> {
+    let (_dir, app) = app().await?;
+    let remote_id = uuid::Uuid::new_v4().to_string();
+    app.db
+        .call(move |db| {
+            db.execute(
+                "INSERT INTO shards(
+                    id,schema_version,format_version,tokenizer_version,state,size_bytes,
+                    remote_archive_key,archive_sha256,recovery_checkpoint_id,created_at_us
+                 ) VALUES(?1,1,?2,1,'remote_only',1,'shards/remote.tar.gz',?3,'checkpoint',1)",
+                rusqlite::params![
+                    remote_id,
+                    eventglass::db::shards::FORMAT_VERSION,
+                    "0".repeat(64)
+                ],
+            )?;
+            Ok(())
+        })
+        .await?;
+    let app = app.start_core().await?;
+    let indexer = app.indexer.as_ref().unwrap();
+    app.db
+        .call(|db| {
+            db.execute_batch("DROP TABLE inbox")?;
+            Ok(())
+        })
+        .await?;
+    indexer.wake();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if indexer.snapshot().is_err() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    assert!(indexer.shutdown().await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
 async fn startup_finishes_manifested_seal_before_creating_the_next_active() -> Result<()> {
     let (dir, app) = app().await?;
     let installation = app

@@ -552,6 +552,35 @@ async fn related_records_use_the_signed_reference_and_report_the_strategy() -> a
             .records,
         );
     }
+    for (event_id, message, timestamp) in [
+        (
+            "44444444444444444444444444444444",
+            "request reference",
+            "2026-09-08T00:00:30Z",
+        ),
+        (
+            "55555555555555555555555555555555",
+            "request neighbor",
+            "2026-09-08T00:00:40Z",
+        ),
+    ] {
+        records.extend(
+            sentry::normalize_store(
+                &serde_json::to_vec(&json!({
+                    "event_id": event_id,
+                    "timestamp": timestamp,
+                    "message": message,
+                    "service": "api",
+                    "request_id": "request-a"
+                }))?,
+                &project,
+                uuid::Uuid::new_v4(),
+                received_at_us,
+                &Default::default(),
+            )?
+            .records,
+        );
+    }
     app.db
         .call(move |db| {
             ingest::accept(
@@ -578,7 +607,7 @@ async fn related_records_use_the_signed_reference_and_report_the_strategy() -> a
                 .unwrap()
                 .boundary
                 .ingest_seq
-                == 3
+                == 5
             {
                 break;
             }
@@ -611,6 +640,24 @@ async fn related_records_use_the_signed_reference_and_report_the_strategy() -> a
     assert_eq!(related["rows"][0]["message"], "trace neighbor");
     assert_ne!(related["rows"][0]["record_id"], reference["record_id"]);
     assert!(related["rows"][0]["detail_token"].is_string());
+    let request_reference = page["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["message"] == "request reference")
+        .unwrap();
+    let request_token = request_reference["detail_token"].as_str().unwrap();
+    let (status, request_related) = request(
+        &router,
+        "GET",
+        &format!("/api/records/{request_token}/related?window_seconds=3600"),
+        &cookie,
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{request_related}");
+    assert_eq!(request_related["strategy"], "request_id");
+    assert_eq!(request_related["rows"][0]["message"], "request neighbor");
     assert_eq!(
         request(
             &router,
