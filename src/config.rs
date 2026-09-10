@@ -108,6 +108,94 @@ impl Config {
 mod tests {
     use super::*;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct Environment {
+        original: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    }
+
+    impl Environment {
+        fn cleared(keys: &[&'static str]) -> Self {
+            let original = keys
+                .iter()
+                .map(|key| (*key, std::env::var_os(key)))
+                .collect();
+            for key in keys {
+                // SAFETY: this test serializes all mutations of these process variables.
+                unsafe { std::env::remove_var(key) };
+            }
+            Self { original }
+        }
+
+        fn set(&self, key: &'static str, value: &str) {
+            // SAFETY: this test serializes all mutations of these process variables.
+            unsafe { std::env::set_var(key, value) };
+        }
+
+        fn remove(&self, key: &'static str) {
+            // SAFETY: this test serializes all mutations of these process variables.
+            unsafe { std::env::remove_var(key) };
+        }
+    }
+
+    impl Drop for Environment {
+        fn drop(&mut self) {
+            for (key, value) in self.original.drain(..) {
+                // SAFETY: this test serializes all mutations of these process variables.
+                unsafe {
+                    if let Some(value) = value {
+                        std::env::set_var(key, value);
+                    } else {
+                        std::env::remove_var(key);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn environment_configuration_covers_defaults_overrides_and_parse_failures() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let environment = Environment::cleared(&[
+            "EVENTGLASS_ADDR",
+            "EVENTGLASS_DATA_DIR",
+            "EVENTGLASS_BASE_URL",
+            "EVENTGLASS_S3_URL",
+            "EVENTGLASS_S3_ENDPOINT",
+            "EVENTGLASS_S3_INITIALIZE",
+        ]);
+
+        let defaults = Config::from_env().unwrap();
+        assert_eq!(defaults.addr, "127.0.0.1:8080".parse().unwrap());
+        assert_eq!(defaults.data_dir, PathBuf::from("data"));
+        assert!(!defaults.s3_initialize);
+
+        environment.set("EVENTGLASS_ADDR", "127.0.0.1:9090");
+        environment.set("EVENTGLASS_DATA_DIR", "/tmp/eventglass-config-test");
+        environment.set("EVENTGLASS_BASE_URL", "https://eventglass.example.test");
+        environment.set("EVENTGLASS_S3_URL", "s3://bucket/prefix");
+        environment.set("EVENTGLASS_S3_ENDPOINT", "http://localhost:9000");
+        environment.set("EVENTGLASS_S3_INITIALIZE", "true");
+        let configured = Config::from_env().unwrap();
+        assert_eq!(configured.addr, "127.0.0.1:9090".parse().unwrap());
+        assert_eq!(
+            configured.data_dir,
+            PathBuf::from("/tmp/eventglass-config-test")
+        );
+        assert!(configured.s3_initialize);
+
+        environment.set("EVENTGLASS_ADDR", "invalid");
+        assert!(Config::from_env().is_err());
+        environment.set("EVENTGLASS_ADDR", "127.0.0.1:9090");
+        environment.set("EVENTGLASS_S3_ENDPOINT", "://invalid");
+        assert!(Config::from_env().is_err());
+        environment.remove("EVENTGLASS_S3_ENDPOINT");
+        environment.set("EVENTGLASS_S3_INITIALIZE", "sometimes");
+        assert!(Config::from_env().is_err());
+        environment.set("EVENTGLASS_S3_INITIALIZE", "0");
+        assert!(!Config::from_env().unwrap().s3_initialize);
+    }
+
     #[test]
     fn insecure_session_origins_are_limited_to_loopback() {
         for (origin, accepted) in [
