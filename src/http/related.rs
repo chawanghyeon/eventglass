@@ -110,50 +110,20 @@ pub(super) async fn related(
     .await?
     .ok_or(ApiError(StatusCode::NOT_FOUND, "record_not_found"))?;
     let seed = reference.correlation;
-    let (strategy, project_ids, filters, effective_window) = if let Some(trace_id) = seed.trace_id {
+    let (strategy, mut project_ids, filters, effective_window) =
+        correlation_strategy(&seed, project_id, window_seconds);
+    let delta_us = i64::from(effective_window).saturating_mul(1_000_000);
+    let start_us = seed.timestamp_us.saturating_sub(delta_us);
+    let end_us = seed.timestamp_us.saturating_add(delta_us).saturating_add(1);
+    if matches!(strategy, Strategy::Trace) {
         let all = state
             .app
             .db
             .call(move |db| authorization::capture(db, principal_id, Vec::new()))
             .await
             .map_err(scope_error)?;
-        (
-            Strategy::Trace,
-            all.projects,
-            vec![keyword(KeywordField::TraceId, trace_id)],
-            window_seconds,
-        )
-    } else if let Some(request_id) = seed.request_id {
-        (
-            Strategy::Request,
-            vec![project_id],
-            vec![keyword(KeywordField::RequestId, request_id)],
-            window_seconds,
-        )
-    } else if let Some(user_id) = seed.user_id {
-        (
-            Strategy::UserAndService,
-            vec![project_id],
-            vec![
-                keyword(KeywordField::Service, seed.service.clone()),
-                keyword(KeywordField::UserId, user_id),
-            ],
-            window_seconds,
-        )
-    } else {
-        (
-            Strategy::ServiceErrorProximity,
-            vec![project_id],
-            vec![
-                keyword(KeywordField::Service, seed.service.clone()),
-                keyword(KeywordField::Kind, "error".into()),
-            ],
-            30,
-        )
-    };
-    let delta_us = i64::from(effective_window).saturating_mul(1_000_000);
-    let start_us = seed.timestamp_us.saturating_sub(delta_us);
-    let end_us = seed.timestamp_us.saturating_add(delta_us).saturating_add(1);
+        project_ids = all.projects;
+    }
     let candidate_ids = state
         .app
         .db
@@ -270,5 +240,103 @@ fn keyword(field: KeywordField, value: String) -> TypedFilter {
     TypedFilter::KeywordAny {
         field,
         values: vec![value],
+    }
+}
+
+fn correlation_strategy(
+    seed: &crate::search::detail::CorrelationSeed,
+    project_id: i64,
+    window_seconds: u32,
+) -> (Strategy, Vec<i64>, Vec<TypedFilter>, u32) {
+    if let Some(trace_id) = &seed.trace_id {
+        (
+            Strategy::Trace,
+            Vec::new(),
+            vec![keyword(KeywordField::TraceId, trace_id.clone())],
+            window_seconds,
+        )
+    } else if let Some(request_id) = &seed.request_id {
+        (
+            Strategy::Request,
+            vec![project_id],
+            vec![keyword(KeywordField::RequestId, request_id.clone())],
+            window_seconds,
+        )
+    } else if let Some(user_id) = &seed.user_id {
+        (
+            Strategy::UserAndService,
+            vec![project_id],
+            vec![
+                keyword(KeywordField::Service, seed.service.clone()),
+                keyword(KeywordField::UserId, user_id.clone()),
+            ],
+            window_seconds,
+        )
+    } else {
+        (
+            Strategy::ServiceErrorProximity,
+            vec![project_id],
+            vec![
+                keyword(KeywordField::Service, seed.service.clone()),
+                keyword(KeywordField::Kind, "error".into()),
+            ],
+            30,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::search::detail::CorrelationSeed;
+
+    fn seed() -> CorrelationSeed {
+        CorrelationSeed {
+            project_id: 7,
+            ingest_seq: 9,
+            timestamp_us: 11,
+            service: "api".into(),
+            trace_id: None,
+            request_id: None,
+            user_id: None,
+        }
+    }
+
+    #[test]
+    fn correlation_strategy_prefers_exact_ids_and_bounds_fallback_scope() {
+        let mut value = seed();
+        value.trace_id = Some("trace".into());
+        let (strategy, projects, filters, window) = correlation_strategy(&value, 7, 600);
+        assert_eq!(strategy.name(), "trace_id");
+        assert!(strategy.exact());
+        assert!(projects.is_empty());
+        assert_eq!(filters.len(), 1);
+        assert_eq!(window, 600);
+
+        value.trace_id = None;
+        value.request_id = Some("request".into());
+        let (strategy, projects, filters, window) = correlation_strategy(&value, 7, 600);
+        assert_eq!(strategy.name(), "request_id");
+        assert!(strategy.exact());
+        assert_eq!(projects, [7]);
+        assert_eq!(filters.len(), 1);
+        assert_eq!(window, 600);
+
+        value.request_id = None;
+        value.user_id = Some("user".into());
+        let (strategy, projects, filters, window) = correlation_strategy(&value, 7, 600);
+        assert_eq!(strategy.name(), "project_service_user_time");
+        assert!(!strategy.exact());
+        assert_eq!(projects, [7]);
+        assert_eq!(filters.len(), 2);
+        assert_eq!(window, 600);
+
+        value.user_id = None;
+        let (strategy, projects, filters, window) = correlation_strategy(&value, 7, 600);
+        assert_eq!(strategy.name(), "project_service_error_time");
+        assert!(!strategy.exact());
+        assert_eq!(projects, [7]);
+        assert_eq!(filters.len(), 2);
+        assert_eq!(window, 30);
     }
 }
