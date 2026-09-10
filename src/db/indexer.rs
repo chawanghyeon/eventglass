@@ -853,3 +853,137 @@ fn update_shard(
 fn checked_usize_to_i64(value: usize, name: &str) -> Result<i64> {
     i64::try_from(value).with_context(|| format!("{name} exceeds SQLite integer range"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record(kind: RecordKind) -> Record {
+        let error = kind == RecordKind::Error;
+        Record {
+            record_id: "a".repeat(64),
+            kind,
+            project_id: 1,
+            source_event_id: error.then(|| "b".repeat(32)),
+            ingest_seq: 1,
+            received_at_us: 1,
+            timestamp_us: 1,
+            service: "service".into(),
+            environment: None,
+            release: None,
+            level: "error".into(),
+            logger: None,
+            message: "message".into(),
+            trace_id: None,
+            span_id: None,
+            request_id: None,
+            user_id: None,
+            user_email: None,
+            issue_id: error.then(|| "c".repeat(64)),
+            fingerprint_version: error.then_some(1),
+            fingerprint: error.then(|| "d".repeat(64)),
+            attributes: json!({}),
+            search_text: "message".into(),
+            raw_json: json!({}),
+            normalizer_version: 1,
+            indexing_warnings: Vec::new(),
+        }
+    }
+
+    fn chunk(record: Record) -> InboxChunk {
+        let payload = InboxPayload {
+            version: 1,
+            records: vec![record],
+        };
+        InboxChunk {
+            id: 1,
+            first_seq: 1,
+            last_seq: 1,
+            bytes: serde_json::to_vec(&payload)
+                .expect("serialize Indexer fixture")
+                .len(),
+            payload,
+        }
+    }
+
+    fn runtime_database() -> (tempfile::TempDir, Connection) {
+        let directory = tempfile::tempdir().expect("temporary Indexer database");
+        let database =
+            crate::db::open(&directory.path().join("meta.db")).expect("open Indexer database");
+        database
+            .execute(
+                "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+                 VALUES(1,'installation','generation',2)",
+                [],
+            )
+            .expect("seed Indexer runtime");
+        (directory, database)
+    }
+
+    #[test]
+    fn malformed_boundaries_and_budgets_fail_before_native_work() {
+        let database = Connection::open_in_memory().expect("open malformed boundary database");
+        database
+            .execute_batch(
+                "CREATE TABLE runtime_state(
+                     singleton INTEGER,last_applied_inbox_id BLOB,
+                     last_applied_ingest_seq INTEGER,next_ingest_seq INTEGER);
+                 INSERT INTO runtime_state VALUES(1,x'80',0,1);",
+            )
+            .expect("seed malformed applied boundary");
+        assert!(applied(&database).is_err());
+
+        let (_directory, database) = runtime_database();
+        let limits = Limits {
+            batch_records: i64::MAX as usize,
+            ..Limits::default()
+        };
+        assert!(prepare(&database, &limits).is_err());
+
+        let (_directory, database) = runtime_database();
+        database
+            .execute_batch("DROP TABLE inbox")
+            .expect("drop Inbox table");
+        assert!(prepare(&database, &Limits::default()).is_err());
+
+        assert!(checked_usize_to_i64(usize::MAX, "fixture").is_err());
+        assert!(build_batch(&database, Vec::new()).is_err());
+        assert!(
+            expected_boundary(&PreparedBatch {
+                chunks: Vec::new(),
+                records: Vec::new(),
+                boundary: Boundary::default(),
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn finalize_helpers_propagate_schema_and_cas_failures() {
+        let error = record(RecordKind::Error);
+        let batch = PreparedBatch {
+            chunks: vec![chunk(error.clone())],
+            records: vec![error.clone()],
+            boundary: Boundary {
+                inbox_id: 1,
+                ingest_seq: 1,
+            },
+        };
+        let database = Connection::open_in_memory().expect("open missing finalize schema");
+        assert!(select_unique_records(&database, &batch.chunks).is_err());
+        assert!(finalize_error(&database, "shard", &error, &mut 0).is_err());
+        assert!(enqueue_event_alerts(&database, "new_issue", &error, &mut 0).is_err());
+        assert!(update_shard(&database, "missing", Boundary::default(), &batch).is_err());
+
+        let mut invalid_error = error.clone();
+        invalid_error.issue_id = None;
+        assert!(validate_record(&invalid_error).is_err());
+        invalid_error.issue_id = Some("c".repeat(64));
+        invalid_error.fingerprint = None;
+        assert!(validate_record(&invalid_error).is_err());
+
+        let mut invalid_log = record(RecordKind::Log);
+        invalid_log.issue_id = Some("c".repeat(64));
+        assert!(validate_record(&invalid_log).is_err());
+    }
+}
