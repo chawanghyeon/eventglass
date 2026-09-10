@@ -117,7 +117,9 @@ mod tests {
             "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
              VALUES(1,'admin@example.test','x','admin',1,0,0);
              INSERT INTO projects(id,slug,name,is_active,created_at_us,updated_at_us)
-             VALUES(1,'one','One',1,0,0),(2,'two','Two',1,0,0)",
+             VALUES(1,'one','One',1,0,0),(2,'two','Two',1,0,0);
+             INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+             VALUES(1,'installation','generation',1)",
         )
         .expect("seed principals and projects");
         db.execute(
