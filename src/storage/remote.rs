@@ -1260,6 +1260,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn malformed_or_missing_control_objects_fail_closed_without_candidates() {
+        let installation_id = uuid::Uuid::new_v4().to_string();
+        let malformed = MemoryStore::default();
+        malformed
+            .objects
+            .lock()
+            .unwrap()
+            .insert("installation.json".into(), b"{".to_vec());
+        assert!(
+            ensure_installation(&malformed, &installation(&installation_id), false)
+                .await
+                .is_err()
+        );
+        assert!(read_installation(&malformed).await.is_err());
+        let root = tempfile::tempdir().expect("malformed control directory");
+        let candidate = candidate(root.path(), &installation_id).expect("local checkpoint");
+        assert!(publish(&malformed, &candidate).await.is_err());
+        assert!(
+            checkpoint_candidates(&malformed, &installation_id)
+                .await
+                .is_err()
+        );
+
+        let corrupt_checkpoint = MemoryStore::default();
+        corrupt_checkpoint.objects.lock().unwrap().extend([
+            (
+                "installation.json".into(),
+                serde_json::to_vec(&installation(&installation_id))
+                    .expect("installation serialization"),
+            ),
+            ("checkpoints/corrupt.json".into(), b"{".to_vec()),
+        ]);
+        assert!(
+            checkpoint_candidates(&corrupt_checkpoint, &installation_id)
+                .await
+                .expect("ignore corrupt checkpoint")
+                .is_empty()
+        );
+
+        let missing_checkpoint = MemoryStore::default();
+        missing_checkpoint.objects.lock().unwrap().insert(
+            "installation.json".into(),
+            serde_json::to_vec(&installation(&installation_id))
+                .expect("installation serialization"),
+        );
+        *missing_checkpoint.list_pages.lock().unwrap() = Some(vec![ObjectPage {
+            objects: vec![
+                ObjectMetadata {
+                    key: "installation.json".into(),
+                    size: 1,
+                    etag: None,
+                },
+                ObjectMetadata {
+                    key: "checkpoints/missing.json".into(),
+                    size: 1,
+                    etag: None,
+                },
+            ],
+            continuation: None,
+        }]);
+        assert!(
+            checkpoint_candidates(&missing_checkpoint, &installation_id)
+                .await
+                .expect("ignore missing checkpoint")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn restore_rejects_download_size_overflow_before_network_io() {
+        let root = tempfile::tempdir().expect("restore overflow directory");
+        let installation_id = uuid::Uuid::new_v4().to_string();
+        let mut candidate = candidate(root.path(), &installation_id).expect("local checkpoint");
+        candidate.document.snapshot.size = u64::MAX;
+        let attempt = root.path().join("attempt");
+        std::fs::create_dir(&attempt).expect("restore attempt");
+        let cancelled: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(|| false);
+        assert!(
+            restore_candidate(
+                &MemoryStore::default(),
+                &candidate.document,
+                &attempt,
+                RestoreLimits {
+                    snapshot_bytes: u64::MAX,
+                    shard_archive_bytes: u64::MAX,
+                    shard_expanded_bytes: u64::MAX,
+                    total_download_bytes: u64::MAX,
+                },
+                &cancelled,
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn checkpoint_is_published_only_after_every_data_object() -> Result<()> {
         let root = tempfile::tempdir()?;
         let installation_id = uuid::Uuid::new_v4().to_string();
@@ -1334,6 +1430,10 @@ mod tests {
         std::fs::create_dir(&data_dir)?;
         std::fs::create_dir(data_dir.join("shards"))?;
         std::fs::write(data_dir.join("shards/orphan"), b"old local state")?;
+        std::fs::create_dir(data_dir.join("replay-blobs"))?;
+        std::fs::write(data_dir.join("replay-blobs/orphan"), b"old replay state")?;
+        std::fs::write(data_dir.join("meta.db-wal"), b"old wal")?;
+        std::fs::write(data_dir.join("meta.db-shm"), b"old shm")?;
         let destination = data_dir.join(".prepared");
         let restored = prepare_restore(
             &store,

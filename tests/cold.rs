@@ -324,5 +324,23 @@ async fn cold_hydration_is_single_flight_verified_and_atomic() -> Result<()> {
     for id in corrupt_ids {
         assert!(cold.ensure_local(&[id]).await.is_err());
     }
+
+    let id = ids[0].clone();
+    app.db
+        .call(move |db| {
+            db.execute("UPDATE shards SET last_accessed_at_us=0 WHERE id=?1", [id])?;
+            Ok(())
+        })
+        .await?;
+    assert_eq!(cold.reclaim_for_ingest(&app.disk_budget).await?, 0);
+
+    app.db
+        .call(|db| {
+            db.execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE shards")?;
+            Ok(())
+        })
+        .await?;
+    assert!(cold.reclaim_for_ingest(&app.disk_budget).await.is_err());
+    assert!(cold.ensure_local(&ids).await.is_err());
     Ok(())
 }

@@ -409,4 +409,88 @@ mod tests {
             assert!(file_size(&loop_path).is_err());
         }
     }
+
+    #[test]
+    fn pinned_cut_rejects_damaged_runtime_catalog_and_numeric_sizes() {
+        for table in ["runtime_state", "shards"] {
+            let root = tempfile::tempdir().expect("damaged cut directory");
+            let (path, writer) = database(root.path());
+            writer
+                .execute_batch(&format!("PRAGMA foreign_keys=OFF; DROP TABLE {table}"))
+                .expect("damage checkpoint schema");
+            assert!(PinnedSnapshot::open(&path).is_err());
+        }
+
+        let root = tempfile::tempdir().expect("negative shard directory");
+        let (path, writer) = database(root.path());
+        writer
+            .execute_batch(
+                "PRAGMA ignore_check_constraints=ON;
+                 INSERT INTO shards(
+                    id,schema_version,format_version,tokenizer_version,state,
+                    last_applied_inbox_id,record_count,size_bytes,created_at_us)
+                 VALUES('negative',1,'7',1,'local',0,0,-1,1)",
+            )
+            .expect("negative shard size");
+        let snapshot = PinnedSnapshot::open(&path).expect("negative pinned cut");
+        assert!(snapshot.temporary_bytes().is_err());
+    }
+
+    #[test]
+    fn recovery_map_rejects_non_text_checkpoint_identity() {
+        let root = tempfile::tempdir().expect("checkpoint map directory");
+        let (path, writer) = database(root.path());
+        writer
+            .execute_batch(
+                "INSERT INTO shards(
+                    id,schema_version,format_version,tokenizer_version,state,
+                    last_applied_inbox_id,record_count,size_bytes,remote_archive_key,
+                    archive_sha256,recovery_checkpoint_id,created_at_us)
+                 VALUES('remote',1,'7',1,'remote_only',0,0,0,'archive','hash',x'80',1)",
+            )
+            .expect("non-text checkpoint identity");
+        let snapshot = PinnedSnapshot::open(&path).expect("pinned recovery map");
+        assert!(snapshot.recovery_checkpoints().is_err());
+    }
+
+    #[test]
+    fn small_backup_steps_finish_and_zero_deadline_never_publishes() {
+        let root = tempfile::tempdir().expect("stepped backup directory");
+        let (path, writer) = database(root.path());
+        writer
+            .execute(
+                "INSERT INTO settings(key,value_json,updated_at_us) VALUES('large',?1,0)",
+                ["x".repeat(512 * 1024)],
+            )
+            .expect("large stepped fixture");
+        let stepped = root.path().join("stepped.db");
+        PinnedSnapshot::open(&path)
+            .expect("stepped pinned snapshot")
+            .backup_to(
+                &stepped,
+                SnapshotLimits {
+                    pages_per_step: 1,
+                    ..SnapshotLimits::default()
+                },
+                || false,
+            )
+            .expect("stepped backup");
+        assert!(stepped.is_file());
+
+        let expired = root.path().join("expired.db");
+        assert!(
+            PinnedSnapshot::open(&path)
+                .expect("expired pinned snapshot")
+                .backup_to(
+                    &expired,
+                    SnapshotLimits {
+                        deadline: Duration::ZERO,
+                        ..SnapshotLimits::default()
+                    },
+                    || false,
+                )
+                .is_err()
+        );
+        assert!(!expired.exists());
+    }
 }
