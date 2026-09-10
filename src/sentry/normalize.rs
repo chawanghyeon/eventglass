@@ -101,6 +101,9 @@ impl<'a> RequestNormalizer<'a> {
         record.issue_id = None;
         record.fingerprint = None;
         record.fingerprint_version = None;
+        if !record.raw_json.get("level").is_some_and(Value::is_string) {
+            record.level = "info".to_owned();
+        }
         record.message = record
             .raw_json
             .get("transaction")
