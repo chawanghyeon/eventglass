@@ -156,26 +156,8 @@ pub struct WebhookPolicy {
 
 impl WebhookPolicy {
     pub fn from_env() -> Result<Self> {
-        let mut allowed_private_hosts = HashSet::new();
-        if let Ok(value) = std::env::var("EVENTGLASS_WEBHOOK_ALLOW_PRIVATE_HOSTS") {
-            for host in value
-                .split(',')
-                .map(str::trim)
-                .filter(|host| !host.is_empty())
-            {
-                let normalized = host.to_ascii_lowercase();
-                ensure!(
-                    normalized.len() <= 253
-                        && normalized.bytes().all(|byte| {
-                            byte.is_ascii_lowercase()
-                                || byte.is_ascii_digit()
-                                || matches!(byte, b'.' | b'-' | b':')
-                        }),
-                    "EVENTGLASS_WEBHOOK_ALLOW_PRIVATE_HOSTS contains an invalid host"
-                );
-                allowed_private_hosts.insert(normalized);
-            }
-        }
+        let value = std::env::var("EVENTGLASS_WEBHOOK_ALLOW_PRIVATE_HOSTS").ok();
+        let allowed_private_hosts = parse_allowed_private_hosts(value.as_deref())?;
         Ok(Self {
             allowed_private_hosts,
             allow_http_loopback: false,
@@ -220,6 +202,29 @@ impl WebhookPolicy {
         );
         Ok((url, host, addresses))
     }
+}
+
+fn parse_allowed_private_hosts(value: Option<&str>) -> Result<HashSet<String>> {
+    let mut hosts = HashSet::new();
+    for host in value
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+    {
+        let normalized = host.to_ascii_lowercase();
+        ensure!(
+            normalized.len() <= 253
+                && normalized.bytes().all(|byte| {
+                    byte.is_ascii_lowercase()
+                        || byte.is_ascii_digit()
+                        || matches!(byte, b'.' | b'-' | b':')
+                }),
+            "EVENTGLASS_WEBHOOK_ALLOW_PRIVATE_HOSTS contains an invalid host"
+        );
+        hosts.insert(normalized);
+    }
+    Ok(hosts)
 }
 
 fn is_public(ip: IpAddr) -> bool {
@@ -734,6 +739,195 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    async fn send_raw_response(response: Vec<u8>) -> Result<WebhookResponse> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let address = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 16 * 1024];
+            let _ = socket.read(&mut request).await.unwrap();
+            let _ = socket.write_all(&response).await;
+        });
+        let result = WebhookSender::local_test()
+            .send(
+                "bounded-response",
+                "{}",
+                &Destination::Webhook {
+                    url: format!("http://{address}/hook"),
+                },
+            )
+            .await;
+        server.await?;
+        result
+    }
+
+    fn threshold_condition(kind: &str) -> Condition {
+        let fields = (String::new(), 60, 1, 0, TimeBasis::ReceivedAt);
+        match kind {
+            "error" => Condition::ErrorCount {
+                query: fields.0,
+                window_seconds: fields.1,
+                threshold: fields.2,
+                cooldown_seconds: fields.3,
+                time_basis: fields.4,
+            },
+            "log" => Condition::LogCount {
+                query: fields.0,
+                window_seconds: fields.1,
+                threshold: fields.2,
+                cooldown_seconds: fields.3,
+                time_basis: fields.4,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn alert_configuration_validation_covers_every_condition_and_destination_boundary() {
+        assert_eq!(received_time(), TimeBasis::ReceivedAt);
+        for (condition, kind) in [
+            (Condition::NewIssue, "new_issue"),
+            (Condition::Regression, "regression"),
+            (threshold_condition("error"), "error_count"),
+            (threshold_condition("log"), "log_count"),
+        ] {
+            assert_eq!(condition.kind(), kind);
+            assert!(condition.validate().is_ok());
+        }
+
+        for condition in [
+            Condition::ErrorCount {
+                query: "(".into(),
+                window_seconds: 60,
+                threshold: 1,
+                cooldown_seconds: 0,
+                time_basis: TimeBasis::ReceivedAt,
+            },
+            Condition::ErrorCount {
+                query: "x".repeat(8 * 1024 + 1),
+                window_seconds: 60,
+                threshold: 1,
+                cooldown_seconds: 0,
+                time_basis: TimeBasis::ReceivedAt,
+            },
+            Condition::LogCount {
+                query: String::new(),
+                window_seconds: 59,
+                threshold: 1,
+                cooldown_seconds: 0,
+                time_basis: TimeBasis::Timestamp,
+            },
+            Condition::LogCount {
+                query: String::new(),
+                window_seconds: 60,
+                threshold: 0,
+                cooldown_seconds: 0,
+                time_basis: TimeBasis::Timestamp,
+            },
+            Condition::LogCount {
+                query: String::new(),
+                window_seconds: 60,
+                threshold: 1,
+                cooldown_seconds: 30 * 86_400 + 1,
+                time_basis: TimeBasis::Timestamp,
+            },
+        ] {
+            assert!(condition.validate().is_err());
+        }
+
+        let valid = Destination::Webhook {
+            url: "https://example.com/hook?tenant=one".into(),
+        };
+        assert!(valid.validate_syntax().is_ok());
+        for url in [
+            "http://example.com/hook",
+            "https://",
+            "https://user@example.com/hook",
+            "https://example.com/hook#fragment",
+        ] {
+            assert!(
+                Destination::Webhook { url: url.into() }
+                    .validate_syntax()
+                    .is_err(),
+                "{url}"
+            );
+        }
+
+        let mut configuration = Configuration {
+            name: "production errors".into(),
+            project_id: Some(1),
+            condition: threshold_condition("error"),
+            destination: valid,
+            enabled: true,
+        };
+        assert!(configuration.validate().is_ok());
+        configuration.name = " ".into();
+        assert!(configuration.validate().is_err());
+        configuration.name = "x".repeat(201);
+        assert!(configuration.validate().is_err());
+        configuration.name = "valid".into();
+        configuration.project_id = Some(0);
+        assert!(configuration.validate().is_err());
+    }
+
+    #[test]
+    fn private_host_allowlist_is_normalized_deduplicated_and_strict() {
+        assert!(parse_allowed_private_hosts(None).unwrap().is_empty());
+        let hosts = parse_allowed_private_hosts(Some(" LOCALHOST,localhost,::1 ")).unwrap();
+        assert_eq!(hosts, HashSet::from(["localhost".into(), "::1".into()]));
+        for invalid in ["bad host", "slash/name", &"x".repeat(254)] {
+            assert!(parse_allowed_private_hosts(Some(invalid)).is_err());
+        }
+    }
+
+    #[test]
+    fn delivery_payload_retry_status_and_retry_after_are_strict() {
+        let (destination, payload) = delivery_payload(
+            r#"{"destination":{"type":"webhook","url":"https://example.com/hook"},"message":"test"}"#,
+        )
+        .unwrap();
+        assert!(matches!(destination, Destination::Webhook { .. }));
+        assert_eq!(payload, r#"{"message":"test"}"#);
+        for invalid in [
+            "[]",
+            r#"{"message":"missing"}"#,
+            r#"{"destination":{"type":"email"}}"#,
+        ] {
+            assert!(delivery_payload(invalid).is_err());
+        }
+
+        for status in [408, 429, 500, 599] {
+            assert!(retryable_status(status));
+        }
+        for status in [200, 400, 499, 600] {
+            assert!(!retryable_status(status));
+        }
+        assert_eq!(parse_retry_after("2"), Some(Duration::from_secs(2)));
+        assert_eq!(parse_retry_after("9999"), Some(Duration::from_secs(3600)));
+        let future = httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(120));
+        assert!(parse_retry_after(&future).is_some());
+        let past = httpdate::fmt_http_date(SystemTime::UNIX_EPOCH);
+        assert_eq!(parse_retry_after(&past), None);
+        assert_eq!(parse_retry_after("not-a-date"), None);
+    }
+
+    #[tokio::test]
+    async fn webhook_resolution_rejects_forbidden_components_before_network_access() {
+        let policy = WebhookPolicy::local_test();
+        for url in [
+            "ftp://127.0.0.1/hook",
+            "http://user@127.0.0.1/hook",
+            "http://127.0.0.1/hook#fragment",
+            "http:///hook",
+        ] {
+            assert!(policy.resolve(url).await.is_err(), "{url}");
+        }
+        let (url, host, addresses) = policy.resolve("http://127.0.0.1:80/hook").await.unwrap();
+        assert_eq!(url.path(), "/hook");
+        assert_eq!(host, "127.0.0.1");
+        assert_eq!(addresses, vec!["127.0.0.1:80".parse().unwrap()]);
+    }
+
     #[test]
     fn reserved_networks_are_blocked_without_broad_standard_library_assumptions() {
         for address in [
@@ -743,13 +937,29 @@ mod tests {
             "127.0.0.1",
             "169.254.169.254",
             "172.16.0.1",
+            "192.0.0.1",
+            "192.0.2.1",
+            "192.88.99.1",
             "192.168.0.1",
             "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
             "224.0.0.1",
+            "255.255.255.255",
+            "::",
             "::1",
+            "::2",
+            "64:ff9b::1",
+            "100::1",
+            "2001::1",
             "fc00::1",
             "fe80::1",
+            "fec0::1",
+            "ff00::1",
             "2001:db8::1",
+            "2002::1",
+            "3ff0::1",
+            "5f00::1",
             "::ffff:127.0.0.1",
         ] {
             assert!(!is_public(address.parse().unwrap()), "{address}");
@@ -790,6 +1000,33 @@ mod tests {
         assert_eq!(response.status, 202);
         server.await?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn webhook_response_limits_and_retry_header_are_enforced() {
+        let response = send_raw_response(
+            b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 2\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status, 429);
+        assert_eq!(response.retry_after, Some(Duration::from_secs(2)));
+
+        assert!(
+            send_raw_response(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 65537\r\nConnection: close\r\n\r\n".to_vec()
+            )
+            .await
+            .is_err()
+        );
+
+        let mut chunked =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n10001\r\n"
+                .to_vec();
+        chunked.extend(std::iter::repeat_n(b'x', RESPONSE_LIMIT + 1));
+        chunked.extend_from_slice(b"\r\n0\r\n\r\n");
+        assert!(send_raw_response(chunked).await.is_err());
     }
 
     #[tokio::test]
