@@ -62,25 +62,34 @@ fn unavailable() -> ApiError {
 }
 fn metric(input: MetricInput, index: usize) -> ApiResult<MetricSpec> {
     let name = input.name.unwrap_or_else(|| format!("metric_{index}"));
-    if input.op == MetricOp::Count {
-        if input.field.is_some() {
-            return Err(invalid());
-        }
-        return Ok(MetricSpec::Count { name });
+    let numeric = |field: Option<String>| {
+        let field = field.ok_or_else(invalid)?;
+        let path = field
+            .strip_prefix("attributes.")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(invalid)?;
+        Ok::<_, ApiError>(NumericField::Json(path.to_owned()))
+    };
+    match input.op {
+        MetricOp::Count if input.field.is_none() => Ok(MetricSpec::Count { name }),
+        MetricOp::Count => Err(invalid()),
+        MetricOp::Sum => Ok(MetricSpec::Sum {
+            name,
+            field: numeric(input.field)?,
+        }),
+        MetricOp::Min => Ok(MetricSpec::Min {
+            name,
+            field: numeric(input.field)?,
+        }),
+        MetricOp::Max => Ok(MetricSpec::Max {
+            name,
+            field: numeric(input.field)?,
+        }),
+        MetricOp::Avg => Ok(MetricSpec::Avg {
+            name,
+            field: numeric(input.field)?,
+        }),
     }
-    let field = input.field.ok_or_else(invalid)?;
-    let path = field
-        .strip_prefix("attributes.")
-        .filter(|s| !s.is_empty())
-        .ok_or_else(invalid)?;
-    let field = NumericField::Json(path.to_owned());
-    Ok(match input.op {
-        MetricOp::Sum => MetricSpec::Sum { name, field },
-        MetricOp::Min => MetricSpec::Min { name, field },
-        MetricOp::Max => MetricSpec::Max { name, field },
-        MetricOp::Avg => MetricSpec::Avg { name, field },
-        MetricOp::Count => unreachable!(),
-    })
 }
 fn histogram(input: HistogramInput, start_us: i64, end_us: i64) -> ApiResult<HistogramSpec> {
     if input.field != "timestamp" || end_us <= start_us {

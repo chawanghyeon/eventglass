@@ -566,3 +566,36 @@ async fn aggregation_reuses_row_snapshot_and_auto_histogram_keeps_exact_count() 
     app.indexer.as_ref().unwrap().shutdown().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn aggregation_http_rejects_metric_group_and_limit_overflow_before_search()
+-> anyhow::Result<()> {
+    let (_dir, app, router, cookie) = fixture().await?;
+    let mut base = query();
+    base.as_object_mut().unwrap().remove("limit");
+    for mutation in [
+        json!({"metrics": (0..9).map(|_| json!({"op":"count"})).collect::<Vec<_>>() }),
+        json!({"group_by": ["service", "level", "environment"]}),
+        json!({"group_limit": 0}),
+        json!({"group_limit": 1001}),
+    ] {
+        let mut input = base.clone();
+        input.as_object_mut().unwrap().extend(
+            mutation
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        assert_eq!(
+            call(&router, "/api/explore/aggregate", &cookie, input)
+                .await?
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    app.replay_maintenance.as_ref().unwrap().shutdown().await?;
+    app.alerts.as_ref().unwrap().shutdown().await?;
+    app.indexer.as_ref().unwrap().shutdown().await?;
+    Ok(())
+}
