@@ -432,3 +432,34 @@ fn exact_detail_preserves_optional_correlation_fields() -> anyhow::Result<()> {
     assert_eq!(detail.correlation.user_id.as_deref(), Some("user-7"));
     Ok(())
 }
+
+#[test]
+fn exact_detail_rejects_duplicate_correlation_fields() -> anyhow::Result<()> {
+    for duplicated_field in ["trace_id", "request_id"] {
+        let row = record(8, 1, 100, "damaged detail");
+        let record_id = row.record_id.clone();
+        let directory = tempfile::tempdir()?;
+        let production_schema = schema::build();
+        let index = Index::create_in_dir(directory.path(), production_schema.clone())?;
+        let mut writer = index.writer_with_num_threads(1, 15_000_000)?;
+        let mut document = schema::document(&production_schema, &row)?;
+        document.add_text(
+            production_schema.get_field(duplicated_field)?,
+            "unexpected-duplicate",
+        );
+        writer.add_document(document)?;
+        writer.commit()?;
+        drop(writer);
+        let published = Published {
+            shard_id: "damaged".to_owned(),
+            boundary: eventglass::model::Boundary {
+                inbox_id: 1,
+                ingest_seq: 8,
+            },
+            searcher: index.reader()?.searcher(),
+        };
+
+        assert!(detail::load(&published, 1, &record_id, 8).is_err());
+    }
+    Ok(())
+}

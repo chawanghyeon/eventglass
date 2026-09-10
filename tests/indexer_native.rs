@@ -1,10 +1,40 @@
 use anyhow::Result;
 use eventglass::{
     model::Boundary,
-    search::active::ActiveShard,
+    search::{active::ActiveShard, schema},
     sentry::{self, ProjectContext},
 };
 use serde_json::json;
+use tantivy::Index;
+
+#[test]
+fn malformed_commit_payload_is_rejected_by_writer_and_orphan_recovery() -> Result<()> {
+    for orphan in [false, true] {
+        let directory = tempfile::tempdir()?;
+        let index = Index::create_in_dir(directory.path(), schema::build())?;
+        let mut writer: tantivy::IndexWriter<tantivy::TantivyDocument> =
+            index.writer_with_num_threads(1, 15_000_000)?;
+        let mut commit = writer.prepare_commit()?;
+        commit.set_payload("{");
+        commit.commit()?;
+        drop(writer);
+        let shard = uuid::Uuid::new_v4().to_string();
+        if orphan {
+            assert!(
+                eventglass::search::active::verify_empty_orphan(
+                    directory.path(),
+                    "installation",
+                    &shard,
+                    Boundary::default(),
+                )
+                .is_err()
+            );
+        } else {
+            assert!(ActiveShard::open(directory.path(), "installation", &shard).is_err());
+        }
+    }
+    Ok(())
+}
 
 #[test]
 fn native_commit_cannot_publish_before_matching_sqlite_boundary() -> Result<()> {

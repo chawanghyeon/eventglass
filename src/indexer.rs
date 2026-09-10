@@ -828,6 +828,11 @@ mod tests {
                 .is_empty()
         );
         assert!(indexer.search(&["missing".into()], &request).is_err());
+        assert!(
+            indexer
+                .search_live(&["missing".into()], &request, 0)
+                .is_err()
+        );
         let aggregate = AggregateRequest {
             query: String::new(),
             scope,

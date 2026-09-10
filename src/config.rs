@@ -81,12 +81,10 @@ impl Config {
             if self.s3_url.is_none() {
                 bail!("EVENTGLASS_S3_ENDPOINT requires EVENTGLASS_S3_URL");
             }
-            if endpoint.scheme() == "http" {
-                let local =
-                    is_loopback_host(endpoint.host().expect("validated S3 endpoint has a host"));
-                if !local {
-                    bail!("HTTP S3 endpoints are limited to loopback compatibility tests");
-                }
+            if endpoint.scheme() == "http"
+                && !is_loopback_host(endpoint.host().expect("validated S3 endpoint has a host"))
+            {
+                bail!("HTTP S3 endpoints are limited to loopback compatibility tests");
             }
         }
         if self.s3_initialize && self.s3_url.is_none() {

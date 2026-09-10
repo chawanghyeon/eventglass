@@ -454,6 +454,30 @@ mod tests {
             .expect("force unsupported state");
         assert!(doctor_connection(&db, root.path()).is_err());
     }
+
+    #[test]
+    fn doctor_accepts_a_checkpoint_bound_remote_only_shard_without_local_files() {
+        let (root, db) = database();
+        let id = uuid::Uuid::new_v4().to_string();
+        db.execute(
+            "INSERT INTO shards(
+                id,schema_version,format_version,tokenizer_version,state,
+                last_applied_inbox_id,record_count,size_bytes,remote_archive_key,
+                archive_sha256,recovery_checkpoint_id,created_at_us,sealed_at_us)
+             VALUES(?1,1,?2,1,'remote_only',0,0,0,?3,?4,?5,1,1)",
+            rusqlite::params![
+                id,
+                crate::db::shards::FORMAT_VERSION,
+                format!("shards/{id}.tar.gz"),
+                "0".repeat(64),
+                uuid::Uuid::new_v4().to_string()
+            ],
+        )
+        .expect("remote-only catalog row");
+        let report = doctor_connection(&db, root.path()).expect("remote-only doctor report");
+        assert_eq!(report.checked_local_shards, "0");
+        assert_eq!(report.checked_remote_only_shards, "1");
+    }
 }
 
 #[derive(Serialize)]
