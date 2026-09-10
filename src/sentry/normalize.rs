@@ -339,11 +339,8 @@ impl<'de> Visitor<'de> for LogItemsVisitor<'_, '_> {
         let mut ordinal = 0;
         loop {
             let mut nodes = 0;
-            let Some(value) = sequence.next_element_seed(super::json::BoundedValue::new(
-                &mut nodes,
-                self.captured_error,
-            ))?
-            else {
+            let seed = super::json::BoundedValue::new(&mut nodes, self.captured_error);
+            let Some(value) = sequence.next_element_seed(seed)? else {
                 break;
             };
             if let Err(error) = self.normalizer.log(value, self.item_ordinal, ordinal) {
@@ -963,6 +960,10 @@ mod tests {
             state.event(br#"{"level":"notice"}"#, 0, 0),
             Err(SentryError::Malformed("unsupported event or log level"))
         ));
+        assert!(matches!(
+            state.transaction(br#"{"event_id":1}"#, 0),
+            Err(SentryError::Malformed("event_id must be a string"))
+        ));
     }
 
     #[test]
@@ -983,10 +984,10 @@ mod tests {
         ];
         for payload in cases {
             let mut state = normalizer(&project, &limits);
+            let rendered = String::from_utf8_lossy(payload);
             assert!(
                 matches!(state.logs(payload, 0), Err(SentryError::Malformed(_))),
-                "payload was accepted: {}",
-                String::from_utf8_lossy(payload)
+                "payload was accepted: {rendered}"
             );
         }
     }
@@ -1071,6 +1072,7 @@ mod tests {
             "https://example.test/path?<query>"
         );
         assert_eq!(normalize_fingerprint_token("0x12345678"), "<addr>");
+        assert_eq!(normalize_fingerprint_token("0x1234"), "0x1234");
         assert_eq!(normalize_fingerprint_token("abcdef0123456789"), "<hex>");
         assert_eq!(normalize_fingerprint_token("123456"), "<id>");
         assert_eq!(

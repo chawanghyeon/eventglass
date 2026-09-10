@@ -376,5 +376,16 @@ mod transport_tests {
             ),
             Err(SentryError::Malformed("invalid feedback"))
         ));
+
+        let invalid_replay_id = br#"{"event_id":"00000000000000000000000000000000","contexts":{"feedback":{"message":"safe","replay_id":"bad"}}}"#;
+        let feedback = format!(
+            "{{}}\n{{\"type\":\"feedback\",\"length\":{}}}\n{}",
+            invalid_replay_id.len(),
+            std::str::from_utf8(invalid_replay_id).unwrap()
+        );
+        assert!(matches!(
+            normalize_envelope(feedback.as_bytes(), &project, Uuid::nil(), 0, &limits),
+            Err(SentryError::Malformed(_))
+        ));
     }
 }

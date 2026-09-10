@@ -473,21 +473,17 @@ fn native_request(
 fn native_metrics(metrics: &[MetricSpec]) -> Aggregations {
     let mut aggregations = Aggregations::default();
     for (index, metric) in metrics.iter().enumerate() {
-        let Some(field) = metric.field() else {
-            continue;
-        };
-        let field = field.native_name();
         let agg = match metric {
-            MetricSpec::Sum { .. } | MetricSpec::Avg { .. } => {
-                AggregationVariants::Stats(StatsAggregation::from_field_name(field))
+            MetricSpec::Count { .. } => continue,
+            MetricSpec::Sum { field, .. } | MetricSpec::Avg { field, .. } => {
+                AggregationVariants::Stats(StatsAggregation::from_field_name(field.native_name()))
             }
-            MetricSpec::Min { .. } => {
-                AggregationVariants::Min(MinAggregation::from_field_name(field))
+            MetricSpec::Min { field, .. } => {
+                AggregationVariants::Min(MinAggregation::from_field_name(field.native_name()))
             }
-            MetricSpec::Max { .. } => {
-                AggregationVariants::Max(MaxAggregation::from_field_name(field))
+            MetricSpec::Max { field, .. } => {
+                AggregationVariants::Max(MaxAggregation::from_field_name(field.native_name()))
             }
-            MetricSpec::Count { .. } => unreachable!("count has no native metric field"),
         };
         aggregations.insert(
             metric_name(index),
@@ -880,6 +876,39 @@ mod tests {
         assert!(errors[3].is_unprocessable());
         assert!(Error::source(&errors[6]).is_some());
         assert!(Error::source(&errors[0]).is_none());
+
+        let search = AggregateError::from(SearchError::InvalidQuery);
+        assert!(search.to_string().contains("invalid Tantivy query"));
+        assert!(Error::source(&search).is_some());
+
+        let bucket = AggregateError::from(TantivyError::AggregationError(
+            AggregationError::BucketLimitExceeded {
+                limit: 10,
+                current: 11,
+            },
+        ));
+        assert!(matches!(
+            bucket,
+            AggregateError::BucketLimitExceeded {
+                limit: 10,
+                current: 11
+            }
+        ));
+        let memory = AggregateError::from(TantivyError::AggregationError(
+            AggregationError::MemoryExceeded {
+                limit: tantivy::ByteCount::from(10u64),
+                current: tantivy::ByteCount::from(11u64),
+            },
+        ));
+        assert!(matches!(
+            memory,
+            AggregateError::MemoryLimitExceeded {
+                limit: 10,
+                current: 11
+            }
+        ));
+        let native = AggregateError::from(TantivyError::InvalidArgument("bad".into()));
+        assert!(matches!(native, AggregateError::Native(_)));
     }
 
     #[test]
@@ -977,5 +1006,33 @@ mod tests {
         assert!(histogram_key_us(&bucket(Key::F64(2.5))).is_err());
         assert!(histogram_key_us(&bucket(Key::U64(2))).is_err());
         assert!(histogram_key_us(&bucket(Key::I64(i64::MAX))).is_err());
+
+        let dimensions = [DimensionPlan::Group(GroupSpec {
+            field: GroupField::Service,
+            limit: 1,
+        })];
+        let mut inexact = AggregationResults::default();
+        inexact.0.insert(
+            bucket_name(0),
+            AggregationResult::BucketResult(BucketResult::Terms {
+                buckets: Vec::new(),
+                sum_other_doc_count: 1,
+                doc_count_error_upper_bound: None,
+            }),
+        );
+        assert!(matches!(
+            project_bucket_set(&inexact, &[], &dimensions, 0),
+            Err(AggregateError::InexactNativeResult)
+        ));
+
+        let mut wrong = AggregationResults::default();
+        wrong.0.insert(
+            bucket_name(0),
+            AggregationResult::MetricResult(NativeMetricResult::Max(SingleMetricResult::from(1.0))),
+        );
+        assert!(matches!(
+            project_bucket_set(&wrong, &[], &dimensions, 0),
+            Err(AggregateError::UnexpectedNativeResult)
+        ));
     }
 }

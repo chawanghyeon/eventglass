@@ -187,6 +187,9 @@ mod tests {
         environment.set("EVENTGLASS_ADDR", "invalid");
         assert!(Config::from_env().is_err());
         environment.set("EVENTGLASS_ADDR", "127.0.0.1:9090");
+        environment.set("EVENTGLASS_BASE_URL", "://invalid");
+        assert!(Config::from_env().is_err());
+        environment.set("EVENTGLASS_BASE_URL", "https://eventglass.example.test");
         environment.set("EVENTGLASS_S3_ENDPOINT", "://invalid");
         assert!(Config::from_env().is_err());
         environment.remove("EVENTGLASS_S3_ENDPOINT");
@@ -194,6 +197,30 @@ mod tests {
         assert!(Config::from_env().is_err());
         environment.set("EVENTGLASS_S3_INITIALIZE", "0");
         assert!(!Config::from_env().unwrap().s3_initialize);
+    }
+
+    #[test]
+    fn environment_guard_restores_a_preexisting_value() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let original = std::env::var_os("EVENTGLASS_DATA_DIR");
+        // SAFETY: this test serializes all mutations of this process variable.
+        unsafe { std::env::set_var("EVENTGLASS_DATA_DIR", "/tmp/original-eventglass-data") };
+        {
+            let _environment = Environment::cleared(&["EVENTGLASS_DATA_DIR"]);
+            assert!(std::env::var_os("EVENTGLASS_DATA_DIR").is_none());
+        }
+        assert_eq!(
+            std::env::var_os("EVENTGLASS_DATA_DIR").as_deref(),
+            Some(std::ffi::OsStr::new("/tmp/original-eventglass-data"))
+        );
+        // SAFETY: this test serializes all mutations of this process variable.
+        unsafe {
+            if let Some(value) = original {
+                std::env::set_var("EVENTGLASS_DATA_DIR", value);
+            } else {
+                std::env::remove_var("EVENTGLASS_DATA_DIR");
+            }
+        }
     }
 
     #[test]
@@ -254,6 +281,14 @@ mod tests {
         assert!(
             Config {
                 s3_endpoint: Some("http://127.0.0.1:9000".parse().unwrap()),
+                ..base.clone()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            Config {
+                s3_endpoint: Some("http://[::1]:9000".parse().unwrap()),
                 ..base.clone()
             }
             .validate()
