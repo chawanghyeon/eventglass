@@ -372,4 +372,36 @@ mod tests {
         assert_eq!(list_users(&db, 1).expect("list users").len(), 2);
         assert!(list_users(&db, 2).is_err());
     }
+
+    #[test]
+    fn authorization_queries_propagate_schema_and_row_failures() {
+        let database = Connection::open_in_memory().expect("open missing auth schema");
+        assert!(require_admin(&database, 1).is_err());
+
+        let mut database = Connection::open_in_memory().expect("open partial auth schema");
+        database
+            .execute_batch(
+                "CREATE TABLE users(id INTEGER,role TEXT,is_active INTEGER);
+                 INSERT INTO users VALUES(1,'admin',1);",
+            )
+            .expect("seed partial auth schema");
+        assert!(create_user(&mut database, 1, "new@example.test", "hash", "member", 1).is_err());
+
+        let mut database = Connection::open_in_memory().expect("open corrupt auth view");
+        database
+            .execute_batch(
+                "CREATE TABLE raw_users(
+                     id INTEGER,email TEXT,password_hash TEXT,payload TEXT,is_active INTEGER);
+                 CREATE VIEW users AS
+                     SELECT id,email,password_hash,json_extract(payload,'$.role') AS role,
+                            is_active,0 AS created_at_us,0 AS updated_at_us
+                     FROM raw_users;
+                 INSERT INTO raw_users VALUES
+                     (1,'actor@example.test','hash','{\"role\":\"admin\"}',1),
+                     (2,'target@example.test','hash','{\"role\":\"admin\"}',1),
+                     (3,'corrupt@example.test','hash','not-json',1);",
+            )
+            .expect("seed corrupt auth view");
+        assert!(update_user(&mut database, 1, 2, Some("member"), None, 1).is_err());
+    }
 }
