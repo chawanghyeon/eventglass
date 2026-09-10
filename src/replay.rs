@@ -1107,4 +1107,49 @@ mod tests {
         point.point(&serde_json::json!({"id": 1, "x": 1, "y": 1}), false, 1);
         assert!(point.truncated);
     }
+
+    #[test]
+    fn replay_analysis_handles_absent_and_saturated_optional_state() {
+        let mut analysis = Analysis::default();
+        analysis.resize(&serde_json::json!({"width": 0, "height": 100}), 0);
+        assert!(analysis.viewport.is_none());
+        analysis.resize(&serde_json::json!({"width": 100, "height": 100}), 1);
+        analysis.navigate("https://example.test/", 1, "load");
+        analysis.top_nodes.insert(1);
+        for point in [
+            serde_json::json!({"id": 1, "y": 1}),
+            serde_json::json!({"id": 1, "x": 1}),
+            serde_json::json!({"id": 1, "x": 100, "y": 1}),
+            serde_json::json!({"id": 1, "x": 1, "y": 100}),
+        ] {
+            analysis.point(&point, false, 2);
+        }
+        analysis.point(&serde_json::json!({"id": 1, "x": 20, "y": 20}), false, 2);
+        analysis.point(&serde_json::json!({"id": 1, "x": 20, "y": 20}), true, 2);
+        assert_eq!(analysis.pages["https://example.test/"].movement["4,4"], 1);
+        assert_eq!(analysis.pages["https://example.test/"].clicks["4,4"], 1);
+
+        let page = analysis.pages.get_mut("https://example.test/").unwrap();
+        page.depth_elements
+            .insert("0".into(), (0..50).map(|n| (n.to_string(), 1)).collect());
+        analysis.scroll_offset = Some(0.0);
+        analysis.event(&serde_json::json!({
+            "type": 5, "timestamp": 3, "data": {"tag": "breadcrumb", "payload": {
+                "category": "ui.click", "message": "new-at-cap"
+            }}
+        }));
+        assert!(
+            !analysis.pages["https://example.test/"].depth_elements["0"].contains_key("new-at-cap")
+        );
+
+        analysis.url = None;
+        analysis.pages.remove("https://example.test/");
+        analysis.journey.push(Visit {
+            url: "missing-page".into(),
+            started_at_ms: 4,
+            duration_ms: Some(1),
+        });
+        analysis.signals.push((100, Default::default()));
+        analysis.finish(5);
+    }
 }
