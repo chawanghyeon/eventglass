@@ -143,3 +143,58 @@ pub fn document(schema: &Schema, record: &Record) -> Result<TantivyDocument> {
     );
     Ok(doc)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record() -> Record {
+        Record {
+            record_id: "record".into(),
+            kind: RecordKind::Error,
+            project_id: 1,
+            source_event_id: None,
+            ingest_seq: 1,
+            received_at_us: 2,
+            timestamp_us: 1,
+            service: "api".into(),
+            environment: None,
+            release: None,
+            level: "error".into(),
+            logger: None,
+            message: "failed".into(),
+            trace_id: None,
+            span_id: None,
+            request_id: None,
+            user_id: None,
+            user_email: None,
+            issue_id: None,
+            fingerprint_version: None,
+            fingerprint: None,
+            attributes: serde_json::json!({}),
+            search_text: "failed".into(),
+            raw_json: serde_json::json!({}),
+            normalizer_version: 1,
+            indexing_warnings: vec![],
+        }
+    }
+
+    #[test]
+    fn document_rejects_invalid_identity_time_and_attribute_shapes() {
+        let schema = build();
+        assert!(document(&schema, &record()).is_ok());
+
+        let mut value = record();
+        value.project_id = 0;
+        assert!(document(&schema, &value).is_err());
+        let mut value = record();
+        value.timestamp_us = i64::MAX;
+        assert!(document(&schema, &value).is_err());
+        let mut value = record();
+        value.received_at_us = i64::MAX;
+        assert!(document(&schema, &value).is_err());
+        let mut value = record();
+        value.attributes = serde_json::json!([]);
+        assert!(document(&schema, &value).is_err());
+    }
+}

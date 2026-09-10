@@ -16,28 +16,7 @@ pub(crate) fn reclaim_interrupted_temporary_work(root: &std::path::Path) -> anyh
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
         let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        let single = [".backup-", ".restore-"].iter().any(|prefix| {
-            name.strip_prefix(prefix)
-                .and_then(|value| value.strip_suffix(".tmp"))
-                .is_some_and(|value| uuid::Uuid::parse_str(value).is_ok())
-        });
-        let double = [(".cold-", ".tar.gz"), (".evict-", ".tmp")]
-            .iter()
-            .any(|(prefix, suffix)| {
-                name.strip_prefix(prefix)
-                    .and_then(|value| value.strip_suffix(suffix))
-                    .is_some_and(|value| {
-                        value.is_ascii()
-                            && value.len() == 73
-                            && value.as_bytes()[36] == b'-'
-                            && uuid::Uuid::parse_str(&value[..36]).is_ok()
-                            && uuid::Uuid::parse_str(&value[37..]).is_ok()
-                    })
-            });
-        if !single && !double {
+        if !is_interrupted_name(name.to_str()) {
             continue;
         }
         let kind = entry.file_type()?;
@@ -52,6 +31,31 @@ pub(crate) fn reclaim_interrupted_temporary_work(root: &std::path::Path) -> anyh
     Ok(())
 }
 
+fn is_interrupted_name(name: Option<&str>) -> bool {
+    let Some(name) = name else {
+        return false;
+    };
+    let single = [".backup-", ".restore-"].iter().any(|prefix| {
+        name.strip_prefix(prefix)
+            .and_then(|value| value.strip_suffix(".tmp"))
+            .is_some_and(|value| uuid::Uuid::parse_str(value).is_ok())
+    });
+    let double = [(".cold-", ".tar.gz"), (".evict-", ".tmp")]
+        .iter()
+        .any(|(prefix, suffix)| {
+            name.strip_prefix(prefix)
+                .and_then(|value| value.strip_suffix(suffix))
+                .is_some_and(|value| {
+                    value.is_ascii()
+                        && value.len() == 73
+                        && value.as_bytes()[36] == b'-'
+                        && uuid::Uuid::parse_str(&value[..36]).is_ok()
+                        && uuid::Uuid::parse_str(&value[37..]).is_ok()
+                })
+        });
+    single || double
+}
+
 #[cfg(test)]
 mod cleanup_tests {
     #[test]
@@ -64,6 +68,8 @@ mod cleanup_tests {
         std::fs::write(backup.join("partial"), b"partial")?;
         let cold = root.path().join(format!(".cold-{id}-{id}.tar.gz"));
         std::fs::write(&cold, b"partial")?;
+        let restore_file = root.path().join(format!(".restore-{id}.tmp"));
+        std::fs::write(&restore_file, b"partial")?;
         let prepared = root.path().join(format!(".restore-{id}"));
         std::fs::create_dir(&prepared)?;
         let unknown = root.path().join(".backup-user-data.tmp");
@@ -71,8 +77,14 @@ mod cleanup_tests {
         super::reclaim_interrupted_temporary_work(root.path())?;
         assert!(!backup.exists());
         assert!(!cold.exists());
+        assert!(!restore_file.exists());
         assert!(prepared.exists());
         assert!(unknown.exists());
         Ok(())
+    }
+
+    #[test]
+    fn non_utf8_names_are_never_classified_as_interrupted_work() {
+        assert!(!super::is_interrupted_name(None));
     }
 }

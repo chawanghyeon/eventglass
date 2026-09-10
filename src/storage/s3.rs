@@ -410,6 +410,12 @@ mod tests {
             "checkpoints/1.json"
         );
         assert!(location.relative_key("other/checkpoints/1.json").is_err());
+        let root = S3Location::parse("s3://eventglass-prod")?;
+        assert_eq!(root.key("checkpoints/1.json")?, "checkpoints/1.json");
+        assert_eq!(
+            root.relative_key("checkpoints/1.json")?,
+            "checkpoints/1.json"
+        );
         for invalid in [
             "../escape",
             "/absolute",
