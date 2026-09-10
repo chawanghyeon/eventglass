@@ -315,3 +315,144 @@ pub fn set_status(
     tx.commit()?;
     Ok(issue)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, Connection, String) {
+        let directory = tempfile::tempdir().expect("temporary Issue database");
+        let database =
+            crate::db::open(&directory.path().join("meta.db")).expect("open Issue database");
+        let issue_id = "a".repeat(64);
+        database
+            .execute_batch(&format!(
+                "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
+                 VALUES(1,'admin@example.test','x','admin',1,0,0);
+                 INSERT INTO projects(id,slug,name,is_active,created_at_us,updated_at_us)
+                 VALUES(1,'project','Project',1,0,0);
+                 INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+                 VALUES(1,'installation','generation',2);
+                 INSERT INTO issues(id,project_id,fingerprint,fingerprint_version,title,level,status,
+                     first_seen_us,last_seen_us,occurrence_count,first_seen_ingest_seq,
+                     last_seen_ingest_seq,revision,created_at_us,updated_at_us)
+                 VALUES('{issue_id}',1,'fingerprint',1,'title','error','unresolved',1,1,1,1,1,0,1,1);
+                 INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                     last_applied_inbox_id,created_at_us)
+                 VALUES('shard',1,'format',1,'local',1,1);
+                 INSERT INTO issue_occurrences(event_key,project_id,issue_id,record_id,shard_id,
+                     ingest_seq,occurred_at_us)
+                 VALUES('event',1,'{issue_id}','record','shard',1,1);"
+            ))
+            .expect("seed Issue database");
+        (directory, database, issue_id)
+    }
+
+    fn kind(error: anyhow::Error) -> String {
+        error
+            .downcast_ref::<IssueDbError>()
+            .expect("Issue error kind")
+            .to_string()
+    }
+
+    #[test]
+    fn authorization_rows_and_status_updates_fail_closed() {
+        for error in [
+            IssueDbError::Forbidden,
+            IssueDbError::NotFound,
+            IssueDbError::StaleRevision,
+        ] {
+            assert!(!error.to_string().is_empty());
+        }
+        assert_eq!(IssueStatus::Unresolved.as_str(), "unresolved");
+        assert!(list(&fixture().1, 1, 1, None, None, 0, None).is_err());
+        assert!(occurrences(&fixture().1, 1, "missing", 0, None).is_err());
+
+        let (_directory, mut database, issue_id) = fixture();
+        assert_eq!(
+            kind(list(&database, 2, 1, None, None, 1, None).unwrap_err()),
+            "Forbidden"
+        );
+        assert_eq!(
+            kind(list(&database, 1, 2, None, None, 1, None).unwrap_err()),
+            "NotFound"
+        );
+        assert_eq!(kind(get(&database, 1, "missing").unwrap_err()), "NotFound");
+        assert_eq!(
+            kind(set_status(&mut database, 1, &issue_id, IssueStatus::Ignored, 1).unwrap_err()),
+            "StaleRevision"
+        );
+
+        database
+            .execute("UPDATE issues SET title=x'80' WHERE id=?1", [&issue_id])
+            .expect("corrupt fixture Issue title");
+        assert!(list(&database, 1, 1, None, None, 1, None).is_err());
+        database
+            .execute("UPDATE issues SET title='title' WHERE id=?1", [&issue_id])
+            .expect("restore fixture Issue title");
+        database
+            .execute(
+                "UPDATE issue_occurrences SET record_id=x'80' WHERE issue_id=?1",
+                [&issue_id],
+            )
+            .expect("corrupt fixture occurrence identity");
+        assert!(occurrences(&database, 1, &issue_id, 1, None).is_err());
+
+        let (_directory, mut database, issue_id) = fixture();
+        database
+            .execute_batch(
+                "CREATE TEMP TRIGGER ignore_issue_update BEFORE UPDATE ON issues
+                 BEGIN SELECT RAISE(IGNORE); END;",
+            )
+            .expect("install ignored-update fixture");
+        assert_eq!(
+            kind(set_status(&mut database, 1, &issue_id, IssueStatus::Ignored, 0).unwrap_err()),
+            "StaleRevision"
+        );
+    }
+
+    #[test]
+    fn damaged_issue_schema_is_never_treated_as_empty_data() {
+        let (_directory, database, issue_id) = fixture();
+        database
+            .execute_batch("DROP TABLE users;")
+            .expect("drop actor table");
+        assert!(get(&database, 1, &issue_id).is_err());
+
+        let (_directory, database, _issue_id) = fixture();
+        database
+            .execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE projects;")
+            .expect("drop project table");
+        assert!(list(&database, 1, 1, None, None, 1, None).is_err());
+
+        let (_directory, database, issue_id) = fixture();
+        database
+            .execute_batch("DROP TABLE issue_occurrences;")
+            .expect("drop occurrence table");
+        assert!(occurrences(&database, 1, &issue_id, 1, None).is_err());
+
+        let mut database = Connection::open_in_memory().expect("open malformed Issue database");
+        database
+            .execute_batch(
+                "CREATE TABLE users(id INTEGER,is_active INTEGER);
+                 CREATE TABLE projects(id INTEGER,is_active INTEGER);
+                 CREATE TABLE issues(id TEXT,project_id INTEGER,revision INTEGER);
+                 CREATE TABLE runtime_state(singleton INTEGER,next_ingest_seq INTEGER);
+                 INSERT INTO users VALUES(1,1);
+                 INSERT INTO projects VALUES(1,1);
+                 INSERT INTO issues VALUES('issue',1,0);
+                 INSERT INTO runtime_state VALUES(1,NULL);",
+            )
+            .expect("seed malformed runtime boundary");
+        assert!(set_status(&mut database, 1, "issue", IssueStatus::Resolved, 0).is_err());
+
+        let (_directory, mut database, issue_id) = fixture();
+        database
+            .execute_batch(
+                "CREATE TEMP TRIGGER fail_issue_update BEFORE UPDATE ON issues
+                 BEGIN SELECT RAISE(FAIL, 'damaged'); END;",
+            )
+            .expect("install failed-update fixture");
+        assert!(set_status(&mut database, 1, &issue_id, IssueStatus::Ignored, 0).is_err());
+    }
+}
