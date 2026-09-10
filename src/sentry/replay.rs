@@ -290,3 +290,158 @@ pub fn frustration(event: &Value) -> Frustration {
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
+
+    const ID: &str = "0123456789abcdef0123456789abcdef"; // pragma: allowlist secret -- event ID fixture
+
+    fn item(kind: &str, payload: &[u8]) -> Vec<u8> {
+        let mut out =
+            format!("{{\"type\":\"{kind}\",\"length\":{}}}\n", payload.len()).into_bytes();
+        out.extend_from_slice(payload);
+        out.push(b'\n');
+        out
+    }
+
+    fn envelope(header: Value, items: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = serde_json::to_vec(&header).unwrap();
+        out.push(b'\n');
+        for item in items {
+            out.extend_from_slice(item);
+        }
+        out
+    }
+
+    fn metadata() -> Value {
+        serde_json::json!({
+            "replay_id": ID,
+            "segment_id": 1,
+            "replay_start_timestamp": 1.0,
+            "timestamp": 2.0
+        })
+    }
+
+    fn recording(bytes: &[u8]) -> Vec<u8> {
+        let mut out = b"{\"segment_id\":1}\n".to_vec();
+        out.extend_from_slice(bytes);
+        out
+    }
+
+    #[test]
+    fn replay_pair_cardinality_and_identity_fail_closed() {
+        let metadata = serde_json::to_vec(&metadata()).unwrap();
+        let recording = recording(b"[]");
+        let duplicate = envelope(
+            serde_json::json!({}),
+            &[
+                item("replay_event", &metadata),
+                item("replay_event", &metadata),
+            ],
+        );
+        assert!(matches!(
+            decode_envelope(&duplicate, &[]),
+            Err(SentryError::Malformed(_))
+        ));
+
+        let partial = envelope(serde_json::json!({}), &[item("replay_event", &metadata)]);
+        assert!(matches!(
+            decode_envelope(&partial, &[]),
+            Err(SentryError::Malformed(_))
+        ));
+        let mismatch = envelope(
+            serde_json::json!({"event_id":"ffffffffffffffffffffffffffffffff"}),
+            &[
+                item("replay_event", &metadata),
+                item("replay_recording", &recording),
+            ],
+        );
+        assert!(matches!(
+            decode_envelope(&mismatch, &[]),
+            Err(SentryError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn compressed_recording_rejects_trailing_data() {
+        let metadata = serde_json::to_vec(&metadata()).unwrap();
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(b"[]").unwrap();
+        let mut compressed = encoder.finish().unwrap();
+        compressed.extend_from_slice(b"trailing");
+        let recording = recording(&compressed);
+        let input = envelope(
+            serde_json::json!({}),
+            &[
+                item("replay_event", &metadata),
+                item("replay_recording", &recording),
+            ],
+        );
+        assert!(matches!(
+            decode_envelope(&input, &[]),
+            Err(SentryError::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn recording_shape_and_metadata_ranges_are_bounded() {
+        let oversized = vec![b' '; MAX_RECORDING_BYTES + 1];
+        assert!(matches!(
+            recording_events(&oversized),
+            Err(SentryError::TooLarge(_))
+        ));
+        assert!(matches!(
+            recording_events(b"{}"),
+            Err(SentryError::Malformed(_))
+        ));
+        for invalid in [
+            serde_json::json!([1]),
+            serde_json::json!([{"type":1,"timestamp":1,"data":null}]),
+            serde_json::json!([{"type":"1","timestamp":1,"data":{}}]),
+            serde_json::json!([{"type":1,"timestamp":"1","data":{}}]),
+        ] {
+            assert!(matches!(
+                recording_events(&serde_json::to_vec(&invalid).unwrap()),
+                Err(SentryError::Malformed(_))
+            ));
+        }
+
+        let mut value = metadata();
+        value["event_id"] = Value::String("ffffffffffffffffffffffffffffffff".into());
+        assert!(metadata_from_value(&value).is_err());
+        let mut value = metadata();
+        value["timestamp"] = serde_json::json!(86_403.0);
+        assert!(metadata_from_value(&value).is_err());
+        let mut value = metadata();
+        value["error_ids"] = serde_json::json!("wrong");
+        assert!(metadata_from_value(&value).is_err());
+        let mut value = metadata();
+        value["urls"] = serde_json::json!("wrong");
+        assert!(metadata_from_value(&value).is_err());
+        let mut value = metadata();
+        value["urls"] = serde_json::json!(["x".repeat(4097)]);
+        assert!(metadata_from_value(&value).is_err());
+    }
+
+    #[test]
+    fn timestamp_parsing_supports_rfc3339_and_rejects_invalid_ranges() {
+        assert_eq!(
+            seconds_ms(&serde_json::json!("1970-01-01T00:00:01Z")),
+            Some(1000)
+        );
+        assert_eq!(seconds_ms(&serde_json::json!("invalid")), None);
+        assert_eq!(seconds_ms(&serde_json::json!(-1.0)), None);
+        assert_eq!(finite_ms(f64::NAN), None);
+        assert_eq!(finite_ms(-1.0), None);
+        assert_eq!(
+            event_timestamp_ms(&serde_json::json!({
+                "type": 5,
+                "data": {"tag":"performanceSpan","payload":{"startTimestamp":"1970-01-01T00:00:02Z"}}
+            })),
+            Some(2000)
+        );
+    }
+}

@@ -701,3 +701,224 @@ fn add_frustration(
     total.rage += value.rage;
     total.multi += value.multi;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn example(kind: &str, key: usize) -> ReplayExample {
+        ReplayExample {
+            kind: kind.into(),
+            key: key.to_string(),
+            timestamp_ms: key as i64,
+            replay_id: String::new(),
+        }
+    }
+
+    #[test]
+    fn example_capacity_preserves_actionable_signals() {
+        let mut page = PageActivity::default();
+        for key in 0..MAX_EXAMPLES {
+            page.insert_example(example("movement", key));
+        }
+        page.insert_example(example("element", MAX_EXAMPLES));
+        assert_eq!(page.examples.len(), MAX_EXAMPLES);
+        assert_eq!(page.examples.last().unwrap().kind, "element");
+        page.insert_example(example("element", MAX_EXAMPLES));
+        assert_eq!(page.examples.len(), MAX_EXAMPLES);
+
+        let mut clicks = PageActivity::default();
+        for key in 0..MAX_EXAMPLES {
+            clicks.insert_example(example("clicks", key));
+        }
+        clicks.insert_example(example("frustration", MAX_EXAMPLES));
+        assert_eq!(clicks.examples.last().unwrap().kind, "frustration");
+        clicks.insert_example(example("movement", MAX_EXAMPLES + 1));
+        assert_eq!(clicks.examples.len(), MAX_EXAMPLES);
+    }
+
+    #[test]
+    fn navigation_viewports_and_points_cover_rejection_boundaries() {
+        let mut analysis = Analysis::default();
+        analysis.event(&serde_json::json!({"type": 1, "data": {}}));
+        analysis.navigate("javascript:alert(1)", 0, "invalid");
+        assert!(analysis.journey.is_empty());
+
+        analysis.resize(&serde_json::json!({"width": 375, "height": 800}), 1);
+        analysis.navigate(
+            "https://user:pass@example.test/a?q=secret#fragment", // pragma: allowlist secret -- parser fixture
+            2,
+            "load",
+        );
+        analysis.navigate("https://example.test/a", 3, "duplicate");
+        analysis.resize(&serde_json::json!({"width": 1024, "height": 800}), 4);
+        assert_eq!(analysis.viewport_class, ViewportClass::Mixed);
+        for time in 5..140 {
+            analysis.resize(&serde_json::json!({"width": 1024, "height": 800}), time);
+        }
+        assert_eq!(analysis.viewport_history.len(), 128);
+
+        analysis.top_nodes.insert(1);
+        analysis.point(&serde_json::json!({"id": 2, "x": 1, "y": 1}), false, 10);
+        let saved = std::mem::take(&mut analysis.viewport_history);
+        analysis.point(&serde_json::json!({"id": 1, "x": 1, "y": 1}), false, 10);
+        analysis.viewport_history = saved;
+        analysis.point(&serde_json::json!({"id": 1}), false, 10);
+        analysis.point(&serde_json::json!({"id": 1, "x": -1, "y": 1}), false, 10);
+        analysis.journey.clear();
+        analysis.point(&serde_json::json!({"id": 1, "x": 1, "y": 1}), false, 10);
+    }
+
+    #[test]
+    fn page_timeline_and_node_caps_fail_closed() {
+        let mut analysis = Analysis {
+            url: Some("https://overflow.test/".into()),
+            ..Analysis::default()
+        };
+        for key in 0..MAX_PAGES {
+            analysis
+                .pages
+                .insert(key.to_string(), PageActivity::default());
+        }
+        assert!(analysis.page().is_none());
+        assert!(analysis.truncated);
+
+        analysis.truncated = false;
+        analysis.timeline = (0..MAX_TIMELINE)
+            .map(|time| TimelineEvent {
+                timestamp_ms: time as i64,
+                kind: String::new(),
+                label: String::new(),
+                url: None,
+                duration_ms: None,
+                event_id: None,
+                trace_id: None,
+                span_id: None,
+            })
+            .collect();
+        analysis.push(0, "overflow", String::new(), None, None);
+        assert!(analysis.truncated);
+
+        let mut nodes = (0..200_000).collect::<HashSet<_>>();
+        collect_top_nodes(
+            &serde_json::json!({"id": 200001, "type": 1}),
+            None,
+            &mut nodes,
+        );
+        assert_eq!(nodes.len(), 200_000);
+        collect_top_nodes(
+            &serde_json::json!({"id": 1, "type": 0}),
+            Some(2),
+            &mut HashSet::new(),
+        );
+    }
+
+    #[test]
+    fn finish_assigns_journeys_signals_and_aggregate_caps() {
+        let first = "https://one.test/".to_owned();
+        let second = "https://two.test/".to_owned();
+        let mut analysis = Analysis {
+            url: Some(second.clone()),
+            ..Analysis::default()
+        };
+        analysis
+            .pages
+            .insert(first.clone(), PageActivity::default());
+        analysis
+            .pages
+            .insert(second.clone(), PageActivity::default());
+        analysis.journey.push(Visit {
+            url: first.clone(),
+            started_at_ms: 1,
+            duration_ms: Some(4),
+        });
+        analysis.journey.push(Visit {
+            url: second.clone(),
+            started_at_ms: 5,
+            duration_ms: None,
+        });
+        analysis.signals.push((
+            2,
+            crate::sentry::replay::Frustration {
+                slow: 1,
+                dead: 1,
+                rage: 1,
+                multi: 1,
+            },
+        ));
+        analysis.finish(10);
+        assert_eq!(analysis.pages[&first].next_pages[&second], 1);
+        assert_eq!(analysis.pages[&second].previous_pages[&first], 1);
+        assert_eq!(analysis.pages[&first].frustration.rage, 1);
+        assert_eq!(analysis.pages[&second].last_observed_replays, 1);
+
+        let mut maps = PageMaps::default();
+        for key in 0..MAX_PAGES {
+            maps.pages.insert(key.to_string(), PageActivity::default());
+        }
+        let mut extra = Analysis::default();
+        extra
+            .pages
+            .insert("overflow".into(), PageActivity::default());
+        maps.include(extra);
+        assert!(maps.truncated);
+
+        let mut maps = PageMaps::default();
+        let total = PageActivity {
+            clicks: (0..1000).map(|key| (key.to_string(), 1)).collect(),
+            ..PageActivity::default()
+        };
+        maps.pages.insert("page".into(), total);
+        let mut extra = Analysis::default();
+        let mut page = PageActivity::default();
+        page.clicks.insert("overflow".into(), 1);
+        extra.pages.insert("page".into(), page);
+        maps.include(extra);
+        assert!(maps.truncated);
+    }
+
+    #[test]
+    fn analyze_honors_deadline_byte_budget_and_segment_gaps() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let blob = crate::storage::replay::write(directory.path(), b"[]")?;
+        let segment = crate::db::replays::SegmentReference {
+            segment_id: 2,
+            blob: blob.clone(),
+        };
+        let mut budget = ReadBudget::default();
+        let analysis = analyze(directory.path(), vec![segment.clone()], 10, &mut budget)?;
+        assert_eq!(analysis.gaps, vec![2]);
+
+        let mut budget = ReadBudget {
+            remaining_bytes: 0,
+            deadline: std::time::Instant::now() + std::time::Duration::from_secs(1),
+        };
+        assert!(analyze(directory.path(), vec![segment.clone()], 10, &mut budget)?.truncated);
+        let mut budget = ReadBudget {
+            remaining_bytes: usize::MAX,
+            deadline: std::time::Instant::now() - std::time::Duration::from_secs(1),
+        };
+        assert!(analyze(directory.path(), vec![segment], 10, &mut budget)?.truncated);
+        Ok(())
+    }
+
+    #[test]
+    fn page_map_merges_examples_ids_depth_and_scroll_counts() {
+        let mut maps = PageMaps::default();
+        let mut first = Analysis::default();
+        let mut page = PageActivity::default();
+        page.examples.push(example("element", 1));
+        page.replay_ids = vec!["one".into(), "two".into(), "three".into(), "four".into()];
+        page.depth_elements
+            .entry("1".into())
+            .or_default()
+            .insert("button".into(), 2);
+        page.scroll_reach_replays.insert("1".into(), 1);
+        first.pages.insert("page".into(), page);
+        maps.include(first);
+        assert_eq!(maps.pages["page"].examples.len(), 1);
+        assert_eq!(maps.pages["page"].replay_ids.len(), 3);
+        assert_eq!(maps.pages["page"].depth_elements["1"]["button"], 2);
+        assert_eq!(maps.pages["page"].scroll_reach_replays["1"], 1);
+    }
+}
