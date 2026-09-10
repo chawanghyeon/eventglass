@@ -122,3 +122,25 @@ fn canonical_digest(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn occurrence_lookup_errors_and_digest_validation_fail_closed() {
+        let missing = map_lookup_error(anyhow::Error::from(IssueDetailError::NotFound));
+        assert_eq!(missing.0, StatusCode::NOT_FOUND);
+        assert_eq!(missing.1, "issue_occurrence_not_found");
+        let corrupt = map_lookup_error(anyhow::Error::from(IssueDetailError::Corrupt));
+        assert_eq!(corrupt.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(corrupt.1, "search_unavailable");
+        let internal = map_lookup_error(anyhow::anyhow!("private detail"));
+        assert_eq!(internal.0, StatusCode::SERVICE_UNAVAILABLE);
+
+        assert!(canonical_digest(&"0".repeat(64)));
+        assert!(canonical_digest(&"f".repeat(64)));
+        assert!(!canonical_digest(&"F".repeat(64)));
+        assert!(!canonical_digest("short"));
+    }
+}

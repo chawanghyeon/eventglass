@@ -223,3 +223,64 @@ pub(super) async fn update_issue(
         .map_err(map_issue_error)?;
     Ok(Json(issue))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issue_query_helpers_reject_every_invalid_public_shape() {
+        for (error, status, code) in [
+            (
+                IssueDbError::Forbidden,
+                StatusCode::FORBIDDEN,
+                "issue_access_denied",
+            ),
+            (
+                IssueDbError::NotFound,
+                StatusCode::NOT_FOUND,
+                "issue_not_found",
+            ),
+            (
+                IssueDbError::StaleRevision,
+                StatusCode::CONFLICT,
+                "issue_revision_conflict",
+            ),
+        ] {
+            let mapped = map_issue_error(anyhow::Error::from(error));
+            assert_eq!(mapped.0, status);
+            assert_eq!(mapped.1, code);
+        }
+        let internal = map_issue_error(anyhow::anyhow!("private detail"));
+        assert_eq!(internal.0, StatusCode::SERVICE_UNAVAILABLE);
+
+        assert_eq!(decimal_i64("1"), Some(1));
+        assert_eq!(decimal_i64(""), None);
+        assert_eq!(decimal_i64("-1"), None);
+        assert_eq!(decimal_i64("9223372036854775808"), None);
+        assert_eq!(signed_decimal_i64("-1"), Some(-1));
+        assert_eq!(signed_decimal_i64("-"), None);
+        assert_eq!(signed_decimal_i64("+1"), None);
+        assert_eq!(signed_decimal_i64("9223372036854775808"), None);
+
+        assert_eq!(project_id("1").expect("valid project"), 1);
+        assert!(project_id("0").is_err());
+        assert!(project_id("invalid").is_err());
+        assert!(issue_id(&"a".repeat(64)).is_ok());
+        assert!(issue_id(&"A".repeat(64)).is_err());
+        assert!(issue_id("short").is_err());
+
+        assert_eq!(page_limit(None).expect("default limit"), DEFAULT_PAGE_LIMIT);
+        assert_eq!(page_limit(Some(1)).expect("minimum limit"), 1);
+        assert_eq!(
+            page_limit(Some(MAX_PAGE_LIMIT)).expect("maximum limit"),
+            100
+        );
+        assert!(page_limit(Some(0)).is_err());
+        assert!(page_limit(Some(MAX_PAGE_LIMIT + 1)).is_err());
+        for value in [None, Some("unresolved"), Some("resolved"), Some("ignored")] {
+            assert_eq!(status(value).expect("supported status"), value);
+        }
+        assert!(status(Some("unknown")).is_err());
+    }
+}

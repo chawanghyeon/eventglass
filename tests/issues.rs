@@ -133,6 +133,36 @@ async fn create_member(fixture: &Fixture, admin: &Session) -> anyhow::Result<Ses
     login(fixture, "member@example.test").await
 }
 
+#[tokio::test]
+async fn issue_http_rejects_partial_cursors_and_unknown_mutation_status() -> anyhow::Result<()> {
+    let fixture = fixture().await?;
+    let admin = setup(&fixture).await?;
+    let id = digest('a');
+    for path in [
+        format!("/api/issues?project_id=1&cursor_id={id}"),
+        format!("/api/issues/{id}/events?cursor_ingest_seq=1"),
+    ] {
+        let response = fixture
+            .router
+            .clone()
+            .oneshot(request("GET", &path, Value::Null, Some(&admin)))
+            .await?;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let response = fixture
+        .router
+        .clone()
+        .oneshot(request(
+            "PATCH",
+            &format!("/api/issues/{id}"),
+            json!({"status":"unknown","expected_revision":"0"}),
+            Some(&admin),
+        ))
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    Ok(())
+}
+
 #[derive(Clone)]
 struct SeedIssue {
     id: String,
