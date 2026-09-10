@@ -87,15 +87,16 @@ pub fn recover_batch(
 
 /// Finalize the already committed native batch. No network or native work belongs in this call.
 pub fn finalize(db: &mut Connection, shard_id: &str, batch: PreparedBatch) -> Result<Boundary> {
+    let expected = expected_boundary(&batch)?;
     let inbox_bytes = checked_sum_usize(
         batch.chunks.iter().map(|chunk| chunk.bytes),
         "Inbox byte total",
     )?;
-    let inbox_records = checked_sum_usize(
-        batch.chunks.iter().map(|chunk| chunk.payload.records.len()),
-        "Inbox record total",
-    )?;
-    let expected = expected_boundary(&batch)?;
+    let inbox_records = batch
+        .boundary
+        .ingest_seq
+        .checked_sub(expected.ingest_seq)
+        .context("Inbox record total overflow")?;
     let tx = db.transaction()?;
     let current = applied(&tx)?;
     if current == batch.boundary {
@@ -970,8 +971,38 @@ mod tests {
         };
         overflowing.chunks[0].bytes = usize::MAX;
         overflowing.chunks[1].bytes = 1;
+        overflowing.chunks[1].id = 2;
+        overflowing.chunks[1].first_seq = 2;
+        overflowing.chunks[1].last_seq = 2;
+        overflowing.chunks[1].payload.records[0].ingest_seq = 2;
+        overflowing.boundary = Boundary {
+            inbox_id: 2,
+            ingest_seq: 2,
+        };
         let mut unused = Connection::open_in_memory().expect("overflow finalize database");
         assert!(finalize(&mut unused, "unused", overflowing).is_err());
+        let mut first = record(RecordKind::Log);
+        first.ingest_seq = i64::MIN + 1;
+        let mut last = record(RecordKind::Log);
+        last.ingest_seq = i64::MAX - 1;
+        let record_overflow = PreparedBatch {
+            chunks: vec![InboxChunk {
+                id: 1,
+                first_seq: first.ingest_seq,
+                last_seq: last.ingest_seq,
+                payload: InboxPayload {
+                    version: 1,
+                    records: vec![first, last],
+                },
+                bytes: 1,
+            }],
+            records: Vec::new(),
+            boundary: Boundary {
+                inbox_id: 1,
+                ingest_seq: i64::MAX - 1,
+            },
+        };
+        assert!(finalize(&mut unused, "unused", record_overflow).is_err());
         assert!(build_batch(&database, Vec::new()).is_err());
         assert!(
             expected_boundary(&PreparedBatch {
@@ -1092,5 +1123,95 @@ mod tests {
                 .expect("delivery count"),
             1
         );
+    }
+
+    #[test]
+    fn issue_and_event_delivery_writes_propagate_authorizer_failures() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
+        fn seeded_alert(database: &Connection) {
+            database
+                .execute(
+                    "INSERT INTO alerts(
+                        id,project_id,name,condition_type,condition_json,destination_type,
+                        destination_json,created_at_us,updated_at_us)
+                     VALUES(1,1,'new issue','new_issue','{}','webhook','{}',1,1)",
+                    [],
+                )
+                .expect("seed event alert");
+        }
+
+        let error = record(RecordKind::Error);
+        let (_directory, database) = runtime_database();
+        database
+            .authorizer(Some(|context: AuthContext<'_>| match context.action {
+                AuthAction::Select => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .expect("deny issue metadata read");
+        assert!(finalize_error(&database, "active", &error, &mut 0).is_err());
+
+        let (_directory, database) = runtime_database();
+        database
+            .authorizer(Some(|context: AuthContext<'_>| match context.action {
+                AuthAction::Insert {
+                    table_name: "issue_occurrences",
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .expect("deny occurrence insert");
+        assert!(finalize_error(&database, "active", &error, &mut 0).is_err());
+
+        let (_directory, database) = runtime_database();
+        database
+            .authorizer(Some(|context: AuthContext<'_>| match context.action {
+                AuthAction::Update {
+                    table_name: "issues",
+                    ..
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .expect("deny issue update");
+        assert!(finalize_error(&database, "active", &error, &mut 0).is_err());
+
+        let (_directory, database) = runtime_database();
+        seeded_alert(&database);
+        database
+            .authorizer(Some(|context: AuthContext<'_>| match context.action {
+                AuthAction::Insert {
+                    table_name: "alert_deliveries",
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .expect("deny delivery insert");
+        assert!(finalize_error(&database, "active", &error, &mut 0).is_err());
+
+        let (_directory, database) = runtime_database();
+        seeded_alert(&database);
+        database
+            .authorizer(Some(|context: AuthContext<'_>| match context.action {
+                AuthAction::Update {
+                    table_name: "alerts",
+                    ..
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .expect("deny alert timestamp update");
+        assert!(finalize_error(&database, "active", &error, &mut 0).is_err());
+
+        let (_directory, database) = runtime_database();
+        seeded_alert(&database);
+        let issue_id = error.issue_id.as_deref().expect("error issue identity");
+        let dedupe_key = format!("eventglass:1:new_issue:{issue_id}:{}", error.ingest_seq);
+        database
+            .execute(
+                "INSERT INTO alert_deliveries(
+                    id,alert_id,dedupe_key,payload_json,state,attempts,next_retry_at_us,created_at_us)
+                 VALUES('existing',1,?1,'{}','pending',0,1,1)",
+                [dedupe_key],
+            )
+            .expect("seed duplicate delivery identity");
+        finalize_error(&database, "active", &error, &mut 0)
+            .expect("duplicate delivery remains idempotent");
     }
 }

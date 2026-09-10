@@ -593,6 +593,15 @@ impl Default for ReadBudget {
         }
     }
 }
+#[cfg(test)]
+impl ReadBudget {
+    pub(crate) fn expired() -> Self {
+        Self {
+            remaining_bytes: 0,
+            deadline: std::time::Instant::now(),
+        }
+    }
+}
 pub fn analyze(
     root: &std::path::Path,
     segments: Vec<crate::db::replays::SegmentReference>,

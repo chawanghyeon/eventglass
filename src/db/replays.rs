@@ -386,17 +386,19 @@ pub fn associations(
     let ids = serde_json::to_string(&replay.metadata.error_ids)?;
     let mut statement=db.prepare("SELECT o.source_event_id,o.record_id,o.issue_id FROM issue_occurrences o JOIN issues i ON i.id=o.issue_id WHERE i.project_id=?1 AND o.source_event_id IN (SELECT value FROM json_each(?2)) LIMIT 1000")?;
     let errors=statement.query_map(params![project,ids],|r|Ok(serde_json::json!({"event_id":r.get::<_,String>(0)?,"record_id":r.get::<_,String>(1)?,"issue_id":r.get::<_,String>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut statement=db.prepare("SELECT payload FROM feedback WHERE project_id=?1 AND replay_id=?2 AND expires_at_us>?3 ORDER BY timestamp_ms LIMIT 100")?;
-    let rows = statement.query_map(
-        params![project, replay.metadata.replay_id, now],
-        first_string,
-    )?;
-    let raw = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    let raw = feedback_rows(db, project, &replay.metadata.replay_id, now)?;
     let feedback = raw
         .iter()
         .map(|r| serde_json::from_str::<serde_json::Value>(r))
         .collect::<serde_json::Result<Vec<_>>>()?;
     Ok(serde_json::json!({"errors":errors,"feedback":feedback}))
+}
+
+fn feedback_rows(db: &Connection, project: i64, replay_id: &str, now: i64) -> Result<Vec<String>> {
+    let mut statement=db.prepare("SELECT payload FROM feedback WHERE project_id=?1 AND replay_id=?2 AND expires_at_us>?3 ORDER BY timestamp_ms LIMIT 100")?;
+    Ok(statement
+        .query_map(params![project, replay_id, now], first_string)?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 pub fn feedback_list(
@@ -603,6 +605,8 @@ mod tests {
 
     #[test]
     fn associations_reject_a_non_text_feedback_payload() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+
         let (_directory, database) = database();
         let replay = ReplaySummary {
             project_id: "1".into(),
@@ -622,5 +626,29 @@ mod tests {
             )
             .expect("insert damaged feedback payload");
         assert!(associations(&database, 1, &replay, 0).is_err());
+
+        database
+            .authorizer(Some(|context: AuthContext<'_>| match context.action {
+                AuthAction::Read {
+                    table_name: "feedback",
+                    ..
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .expect("install feedback query authorizer");
+        assert!(associations(&database, 1, &replay, 0).is_err());
+
+        let interrupted = Connection::open_in_memory().expect("interrupted feedback database");
+        interrupted
+            .execute_batch(
+                "CREATE TABLE feedback(
+                    project_id INTEGER,replay_id TEXT,expires_at_us INTEGER,
+                    timestamp_ms INTEGER,payload TEXT)",
+            )
+            .expect("interrupted feedback schema");
+        interrupted
+            .progress_handler(1, Some(|| true))
+            .expect("install feedback interrupt handler");
+        assert!(feedback_rows(&interrupted, 1, &replay.metadata.replay_id, 0).is_err());
     }
 }

@@ -56,6 +56,26 @@ struct LiveSession {
     query: String,
     filters: Filters,
     scan_seq: i64,
+    #[cfg(test)]
+    page_size: usize,
+    #[cfg(test)]
+    max_catch_up_records: usize,
+}
+
+impl LiveSession {
+    fn page_size(&self) -> usize {
+        #[cfg(test)]
+        return self.page_size;
+        #[cfg(not(test))]
+        return PAGE_SIZE;
+    }
+
+    fn max_catch_up_records(&self) -> usize {
+        #[cfg(test)]
+        return self.max_catch_up_records;
+        #[cfg(not(test))]
+        return MAX_CATCH_UP_RECORDS;
+    }
 }
 
 pub(super) async fn live(
@@ -170,6 +190,10 @@ async fn prepare(
         query,
         filters,
         scan_seq,
+        #[cfg(test)]
+        page_size: PAGE_SIZE,
+        #[cfg(test)]
+        max_catch_up_records: MAX_CATCH_UP_RECORDS,
     })
 }
 
@@ -281,7 +305,7 @@ async fn catch_up(
             },
             filters: session.filters.native(),
             cursor: None,
-            limit: PAGE_SIZE,
+            limit: session.page_size(),
         };
         let after = session.scan_seq;
         let indexer = indexer.clone();
@@ -301,7 +325,9 @@ async fn catch_up(
             .await
             .map_err(|_| "live_authorization_changed")?;
         for row in page.rows {
-            if delivered >= MAX_CATCH_UP_RECORDS || started.elapsed() > Duration::from_secs(10) {
+            if delivered >= session.max_catch_up_records()
+                || started.elapsed() > Duration::from_secs(10)
+            {
                 send_json(sender, "resync_required", None, "{}").await?;
                 return Ok(CatchUp::ResyncRequired);
             }
@@ -433,7 +459,8 @@ async fn send_json_with_timeout(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
+    use axum::http::{HeaderValue, header};
+    use std::{sync::Arc, time::Duration};
     use tokio::sync::mpsc;
 
     #[tokio::test]
@@ -474,5 +501,248 @@ mod tests {
             live_task_failure(super::super::NativeTaskFailure::Join),
             "live_unavailable"
         );
+    }
+
+    #[tokio::test]
+    async fn producer_covers_resync_lag_close_and_bounded_catch_up() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let app = crate::app::AppState::open(crate::config::Config {
+            addr: "127.0.0.1:0".parse()?,
+            data_dir: directory.path().to_owned(),
+            base_url: "http://localhost:8080".parse()?,
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        })
+        .await?;
+        let token = "a".repeat(64);
+        let token_hash = crate::auth::hash_token(&token);
+        app.db
+            .call(move |db| {
+                db.execute_batch(
+                    "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
+                     VALUES(1,'live-unit@example.test','hash','admin',1,1,1);
+                     INSERT INTO projects(id,slug,name,created_at_us,updated_at_us)
+                     VALUES(1,'live-unit','Live unit',1,1);
+                     INSERT INTO project_keys(id,project_id,public_key,created_at_us)
+                     VALUES(1,1,'public',1);",
+                )
+                .expect("seed live producer authorization");
+                assert!(crate::db::auth::create_session(
+                    db,
+                    1,
+                    "hash",
+                    &token_hash,
+                    crate::model::now_us().expect("live session time"),
+                    i64::MAX,
+                )
+                .expect("create live producer session"));
+                Ok(())
+            })
+            .await?;
+        let app = app.start_core().await?;
+        let state = HttpState {
+            app: app.clone(),
+            auth_attempts: Arc::new(crate::auth::AttemptLimiter::default()),
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&format!("eventglass_session={token}"))?,
+        );
+        let auth = app
+            .db
+            .call(|db| authorization::capture(db, 1, vec![1]))
+            .await?;
+        let session = |scan_seq, page_size, max_catch_up_records| LiveSession {
+            context: context(&auth, "live-unit".into()),
+            auth: auth.clone(),
+            start_us: 0,
+            end_us: 9_223_372_036_854_000,
+            query: String::new(),
+            filters: Filters::default(),
+            scan_seq,
+            page_size,
+            max_catch_up_records,
+        };
+        let indexer = app.indexer.as_ref().unwrap().clone();
+
+        let (update, updates) = tokio::sync::broadcast::channel(1);
+        let (sender, mut receiver) = mpsc::channel(1);
+        produce(
+            state.clone(),
+            headers.clone(),
+            indexer.clone(),
+            updates,
+            session(1, PAGE_SIZE, MAX_CATCH_UP_RECORDS),
+            &sender,
+        )
+        .await
+        .expect("older resume requests resynchronization");
+        assert!(receiver.recv().await.is_some());
+        drop(update);
+
+        let (_update, updates) = tokio::sync::broadcast::channel(1);
+        let (sender, receiver) = mpsc::channel(1);
+        drop(receiver);
+        assert_eq!(
+            produce(
+                state.clone(),
+                headers.clone(),
+                indexer.clone(),
+                updates,
+                session(0, PAGE_SIZE, MAX_CATCH_UP_RECORDS),
+                &sender,
+            )
+            .await,
+            Err("live_client_closed")
+        );
+
+        let mut records = Vec::new();
+        let received_at_us = crate::model::now_us()?;
+        for id in 1..=2 {
+            records.push(crate::model::Record {
+                record_id: format!("{id:064x}"),
+                kind: crate::model::RecordKind::Log,
+                project_id: 1,
+                source_event_id: None,
+                ingest_seq: 0,
+                received_at_us,
+                timestamp_us: 1,
+                service: "live-unit".into(),
+                environment: None,
+                release: None,
+                level: "info".into(),
+                logger: None,
+                message: format!("record {id}"),
+                trace_id: None,
+                span_id: None,
+                request_id: None,
+                user_id: None,
+                user_email: None,
+                issue_id: None,
+                fingerprint_version: None,
+                fingerprint: None,
+                attributes: serde_json::json!({}),
+                search_text: format!("record {id}"),
+                raw_json: serde_json::json!({"id":id}),
+                normalizer_version: 1,
+                indexing_warnings: Vec::new(),
+            });
+        }
+        app.db
+            .call(move |db| {
+                crate::db::ingest::accept(
+                    db,
+                    crate::db::ingest::IngestProject {
+                        id: 1,
+                        slug: "live-unit".into(),
+                        public_key: "public".into(),
+                    },
+                    "live-unit-acceptance",
+                    records,
+                    &crate::config::Limits::default(),
+                )
+                .expect("accept live producer records");
+                Ok(())
+            })
+            .await?;
+        app.db
+            .call(|db| crate::db::indexer::prepare(db, &crate::config::Limits::default()))
+            .await
+            .expect("live fixture batch must prepare")
+            .expect("live fixture batch must exist");
+        indexer.wake();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if indexer
+                    .snapshot()
+                    .expect("live fixture indexer remains available")
+                    .boundary
+                    .ingest_seq
+                    == 2
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+
+        let (update, updates) = tokio::sync::broadcast::channel(1);
+        update.send(1)?;
+        update.send(2)?;
+        let (sender, mut receiver) = mpsc::channel(1);
+        produce(
+            state.clone(),
+            headers.clone(),
+            indexer.clone(),
+            updates,
+            session(2, PAGE_SIZE, MAX_CATCH_UP_RECORDS),
+            &sender,
+        )
+        .await
+        .expect("lagged update requests resynchronization");
+        assert!(receiver.recv().await.is_some());
+
+        let (update, updates) = tokio::sync::broadcast::channel(1);
+        drop(update);
+        let (sender, _receiver) = mpsc::channel(1);
+        produce(
+            state.clone(),
+            headers.clone(),
+            indexer.clone(),
+            updates,
+            session(2, PAGE_SIZE, MAX_CATCH_UP_RECORDS),
+            &sender,
+        )
+        .await
+        .expect("closed update channel ends production");
+
+        let (_update, updates) = tokio::sync::broadcast::channel(1);
+        let (sender, mut receiver) = mpsc::channel(1);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            produce(
+                state.clone(),
+                headers.clone(),
+                indexer.clone(),
+                updates,
+                session(0, PAGE_SIZE, 0),
+                &sender,
+            ),
+        )
+        .await
+        .expect("bounded catch-up did not finish")
+        .expect("bounded catch-up requests resynchronization");
+        assert!(receiver.recv().await.is_some());
+
+        let (update, updates) = tokio::sync::broadcast::channel(1);
+        drop(update);
+        let (sender, mut receiver) = mpsc::channel(16);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            produce(
+                state,
+                headers,
+                indexer.clone(),
+                updates,
+                session(0, 1, MAX_CATCH_UP_RECORDS),
+                &sender,
+            ),
+        )
+        .await
+        .expect("multi-page catch-up did not finish")
+        .expect("multi-page catch-up completes");
+        let mut received = 0;
+        while receiver.try_recv().is_ok() {
+            received += 1;
+        }
+        assert_eq!(received, 3);
+
+        app.replay_maintenance.as_ref().unwrap().shutdown().await?;
+        app.alerts.as_ref().unwrap().shutdown().await?;
+        indexer.shutdown().await?;
+        Ok(())
     }
 }

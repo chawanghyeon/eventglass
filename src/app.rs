@@ -149,13 +149,24 @@ impl AppState {
             ));
         }
         #[cfg(test)]
-        anyhow::ensure!(!self.reject_alert_start, "injected alert startup failure");
-        self.alerts = Some(crate::alerts::AlertCoordinator::start(
+        let alerts = if self.reject_alert_start {
+            Err(anyhow::anyhow!("injected alert startup failure"))
+        } else {
+            crate::alerts::AlertCoordinator::start(
+                self.db.clone(),
+                indexer.clone(),
+                self.query_permit.clone(),
+                self.cold.clone(),
+            )
+        };
+        #[cfg(not(test))]
+        let alerts = crate::alerts::AlertCoordinator::start(
             self.db.clone(),
             indexer.clone(),
             self.query_permit.clone(),
             self.cold.clone(),
-        )?);
+        );
+        self.alerts = Some(alerts?);
         self.replay_maintenance = Some(
             crate::storage::replay_maintenance::ReplayMaintenance::start(
                 self.db.clone(),
@@ -167,59 +178,6 @@ impl AppState {
         );
         self.indexer = Some(indexer);
         Ok(self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn config(data_dir: std::path::PathBuf) -> Config {
-        Config {
-            addr: "127.0.0.1:0".parse().unwrap(),
-            data_dir,
-            base_url: url::Url::parse("http://127.0.0.1:8080").unwrap(),
-            s3_url: None,
-            s3_endpoint: None,
-            s3_initialize: false,
-        }
-    }
-
-    #[tokio::test]
-    async fn open_initializes_runtime_and_start_core_installs_every_coordinator() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let app = AppState::open(config(directory.path().to_owned()))
-            .await?
-            .start_core()
-            .await?;
-        assert!(app.indexer.is_some());
-        assert!(app.alerts.is_some());
-        assert!(app.replay_maintenance.is_some());
-
-        app.replay_maintenance.as_ref().unwrap().shutdown().await?;
-        app.alerts.as_ref().unwrap().shutdown().await?;
-        app.indexer.as_ref().unwrap().shutdown().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn alert_start_failure_prevents_a_partially_started_core() {
-        let directory = tempfile::tempdir().expect("invalid webhook policy directory");
-        let mut app = AppState::open(config(directory.path().to_owned()))
-            .await
-            .expect("open application before policy validation");
-        app.reject_alert_start = true;
-        assert!(app.start_core().await.is_err());
-    }
-
-    #[cfg(not(feature = "s3"))]
-    #[tokio::test]
-    async fn non_s3_binary_rejects_remote_storage_configuration() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut value = config(directory.path().to_owned());
-        value.s3_url = Some("s3://bucket/prefix".into());
-        let error = AppState::open(value).await.err().unwrap();
-        assert!(error.to_string().contains("without S3 support"));
     }
 }
 
@@ -297,5 +255,58 @@ async fn prepare_remote_storage(config: &Config) -> Result<Option<String>> {
             crate::storage::remote::install_prepared(&config.data_dir, prepared)?;
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config(data_dir: std::path::PathBuf) -> Config {
+        Config {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            data_dir,
+            base_url: url::Url::parse("http://127.0.0.1:8080").unwrap(),
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn open_initializes_runtime_and_start_core_installs_every_coordinator() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let app = AppState::open(config(directory.path().to_owned()))
+            .await?
+            .start_core()
+            .await?;
+        assert!(app.indexer.is_some());
+        assert!(app.alerts.is_some());
+        assert!(app.replay_maintenance.is_some());
+
+        app.replay_maintenance.as_ref().unwrap().shutdown().await?;
+        app.alerts.as_ref().unwrap().shutdown().await?;
+        app.indexer.as_ref().unwrap().shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn alert_start_failure_prevents_a_partially_started_core() {
+        let directory = tempfile::tempdir().expect("invalid webhook policy directory");
+        let mut app = AppState::open(config(directory.path().to_owned()))
+            .await
+            .expect("open application before policy validation");
+        app.reject_alert_start = true;
+        assert!(app.start_core().await.is_err());
+    }
+
+    #[cfg(not(feature = "s3"))]
+    #[tokio::test]
+    async fn non_s3_binary_rejects_remote_storage_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = config(directory.path().to_owned());
+        value.s3_url = Some("s3://bucket/prefix".into());
+        let error = AppState::open(value).await.err().unwrap();
+        assert!(error.to_string().contains("without S3 support"));
     }
 }

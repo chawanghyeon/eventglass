@@ -199,34 +199,44 @@ pub(super) async fn pages(
     let root = state.app.config.data_dir.clone();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let _permit = permit;
-        let mut maps = crate::replay::PageMaps {
-            truncated: more,
-            ..Default::default()
-        };
         let mut budget = crate::replay::ReadBudget::default();
-        for (end, id, segments) in items {
-            let mut analysis = crate::replay::analyze(&root, segments, end, &mut budget)?;
-            for page in analysis.pages.values_mut() {
-                page.replay_ids.push(id.clone());
-                for example in &mut page.examples {
-                    example.replay_id = id.clone();
-                }
-            }
-            let stop = analysis.truncated;
-            if viewport.is_none_or(|group| group == analysis.viewport_class) {
-                maps.include(analysis);
-            } else {
-                maps.truncated |= analysis.truncated;
-            }
-            if stop {
-                break;
-            }
-        }
-        Ok(maps)
+        page_maps(&root, items, more, viewport, &mut budget)
     })
     .await
     .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "replay_worker_failed"))??;
     Ok(Json(result))
+}
+
+fn page_maps(
+    root: &std::path::Path,
+    items: Vec<(i64, String, Vec<replays::SegmentReference>)>,
+    more: bool,
+    viewport: Option<crate::replay::ViewportClass>,
+    budget: &mut crate::replay::ReadBudget,
+) -> anyhow::Result<crate::replay::PageMaps> {
+    let mut maps = crate::replay::PageMaps {
+        truncated: more,
+        ..Default::default()
+    };
+    for (end, id, segments) in items {
+        let mut analysis = crate::replay::analyze(root, segments, end, budget)?;
+        for page in analysis.pages.values_mut() {
+            page.replay_ids.push(id.clone());
+            for example in &mut page.examples {
+                example.replay_id = id.clone();
+            }
+        }
+        let stop = analysis.truncated;
+        if viewport.is_none_or(|group| group == analysis.viewport_class) {
+            maps.include(analysis);
+        } else {
+            maps.truncated |= analysis.truncated;
+        }
+        if stop {
+            break;
+        }
+    }
+    Ok(maps)
 }
 
 pub(super) async fn feedback(
@@ -318,5 +328,28 @@ mod tests {
         assert!(validate_filter(&filter).is_ok());
         assert!(validate_id(&"f".repeat(32)).is_ok());
         assert!(validate_id("invalid").is_err());
+
+        let root = tempfile::tempdir().unwrap();
+        let mut budget = crate::replay::ReadBudget::expired();
+        let maps = page_maps(
+            root.path(),
+            vec![(
+                0,
+                "a".repeat(32),
+                vec![replays::SegmentReference {
+                    segment_id: 0,
+                    blob: crate::storage::remote::ObjectReference {
+                        key: "replay-blobs/missing.zlib".into(),
+                        size: 1,
+                        sha256: "0".repeat(64),
+                    },
+                }],
+            )],
+            false,
+            None,
+            &mut budget,
+        )
+        .unwrap();
+        assert!(maps.truncated);
     }
 }

@@ -144,25 +144,8 @@ impl Indexer {
         })
         .await??;
         if !recovered.is_empty() {
-            db.call(move |db| {
-                let transaction = db.transaction()?;
-                for (id, size) in recovered {
-                    ensure!(
-                        transaction.execute(
-                            "UPDATE shards SET state='remote_verified',size_bytes=?1
-                             WHERE id=?2 AND state='remote_only'
-                               AND remote_archive_key IS NOT NULL
-                               AND archive_sha256 IS NOT NULL
-                               AND recovery_checkpoint_id IS NOT NULL",
-                            rusqlite::params![i64::try_from(size)?, id],
-                        )? == 1,
-                        "remote-only shard changed during startup reconciliation"
-                    );
-                }
-                transaction.commit()?;
-                Ok(())
-            })
-            .await?;
+            db.call(move |db| finalize_recovered_shards(db, recovered))
+                .await?;
         }
         let local_catalog = db.call(|db| shards::local_catalog(db)).await?;
         let catalog_root = directory.join("shards");
@@ -423,6 +406,28 @@ impl Indexer {
         ensure!(self.ready(), "indexer stopped with a failure");
         Ok(())
     }
+}
+
+fn finalize_recovered_shards(
+    db: &mut rusqlite::Connection,
+    recovered: Vec<(String, u64)>,
+) -> Result<()> {
+    let transaction = db.transaction()?;
+    for (id, size) in recovered {
+        ensure!(
+            transaction.execute(
+                "UPDATE shards SET state='remote_verified',size_bytes=?1
+                 WHERE id=?2 AND state='remote_only'
+                   AND remote_archive_key IS NOT NULL
+                   AND archive_sha256 IS NOT NULL
+                   AND recovery_checkpoint_id IS NOT NULL",
+                rusqlite::params![i64::try_from(size)?, id],
+            )? == 1,
+            "remote-only shard changed during startup reconciliation"
+        );
+    }
+    transaction.commit()?;
+    Ok(())
 }
 
 fn reconcile_empty_orphans(
@@ -693,6 +698,7 @@ fn crash_point(name: &str) {
 mod tests {
     use super::*;
     use crate::model::Boundary;
+    use rusqlite::OptionalExtension;
 
     fn config(path: &Path) -> crate::config::Config {
         crate::config::Config {
@@ -773,6 +779,79 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn recovered_shard_catalog_updates_fail_closed() {
+        let mut missing = rusqlite::Connection::open_in_memory().expect("missing shard catalog");
+        assert!(
+            finalize_recovered_shards(&mut missing, vec![(uuid::Uuid::new_v4().to_string(), 1)])
+                .is_err()
+        );
+
+        let mut stale = rusqlite::Connection::open_in_memory().expect("stale shard catalog");
+        stale
+            .execute_batch(
+                "CREATE TABLE shards(
+                    id TEXT PRIMARY KEY,state TEXT,size_bytes INTEGER,
+                    remote_archive_key TEXT,archive_sha256 TEXT,recovery_checkpoint_id TEXT);
+                 INSERT INTO shards VALUES('stale','remote_only',0,NULL,NULL,NULL);",
+            )
+            .expect("seed stale shard catalog");
+        assert!(finalize_recovered_shards(&mut stale, vec![("stale".into(), 1)]).is_err());
+    }
+
+    #[tokio::test]
+    async fn checkpoint_cut_failure_does_not_stop_indexing() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let app = crate::app::AppState::open(config(directory.path())).await?;
+        app.db
+            .call(|db| {
+                db.execute(
+                    "INSERT INTO settings(key,value_json,updated_at_us)
+                     VALUES('replay.revision','1',0)",
+                    [],
+                )
+                .expect("seed pending Replay backup");
+                Ok(())
+            })
+            .await?;
+        let backup = crate::storage::backup::BackupCoordinator::new(
+            app.db.clone(),
+            directory.path(),
+            Arc::new(crate::storage::backup::tests::MemoryStore::default()),
+            app.disk_budget.clone(),
+        );
+        backup.fail_next_cut();
+        let indexer =
+            Indexer::start_with_backup(app.db.clone(), directory.path(), Some(backup.clone()))
+                .await?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let attempted = app
+                    .db
+                    .call(|db| {
+                        Ok(db
+                            .query_row(
+                                "SELECT 1 FROM settings WHERE key='replay.backup_attempt'",
+                                [],
+                                |_| Ok(()),
+                            )
+                            .optional()?
+                            .is_some())
+                    })
+                    .await?;
+                if attempted {
+                    break anyhow::Ok(());
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await??;
+        assert!(indexer.ready());
+        indexer.shutdown().await?;
+        backup.shutdown().await;
+        Ok(())
     }
 
     #[tokio::test]

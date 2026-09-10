@@ -203,12 +203,7 @@ fn collect_orphans(
     let mut statement = db.prepare(&format!(
         "SELECT DISTINCT blob_sha256 FROM replay_segments WHERE blob_sha256 IN ({placeholders})"
     ))?;
-    let referenced = statement
-        .query_map(
-            rusqlite::params_from_iter(candidates.iter().map(|(hash, _)| hash)),
-            |row| row.get::<_, String>(0),
-        )?
-        .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?;
+    let referenced = referenced_hashes(&mut statement, &candidates)?;
     let (mut files, mut bytes) = (0, 0);
     for (hash, path) in candidates {
         if referenced.contains(&hash) {
@@ -225,9 +220,41 @@ fn collect_orphans(
     Ok((files, bytes))
 }
 
+fn referenced_hashes(
+    statement: &mut rusqlite::Statement<'_>,
+    candidates: &[(String, PathBuf)],
+) -> Result<std::collections::HashSet<String>> {
+    Ok(statement
+        .query_map(
+            rusqlite::params_from_iter(candidates.iter().map(|(hash, _)| hash)),
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<std::result::Result<std::collections::HashSet<_>, _>>()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orphan_reference_scan_propagates_sqlite_interrupts() {
+        let root = tempfile::tempdir().expect("orphan scan directory");
+        let blobs = root.path().join("replay-blobs");
+        std::fs::create_dir(&blobs).expect("orphan blob directory");
+        std::fs::write(blobs.join(format!("{}.zlib", "0".repeat(64))), b"orphan")
+            .expect("orphan blob");
+        let database = rusqlite::Connection::open_in_memory().expect("orphan scan database");
+        database
+            .execute_batch("CREATE TABLE replay_segments(blob_sha256 TEXT)")
+            .expect("orphan reference schema");
+        let mut statement = database
+            .prepare("SELECT blob_sha256 FROM replay_segments")
+            .expect("prepare orphan reference query");
+        database
+            .progress_handler(1, Some(|| true))
+            .expect("install SQLite interrupt handler");
+        assert!(referenced_hashes(&mut statement, &[("0".repeat(64), PathBuf::new())]).is_err());
+    }
 
     async fn wait_for_state(maintenance: &ReplayMaintenance, expected: &str) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -392,7 +419,7 @@ mod tests {
                 cursor.clone(),
                 &app.ingress_permit,
                 &app.query_permit,
-                None
+                Some(&backup)
             )
             .await?
             .is_some()

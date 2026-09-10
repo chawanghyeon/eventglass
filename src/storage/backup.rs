@@ -28,6 +28,8 @@ struct Inner {
     disk: super::budget::DiskBudget,
     gate: Arc<Semaphore>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    #[cfg(test)]
+    fail_next_cut: std::sync::atomic::AtomicBool,
 }
 
 pub struct BackupJob {
@@ -58,6 +60,8 @@ impl BackupCoordinator {
                 disk,
                 gate: Arc::new(Semaphore::new(1)),
                 tasks: Mutex::new(Vec::new()),
+                #[cfg(test)]
+                fail_next_cut: std::sync::atomic::AtomicBool::new(false),
             }),
         }
     }
@@ -65,6 +69,14 @@ impl BackupCoordinator {
     /// Must be called after SQLite finalized a seal and before the next active
     /// shard is adopted. Returning is the snapshot handshake that releases Indexer.
     pub async fn begin_cut(&self) -> Result<Option<BackupJob>> {
+        #[cfg(test)]
+        if self
+            .inner
+            .fail_next_cut
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            anyhow::bail!("injected checkpoint cut failure");
+        }
         let permit = match Arc::clone(&self.inner.gate).try_acquire_owned() {
             Ok(permit) => permit,
             Err(tokio::sync::TryAcquireError::NoPermits) => return Ok(None),
@@ -103,6 +115,13 @@ impl BackupCoordinator {
         for task in tasks {
             let _ = task.await;
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fail_next_cut(&self) {
+        self.inner
+            .fail_next_cut
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -153,17 +172,21 @@ impl BackupJob {
         let mut shards = Vec::with_capacity(artifact.cut.shards.len());
         let mut shard_archives = Vec::with_capacity(artifact.cut.shards.len());
         let mut previous = std::collections::BTreeMap::new();
+        let checkpoint_ids = recovery_checkpoints
+            .values()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        for checkpoint_id in checkpoint_ids {
+            let document = super::remote::read_checkpoint(
+                self.coordinator.inner.store.as_ref(),
+                &checkpoint_id,
+                &artifact.cut.installation_id,
+            )
+            .await?;
+            previous.insert(checkpoint_id, document);
+        }
         for shard in &artifact.cut.shards {
             if let Some(checkpoint_id) = recovery_checkpoints.get(&shard.id) {
-                if !previous.contains_key(checkpoint_id) {
-                    let document = super::remote::read_checkpoint(
-                        self.coordinator.inner.store.as_ref(),
-                        checkpoint_id,
-                        &artifact.cut.installation_id,
-                    )
-                    .await?;
-                    previous.insert(checkpoint_id.clone(), document);
-                }
                 let reference = previous[checkpoint_id]
                     .shards
                     .iter()
@@ -663,6 +686,24 @@ pub(crate) mod tests {
             .await?;
         assert_eq!(verified.0, "remote_verified");
         assert!(verified.1.is_some() && verified.2.is_some() && verified.3.is_some());
+
+        let checkpoint_key = format!("checkpoints/{}.json", verified.3.as_deref().unwrap());
+        let checkpoint = store
+            .0
+            .lock()
+            .unwrap()
+            .remove(&checkpoint_key)
+            .expect("published checkpoint document");
+        assert!(
+            coordinator
+                .begin_cut()
+                .await?
+                .context("job with missing recovery checkpoint")?
+                .complete()
+                .await
+                .is_err()
+        );
+        store.put(&checkpoint_key, checkpoint, true)?;
 
         // Eviction must not prevent later cuts from covering all historical shards.
         db.call(|connection| {

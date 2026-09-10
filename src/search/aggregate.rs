@@ -359,6 +359,15 @@ pub fn aggregate_lazy<G: AsRef<SearchShard>>(
         merged.merge_fruits(intermediate)?;
     }
     let native_result = merged.into_final_result(native_request, limits)?;
+    project_page(native_result, record_count, request, &dimensions)
+}
+
+fn project_page(
+    native_result: AggregationResults,
+    record_count: u64,
+    request: &AggregateRequest,
+    dimensions: &[DimensionPlan],
+) -> Result<AggregatePage> {
     let metrics = project_metrics(&native_result, record_count, &request.metrics)?;
     let buckets = if dimensions.is_empty() {
         None
@@ -366,7 +375,7 @@ pub fn aggregate_lazy<G: AsRef<SearchShard>>(
         Some(project_bucket_set(
             &native_result,
             &request.metrics,
-            &dimensions,
+            dimensions,
             0,
         )?)
     };
@@ -1043,5 +1052,8 @@ mod tests {
             project_bucket_set(&wrong, &[], &dimensions, 0),
             Err(AggregateError::UnexpectedNativeResult)
         ));
+
+        let request = request();
+        assert!(project_page(wrong, 0, &request, &dimensions).is_err());
     }
 }

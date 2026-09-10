@@ -42,6 +42,16 @@ impl Default for RestoreLimits {
 pub struct PreparedRestore {
     pub document: CheckpointDocument,
     pub directory: PathBuf,
+    #[cfg(test)]
+    fail_install_at: Option<InstallFailure>,
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InstallFailure {
+    QuarantineRename,
+    QuarantineSync,
+    ReplayRename,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,14 +252,7 @@ pub async fn publish(
             Ok(previous)
         }
         .await;
-        if let Ok(previous) = previous {
-            previous_replays = previous
-                .cut
-                .replay_blobs
-                .into_iter()
-                .map(|r| (r.key.clone(), r))
-                .collect();
-        }
+        previous_replays = previous_replay_map(previous);
     }
     for reference in &candidate.document.cut.replay_blobs {
         let path = replay_paths
@@ -339,6 +342,18 @@ pub async fn publish(
     Ok(latest)
 }
 
+fn previous_replay_map(previous: Result<CheckpointDocument>) -> BTreeMap<String, ObjectReference> {
+    match previous {
+        Ok(previous) => previous
+            .cut
+            .replay_blobs
+            .into_iter()
+            .map(|reference| (reference.key.clone(), reference))
+            .collect(),
+        Err(_) => BTreeMap::new(),
+    }
+}
+
 pub async fn list_all(store: &dyn ObjectStore) -> Result<Vec<ObjectMetadata>> {
     let mut objects = Vec::new();
     let mut continuation = None;
@@ -403,6 +418,8 @@ pub async fn prepare_restore(
         return Ok(PreparedRestore {
             document,
             directory: destination.to_owned(),
+            #[cfg(test)]
+            fail_install_at: None,
         });
     }
     anyhow::bail!("no complete checkpoint could be restored")
@@ -596,6 +613,8 @@ pub fn install_prepared(data_dir: &Path, prepared: PreparedRestore) -> Result<()
     let quarantine = data_dir
         .join("quarantine")
         .join(format!("restore-{}", uuid::Uuid::new_v4()));
+    #[cfg(test)]
+    let fail_install_at = prepared.fail_install_at;
     let mut quarantined = false;
     for name in ["meta.db-wal", "meta.db-shm", "shards", "replay-blobs"] {
         let source = data_dir.join(name);
@@ -604,13 +623,34 @@ pub fn install_prepared(data_dir: &Path, prepared: PreparedRestore) -> Result<()
                 std::fs::create_dir_all(&quarantine)?;
                 quarantined = true;
             }
+            #[cfg(test)]
+            if fail_install_at == Some(InstallFailure::QuarantineRename) {
+                if source.is_dir() {
+                    std::fs::remove_dir_all(&source).expect("remove quarantine source");
+                } else {
+                    std::fs::remove_file(&source).expect("remove quarantine source");
+                }
+            }
             std::fs::rename(source, quarantine.join(name))?;
         }
     }
     if quarantined {
+        #[cfg(test)]
+        if fail_install_at == Some(InstallFailure::QuarantineSync) {
+            std::fs::rename(
+                data_dir.join("quarantine"),
+                data_dir.join("quarantine-moved"),
+            )
+            .expect("move quarantine before sync");
+        }
         File::open(quarantine.parent().context("restore quarantine parent")?)?.sync_all()?;
     }
     std::fs::rename(prepared.directory.join("shards"), data_dir.join("shards"))?;
+    #[cfg(test)]
+    if fail_install_at == Some(InstallFailure::ReplayRename) {
+        std::fs::remove_dir_all(prepared.directory.join("replay-blobs"))
+            .expect("remove prepared Replay directory");
+    }
     std::fs::rename(
         prepared.directory.join("replay-blobs"),
         data_dir.join("replay-blobs"),
@@ -1400,6 +1440,8 @@ mod tests {
             sha256: replay_hash,
         }];
         candidate.replay_files = vec![(replay_key.clone(), replay_path)];
+        assert!(previous_replay_map(Err(anyhow::anyhow!("broken latest"))).is_empty());
+        assert_eq!(previous_replay_map(Ok(candidate.document.clone())).len(), 1);
         let store = MemoryStore::default();
         ensure_installation(&store, &installation(&installation_id), true).await?;
         let latest = publish(&store, &candidate).await?;
@@ -1462,6 +1504,44 @@ mod tests {
             writes_before,
             "oversized checkpoint cannot publish a false recovery point"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn prepared_restore_propagates_each_atomic_install_failure() -> Result<()> {
+        for (failure, directory_source) in [
+            (InstallFailure::QuarantineRename, false),
+            (InstallFailure::QuarantineRename, true),
+            (InstallFailure::QuarantineSync, false),
+            (InstallFailure::ReplayRename, false),
+        ] {
+            let root = tempfile::tempdir()?;
+            let installation_id = uuid::Uuid::new_v4().to_string();
+            let candidate_root = root.path().join("candidate");
+            std::fs::create_dir(&candidate_root)?;
+            let document = candidate(&candidate_root, &installation_id)?.document;
+            let data_dir = root.path().join("data");
+            let staging = data_dir.join(".prepared");
+            std::fs::create_dir_all(staging.join("shards"))?;
+            std::fs::create_dir(staging.join("replay-blobs"))?;
+            std::fs::write(staging.join("meta.db"), b"snapshot")?;
+            if failure == InstallFailure::QuarantineRename && directory_source {
+                std::fs::create_dir(data_dir.join("shards"))?;
+            } else if failure != InstallFailure::ReplayRename {
+                std::fs::write(data_dir.join("meta.db-wal"), b"old WAL")?;
+            }
+            assert!(
+                install_prepared(
+                    &data_dir,
+                    PreparedRestore {
+                        document,
+                        directory: staging,
+                        fail_install_at: Some(failure),
+                    },
+                )
+                .is_err()
+            );
+        }
         Ok(())
     }
 

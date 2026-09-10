@@ -192,6 +192,50 @@ pub fn doctor_connection(db: &Connection, data_dir: &Path) -> Result<DoctorRepor
     uuid::Uuid::parse_str(&installation).context("invalid installation identity")?;
     uuid::Uuid::parse_str(&generation).context("invalid storage generation")?;
     crate::db::shards::startup(db)?;
+    let (local, remote_only) = doctor_shards(db, data_dir, &installation)?;
+    doctor_replays(db, data_dir, |_, _| Ok(()))?;
+    Ok(DoctorReport {
+        ok: true,
+        schema_version: crate::db::SCHEMA_VERSION.to_string(),
+        installation_id: installation,
+        storage_generation: generation,
+        checked_local_shards: local.to_string(),
+        checked_remote_only_shards: remote_only.to_string(),
+    })
+}
+
+fn doctor_replays(
+    db: &Connection,
+    data_dir: &Path,
+    mut after_read_failure: impl FnMut(
+        &Connection,
+        &crate::storage::remote::ObjectReference,
+    ) -> Result<()>,
+) -> Result<()> {
+    // Verify each immutable recording sequentially, without retaining decoded sessions.
+    for reference in crate::db::replays::blob_references(db)? {
+        if let Err(error) = crate::storage::replay::read(data_dir, &reference) {
+            after_read_failure(db, &reference)?;
+            // Standalone CLI doctor can overlap the server's live retention sweep.
+            // A removed reference is no longer a consistency obligation.
+            let referenced = db
+                .query_row(
+                    "SELECT 1 FROM replay_segments WHERE blob_sha256=?1 LIMIT 1",
+                    [&reference.sha256],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if referenced {
+                return Err(error)
+                    .with_context(|| format!("invalid Replay blob {}", reference.key));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn doctor_shards(db: &Connection, data_dir: &Path, installation: &str) -> Result<(u64, u64)> {
     let local_catalog = crate::db::shards::local_catalog(db)?
         .into_iter()
         .map(|item| (item.id.clone(), item))
@@ -216,7 +260,7 @@ pub fn doctor_connection(db: &Connection, data_dir: &Path) -> Result<DoctorRepor
                 local += 1;
             }
             "local" | "remote_verified" => {
-                let manifest = crate::storage::manifest::verify(&path, &installation, &id)?;
+                let manifest = crate::storage::manifest::verify(&path, installation, &id)?;
                 let size = crate::storage::manifest::local_size(&path, &manifest)?;
                 let catalog = local_catalog
                     .get(&id)
@@ -249,33 +293,7 @@ pub fn doctor_connection(db: &Connection, data_dir: &Path) -> Result<DoctorRepor
             ensure!(catalog_ids.contains(&id), "unregistered shard entry");
         }
     }
-    // Verify each immutable recording sequentially, without retaining decoded sessions.
-    for reference in crate::db::replays::blob_references(db)? {
-        if let Err(error) = crate::storage::replay::read(data_dir, &reference) {
-            // Standalone CLI doctor can overlap the server's live retention sweep.
-            // A removed reference is no longer a consistency obligation.
-            let referenced = db
-                .query_row(
-                    "SELECT 1 FROM replay_segments WHERE blob_sha256=?1 LIMIT 1",
-                    [&reference.sha256],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
-            if referenced {
-                return Err(error)
-                    .with_context(|| format!("invalid Replay blob {}", reference.key));
-            }
-        }
-    }
-    Ok(DoctorReport {
-        ok: true,
-        schema_version: crate::db::SCHEMA_VERSION.to_string(),
-        installation_id: installation,
-        storage_generation: generation,
-        checked_local_shards: local.to_string(),
-        checked_remote_only_shards: remote_only.to_string(),
-    })
+    Ok((local, remote_only))
 }
 
 fn file_size(path: &Path) -> Result<u64> {
@@ -473,6 +491,12 @@ mod tests {
         std::fs::remove_dir(&shard).expect("remove remote-only directory");
         db.execute("UPDATE shards SET state='unknown' WHERE id='active'", [])
             .expect("force unsupported state");
+        let installation = db
+            .query_row("SELECT installation_id FROM runtime_state", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .expect("installation identity");
+        assert!(doctor_shards(&db, root.path(), &installation).is_err());
         assert!(doctor_connection(&db, root.path()).is_err());
     }
 
@@ -502,6 +526,17 @@ mod tests {
         )
         .expect("insert missing replay reference");
         assert!(doctor_connection(&db, root.path()).is_err());
+        assert!(
+            doctor_replays(&db, root.path(), |db, reference| {
+                db.execute(
+                    "DELETE FROM replay_segments WHERE blob_sha256=?1",
+                    [&reference.sha256],
+                )
+                .expect("simulate retention removing the missing reference");
+                Ok(())
+            })
+            .is_ok()
+        );
     }
 
     #[test]

@@ -132,17 +132,7 @@ impl ColdStorage {
                             [&id],
                         )? == 1)
                     },
-                    || {
-                        ensure!(
-                            db.execute(
-                                "UPDATE shards SET state='remote_verified'
-                                 WHERE id=?1 AND state='remote_only'",
-                                [&id],
-                            )? == 1,
-                            "failed to roll back shard eviction"
-                        );
-                        Ok(())
-                    },
+                    || rollback_eviction(db, &id),
                 )
             })
             .await
@@ -284,14 +274,7 @@ impl ColdStorage {
         let hash = remote.sha256.clone();
         let changed = self
             .db
-            .call(move |db| {
-                Ok(db.execute(
-                    "UPDATE shards SET state='remote_verified',size_bytes=?1,last_accessed_at_us=?2
-                     WHERE id=?3 AND state='remote_only' AND remote_archive_key=?4
-                       AND archive_sha256=?5 AND recovery_checkpoint_id IS NOT NULL",
-                    rusqlite::params![i64::try_from(size)?, crate::model::now_us()?, id, key, hash],
-                )?)
-            })
+            .call(move |db| promote_catalog(db, &id, &key, &hash, size))
             .await?;
         ensure!(
             changed == 1,
@@ -299,6 +282,32 @@ impl ColdStorage {
         );
         Ok(())
     }
+}
+
+fn rollback_eviction(db: &rusqlite::Connection, id: &str) -> Result<()> {
+    ensure!(
+        db.execute(
+            "UPDATE shards SET state='remote_verified' WHERE id=?1 AND state='remote_only'",
+            [id],
+        )? == 1,
+        "failed to roll back shard eviction"
+    );
+    Ok(())
+}
+
+fn promote_catalog(
+    db: &rusqlite::Connection,
+    id: &str,
+    key: &str,
+    hash: &str,
+    size: u64,
+) -> Result<usize> {
+    Ok(db.execute(
+        "UPDATE shards SET state='remote_verified',size_bytes=?1,last_accessed_at_us=?2
+         WHERE id=?3 AND state='remote_only' AND remote_archive_key=?4
+           AND archive_sha256=?5 AND recovery_checkpoint_id IS NOT NULL",
+        rusqlite::params![i64::try_from(size)?, crate::model::now_us()?, id, key, hash],
+    )?)
 }
 
 fn verify_file(path: &Path, expected: &str) -> Result<()> {
@@ -433,5 +442,9 @@ mod tests {
         assert!(verify_file(&path, &"0".repeat(64)).is_err());
         drop(RemoveFile(path.clone()));
         assert!(!path.exists());
+
+        let database = rusqlite::Connection::open_in_memory().expect("cold failure database");
+        assert!(rollback_eviction(&database, "missing").is_err());
+        assert!(promote_catalog(&database, "missing", "key", &"0".repeat(64), 1).is_err());
     }
 }
