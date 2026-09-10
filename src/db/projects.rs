@@ -199,4 +199,34 @@ mod tests {
         assert!(std::error::Error::source(&ManagementError::Forbidden).is_none());
         Ok(())
     }
+
+    fn admin_only_database() -> Connection {
+        let database = Connection::open_in_memory().expect("open project failure database");
+        database
+            .execute_batch(
+                "CREATE TABLE users(id INTEGER,role TEXT,is_active INTEGER);
+                 INSERT INTO users VALUES(1,'admin',1);",
+            )
+            .expect("seed minimum admin schema");
+        database
+    }
+
+    #[test]
+    fn sqlite_schema_failures_are_never_treated_as_authorization_or_empty_results() {
+        let mut empty = Connection::open_in_memory().expect("open empty project database");
+        assert!(create(&mut empty, 1, "new", "New").is_err());
+        assert!(list(&empty, 1).is_err());
+
+        let mut without_projects = admin_only_database();
+        assert!(list(&without_projects, 1).is_err());
+        assert!(create(&mut without_projects, 1, "new", "New").is_err());
+        assert!(set_active(&mut without_projects, 1, 1, false).is_err());
+        assert!(list_keys(&without_projects, 1, 1).is_err());
+
+        let mut incomplete_projects = admin_only_database();
+        incomplete_projects
+            .execute_batch("CREATE TABLE projects(slug TEXT);")
+            .expect("create incomplete project schema");
+        assert!(create(&mut incomplete_projects, 1, "new", "New").is_err());
+    }
 }
