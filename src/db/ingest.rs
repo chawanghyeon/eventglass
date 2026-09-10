@@ -420,4 +420,46 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn corrupt_runtime_counters_never_allocate_or_ack() {
+        let project = IngestProject {
+            id: 1,
+            slug: "p".into(),
+            public_key: "public".into(),
+        };
+        for runtime_row in ["x'80',1", "0,x'80'"] {
+            let mut database =
+                Connection::open_in_memory().expect("open malformed ingest database");
+            database
+                .execute_batch(&format!(
+                    "CREATE TABLE projects(id INTEGER,is_active INTEGER);
+                     CREATE TABLE project_keys(project_id INTEGER,public_key TEXT,revoked_at_us INTEGER);
+                     CREATE TABLE runtime_state(singleton INTEGER,inbox_bytes BLOB,next_ingest_seq BLOB);
+                     INSERT INTO projects VALUES(1,1);
+                     INSERT INTO project_keys VALUES(1,'public',NULL);
+                     INSERT INTO runtime_state VALUES(1,{runtime_row});"
+                ))
+                .expect("seed malformed ingest runtime");
+            assert!(
+                accept(
+                    &mut database,
+                    project.clone(),
+                    "acceptance",
+                    Vec::new(),
+                    &Limits::default()
+                )
+                .is_err()
+            );
+        }
+
+        let database = Connection::open_in_memory().expect("open malformed Indexer cursor");
+        database
+            .execute_batch(
+                "CREATE TABLE runtime_state(singleton INTEGER,last_applied_inbox_id BLOB);
+                 INSERT INTO runtime_state VALUES(1,x'80');",
+            )
+            .expect("seed malformed Indexer cursor");
+        assert!(next_batch(&database, &Limits::default()).is_err());
+    }
 }
