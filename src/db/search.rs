@@ -232,7 +232,8 @@ mod tests {
             "INSERT INTO shards(id,schema_version,format_version,state,created_at_us)
              VALUES(?1,1,'test','local',0)",
             [&shard],
-        )?;
+        )
+        .expect("seed search shard");
         db.execute_batch("PRAGMA ignore_check_constraints=ON; UPDATE shards SET state='creating'")?;
         assert!(event_candidates(&db, 0, 1, 0).is_err());
         assert!(received_candidates(&db, 0, 1, 0).is_err());
@@ -243,6 +244,42 @@ mod tests {
         local_detail_shard(&db, &shard)?;
         assert!(local_detail_shard(&db, "missing").is_err());
         Ok(())
+    }
+
+    #[test]
+    fn authorization_schema_and_cardinality_failures_are_propagated() {
+        let (_directory, mut db) = database();
+        db.execute_batch(
+            "WITH RECURSIVE ids(value) AS (SELECT 2 UNION ALL SELECT value+1 FROM ids WHERE value<=1001)
+             INSERT INTO projects(id,slug,name,is_active,created_at_us,updated_at_us)
+             SELECT value,'p-'||value,'Project',1,0,0 FROM ids;
+             INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+             VALUES(1,'installation','generation',1);",
+        )
+        .expect("seed more than one thousand projects");
+        assert_eq!(
+            capture(&mut db, 1, Vec::new())
+                .expect_err("unbounded all-project scope must fail")
+                .to_string(),
+            "TooLarge"
+        );
+
+        db.execute_batch("PRAGMA ignore_check_constraints=ON; UPDATE users SET role='owner'")
+            .expect("corrupt fixture user role");
+        assert!(identity(&db, 1).is_err());
+
+        let (_broken_directory, broken) = database();
+        broken
+            .execute_batch("DROP TABLE shards")
+            .expect("remove candidate catalog from fixture");
+        assert!(event_candidates(&broken, 0, 1, 0).is_err());
+        assert!(received_candidates(&broken, 0, 1, 0).is_err());
+
+        let mut settings = Connection::open_in_memory().expect("open settings failure database");
+        settings
+            .execute_batch("CREATE TABLE settings(key TEXT PRIMARY KEY,value_json TEXT)")
+            .expect("create incomplete settings schema");
+        assert!(token_key(&mut settings).is_err());
     }
 
     #[test]
