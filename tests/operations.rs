@@ -52,6 +52,57 @@ async fn doctor_is_read_only_and_status_distinguishes_recovery_state() -> anyhow
     assert_eq!(status.backup.state, "disabled");
     assert_eq!(status.inbox_records, "0");
 
+    let disk = app.disk_budget.status()?;
+    let data_dir = root.path().to_owned();
+    let no_checkpoint = app
+        .db
+        .call(move |db| eventglass::operations::status(db, &data_dir, disk, true, true))
+        .await?;
+    assert_eq!(no_checkpoint.backup.state, "no_checkpoint");
+
+    app.db
+        .call(|db| {
+            db.execute(
+                "UPDATE shards SET recovery_checkpoint_id='checkpoint',max_ingest_seq=0",
+                [],
+            )?;
+            Ok(())
+        })
+        .await?;
+    let disk = app.disk_budget.status()?;
+    let data_dir = root.path().to_owned();
+    let current = app
+        .db
+        .call(move |db| eventglass::operations::status(db, &data_dir, disk, true, true))
+        .await?;
+    assert_eq!(current.backup.state, "current");
+    assert_eq!(current.backup.lag_records.as_deref(), Some("0"));
+
+    app.db
+        .call(|db| {
+            db.execute("UPDATE shards SET max_ingest_seq=-1", [])?;
+            Ok(())
+        })
+        .await?;
+    let disk = app.disk_budget.status()?;
+    let data_dir = root.path().to_owned();
+    let lagging = app
+        .db
+        .call(move |db| eventglass::operations::status(db, &data_dir, disk, false, true))
+        .await?;
+    assert_eq!(lagging.backup.state, "lagging");
+    assert!(!lagging.ingest_accepting);
+
+    app.db
+        .call(|db| {
+            db.execute(
+                "UPDATE shards SET recovery_checkpoint_id=NULL,max_ingest_seq=NULL",
+                [],
+            )?;
+            Ok(())
+        })
+        .await?;
+
     std::fs::create_dir(root.path().join("shards").join("unregistered"))?;
     assert!(eventglass::operations::doctor(root.path()).is_err());
     assert!(root.path().join("shards").join("unregistered").is_dir());

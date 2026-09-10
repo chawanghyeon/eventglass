@@ -340,6 +340,33 @@ impl IngestStats {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operational_file_sizes_reject_non_regular_and_io_failures() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let file = root.path().join("file");
+        std::fs::write(&file, b"abc")?;
+        assert_eq!(file_size(&file)?, 3);
+        assert_eq!(optional_file_size(&root.path().join("missing"))?, 0);
+        assert!(file_size(root.path()).is_err());
+        assert!(optional_file_size(root.path()).is_err());
+        assert!(file_size(&root.path().join("missing")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn ingest_stats_classify_every_public_status_family() {
+        let stats = IngestStats::default();
+        for status in [202, 400, 401, 409, 413, 429, 503, 302] {
+            stats.record(status);
+        }
+        assert!(stats.snapshot().values().all(|count| count == "1"));
+    }
+}
+
 #[derive(Serialize)]
 pub struct ReplayStatus {
     pub active_replays: String,
