@@ -169,11 +169,15 @@ pub(super) async fn load_native(
         }
     })
     .await
-    .map_err(|failure| match failure {
+    .map_err(native_detail_failure)?
+    .map_err(|_| unavailable())
+}
+
+fn native_detail_failure(failure: super::NativeTaskFailure) -> ApiError {
+    match failure {
         super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
         super::NativeTaskFailure::Join => unavailable(),
-    })?
-    .map_err(|_| unavailable())
+    }
 }
 
 pub(super) fn detail_response(detail: RecordDetail) -> Response {
@@ -196,4 +200,38 @@ pub(super) fn compare_authorization(
         return Err(token_error(TokenError::AuthorizationChanged));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn authorization() -> Authorization {
+        Authorization {
+            projects: vec![1],
+            storage_generation: "generation".into(),
+            epoch: 1,
+            hash: "hash".into(),
+        }
+    }
+
+    #[test]
+    fn detail_worker_and_authorization_changes_fail_closed() {
+        let timeout = native_detail_failure(super::super::NativeTaskFailure::Timeout);
+        assert_eq!(timeout.0, StatusCode::GATEWAY_TIMEOUT);
+        let join = native_detail_failure(super::super::NativeTaskFailure::Join);
+        assert_eq!(join.0, StatusCode::SERVICE_UNAVAILABLE);
+
+        let before = authorization();
+        assert!(compare_authorization(&before, &before).is_ok());
+        let mut generation = before.clone();
+        generation.storage_generation = "restored".into();
+        assert!(compare_authorization(&before, &generation).is_err());
+        let mut epoch = before.clone();
+        epoch.epoch += 1;
+        assert!(compare_authorization(&before, &epoch).is_err());
+        let mut hash = before.clone();
+        hash.hash = "changed".into();
+        assert!(compare_authorization(&before, &hash).is_err());
+    }
 }
