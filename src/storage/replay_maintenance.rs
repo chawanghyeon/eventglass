@@ -44,6 +44,17 @@ impl ReplayMaintenance {
         query: Arc<Semaphore>,
         backup: Option<super::backup::BackupCoordinator>,
     ) -> Self {
+        Self::start_with_interval(db, root, ingress, query, backup, Duration::from_secs(60))
+    }
+
+    fn start_with_interval(
+        db: DbWorker,
+        root: PathBuf,
+        ingress: Arc<Semaphore>,
+        query: Arc<Semaphore>,
+        backup: Option<super::backup::BackupCoordinator>,
+        interval: Duration,
+    ) -> Self {
         let (stop, mut stopped) = watch::channel(false);
         let status = Arc::new(Mutex::new(MaintenanceStatus {
             state: "waiting",
@@ -52,7 +63,7 @@ impl ReplayMaintenance {
         let progress = status.clone();
         let cursor = Arc::new(Mutex::new(None));
         let join = tokio::spawn(async move {
-            let mut tick = tokio::time::interval(Duration::from_secs(60));
+            let mut tick = tokio::time::interval(interval);
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             tick.tick().await; // Startup already performed a complete sweep.
             loop {
@@ -217,6 +228,71 @@ fn collect_orphans(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn wait_for_state(maintenance: &ReplayMaintenance, expected: &str) -> Result<()> {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if maintenance.status().state == expected {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn coordinator_reports_busy_failure_recovery_and_drop_shutdown() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let app = crate::app::AppState::open(crate::config::Config {
+            addr: "127.0.0.1:0".parse()?,
+            data_dir: root.path().to_owned(),
+            base_url: "http://localhost:8080".parse()?,
+            s3_url: None,
+            s3_endpoint: None,
+            s3_initialize: false,
+        })
+        .await?;
+        let pin = app.ingress_permit.clone().acquire_owned().await?;
+        let maintenance = ReplayMaintenance::start_with_interval(
+            app.db.clone(),
+            root.path().to_owned(),
+            app.ingress_permit.clone(),
+            app.query_permit.clone(),
+            None,
+            Duration::from_millis(1),
+        );
+        wait_for_state(&maintenance, "busy").await?;
+        drop(pin);
+        wait_for_state(&maintenance, "ready").await?;
+        assert!(maintenance.status().last_success_us.is_some());
+        maintenance.shutdown().await?;
+
+        std::fs::write(root.path().join("replay-blobs"), b"not a directory")?;
+        let failing = ReplayMaintenance::start_with_interval(
+            app.db.clone(),
+            root.path().to_owned(),
+            app.ingress_permit.clone(),
+            app.query_permit.clone(),
+            None,
+            Duration::from_millis(1),
+        );
+        wait_for_state(&failing, "failed").await?;
+        failing.shutdown().await?;
+
+        let dropped = ReplayMaintenance::start_with_interval(
+            app.db,
+            root.path().to_owned(),
+            app.ingress_permit,
+            app.query_permit,
+            None,
+            Duration::from_secs(60),
+        );
+        drop(dropped);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn retention_respects_readers_writers_shared_blobs_and_retries_orphans() -> Result<()> {
         let root = tempfile::tempdir()?;
@@ -324,6 +400,8 @@ mod tests {
             )?;
         }
         std::fs::write(root.path().join("replay-blobs/keep.txt"), b"keep")?;
+        std::fs::write(root.path().join("replay-blobs/not-a-hash.zlib"), b"keep")?;
+        std::fs::create_dir(root.path().join("replay-blobs/keep-directory"))?;
         let first = sweep(
             &app.db,
             root.path().to_owned(),
