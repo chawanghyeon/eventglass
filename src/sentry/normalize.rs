@@ -101,13 +101,6 @@ impl<'a> RequestNormalizer<'a> {
         record.issue_id = None;
         record.fingerprint = None;
         record.fingerprint_version = None;
-        record.level = canonical_level(
-            record
-                .raw_json
-                .get("level")
-                .and_then(Value::as_str)
-                .unwrap_or("info"),
-        )?;
         record.message = record
             .raw_json
             .get("transaction")
@@ -918,4 +911,213 @@ fn string_at(value: &Value, path: &[&str]) -> Option<String> {
         current = current.get(*key)?;
     }
     current.as_str().map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt;
+
+    use serde::de::Visitor;
+    use serde_json::json;
+
+    use super::*;
+
+    const RECEIVED_AT_US: i64 = 1_767_323_045_000_000;
+
+    fn project() -> ProjectContext {
+        ProjectContext {
+            project_id: 7,
+            slug: "fixture".to_owned(),
+            public_key: "public".to_owned(),
+            scrub_keys: Vec::new(),
+        }
+    }
+
+    fn normalizer<'a>(project: &'a ProjectContext, limits: &'a Limits) -> RequestNormalizer<'a> {
+        RequestNormalizer::new(project, Uuid::from_u128(1), RECEIVED_AT_US, limits)
+    }
+
+    #[test]
+    fn request_entry_points_reject_non_objects_and_invalid_normalized_fields() {
+        let project = project();
+        let limits = Limits::default();
+        let mut state = normalizer(&project, &limits);
+        assert_eq!(
+            state.event(b"[]", 0, 0),
+            Err(SentryError::Malformed("event payload must be an object"))
+        );
+        assert_eq!(
+            state.transaction(b"null", 0),
+            Err(SentryError::Malformed(
+                "transaction payload must be an object"
+            ))
+        );
+        assert!(matches!(
+            state.event(br#"{"event_id":1}"#, 0, 0),
+            Err(SentryError::Malformed("event_id must be a string"))
+        ));
+        assert!(matches!(
+            state.event(br#"{"level":"notice"}"#, 0, 0),
+            Err(SentryError::Malformed("unsupported event or log level"))
+        ));
+    }
+
+    #[test]
+    fn structured_log_shape_validation_is_closed_by_default() {
+        let project = project();
+        let limits = Limits::default();
+        let cases: &[&[u8]] = &[
+            b"[]",
+            br#"{"version":2}"#,
+            br#"{"version":1,"items":[]}"#,
+            br#"{"version":2,"version":2,"items":[]}"#,
+            br#"{"version":2,"items":[],"items":[]}"#,
+            br#"{"version":2,"items":{}}"#,
+            br#"{"version":2,"items":[null]}"#,
+            br#"{"version":2,"items":[{"body":"x","level":"notice"}]}"#,
+            br#"{"version":2,"items":[{"body":"x","level":"info","attributes":[]}] }"#,
+            br#"{"version":2,"items":[{"body":"x","level":"info","attributes":{"bad":{}}}]}"#,
+        ];
+        for payload in cases {
+            let mut state = normalizer(&project, &limits);
+            assert!(
+                matches!(state.logs(payload, 0), Err(SentryError::Malformed(_))),
+                "payload was accepted: {}",
+                String::from_utf8_lossy(payload)
+            );
+        }
+    }
+
+    struct Expecting<'a, V>(&'a V);
+
+    impl<V> fmt::Display for Expecting<'_, V>
+    where
+        V: for<'de> Visitor<'de>,
+    {
+        fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            self.0.expecting(formatter)
+        }
+    }
+
+    #[test]
+    fn structured_log_visitors_describe_their_required_shapes() {
+        let project = project();
+        let limits = Limits::default();
+        let mut state = normalizer(&project, &limits);
+        let mut error = None;
+        let batch = LogBatchVisitor {
+            normalizer: &mut state,
+            item_ordinal: 0,
+            captured_error: &mut error,
+        };
+        assert_eq!(
+            Expecting(&batch).to_string(),
+            "a Sentry structured log batch object"
+        );
+
+        let mut state = normalizer(&project, &limits);
+        let mut error = None;
+        let items = LogItemsVisitor {
+            normalizer: &mut state,
+            item_ordinal: 0,
+            captured_error: &mut error,
+        };
+        assert_eq!(
+            Expecting(&items).to_string(),
+            "an array of Sentry structured log records"
+        );
+    }
+
+    #[test]
+    fn canonical_fields_and_timestamps_cover_valid_and_hostile_forms() {
+        assert_eq!(canonical_event_id(None).unwrap(), None);
+        assert_eq!(canonical_event_id(Some(&Value::Null)).unwrap(), None);
+        assert_eq!(
+            canonical_event_id(Some(&json!("ABCDEFABCDEFABCDEFABCDEFABCDEFAB"))).unwrap(),
+            Some("abcdefabcdefabcdefabcdefabcdefab".to_owned())
+        );
+        assert!(canonical_event_id(Some(&json!("abc"))).is_err());
+
+        for (input, expected) in [
+            ("TRACE", "trace"),
+            ("debug", "debug"),
+            ("log", "info"),
+            ("warn", "warning"),
+            ("critical", "fatal"),
+        ] {
+            assert_eq!(canonical_level(input).unwrap(), expected);
+        }
+        assert!(canonical_level("notice").is_err());
+
+        assert_eq!(parse_timestamp_us(&json!(1.25)), Some(1_250_000));
+        assert_eq!(parse_timestamp_us(&json!("1.25")), Some(1_250_000));
+        assert_eq!(
+            parse_timestamp_us(&json!("2026-01-02T03:04:05.000006Z")),
+            Some(1_767_323_045_000_006)
+        );
+        assert_eq!(parse_timestamp_us(&json!("not-a-time")), None);
+        assert_eq!(parse_timestamp_us(&json!(1e300)), None);
+        assert_eq!(parse_timestamp_us(&json!("1e300")), None);
+        assert_eq!(parse_timestamp_us(&Value::Null), None);
+    }
+
+    #[test]
+    fn fingerprint_normalization_removes_unbounded_dynamic_identifiers() {
+        assert_eq!(
+            normalize_fingerprint_token("https://example.test/path?secret=yes"),
+            "https://example.test/path?<query>"
+        );
+        assert_eq!(normalize_fingerprint_token("0x12345678"), "<addr>");
+        assert_eq!(normalize_fingerprint_token("abcdef0123456789"), "<hex>");
+        assert_eq!(normalize_fingerprint_token("123456"), "<id>");
+        assert_eq!(
+            normalize_fingerprint_token("550e8400-e29b-41d4-a716-446655440000"),
+            "<uuid>"
+        );
+
+        let raw = json!({
+            "exception": {"values": [{
+                "type": "Failure",
+                "stacktrace": {"frames": [{"function": "outer"}]}
+            }]}
+        });
+        let parts = default_fingerprint_parts(&raw, "failed", None);
+        assert!(parts.iter().any(|part| part == "frame.function:outer"));
+    }
+
+    #[test]
+    fn projection_stops_after_each_bound_and_preserves_utf8() {
+        let mut projection = Projection {
+            scalar_truncated: true,
+            ..Projection::default()
+        };
+        projection.walk(&json!("ignored"), 1);
+        assert!(projection.text.is_empty());
+
+        let mut projection = Projection {
+            scalars: MAX_SEARCH_SCALARS,
+            ..Projection::default()
+        };
+        projection.push_scalar("ignored");
+        assert!(projection.scalar_truncated);
+
+        let mut projection = Projection {
+            text: "x".repeat(MAX_SEARCH_BYTES),
+            ..Projection::default()
+        };
+        projection.push_text("ignored");
+        assert!(projection.text_truncated);
+
+        let mut projection = Projection {
+            text: "x".repeat(MAX_SEARCH_BYTES - 2),
+            ..Projection::default()
+        };
+        projection.push_text("가");
+        assert!(projection.text.is_char_boundary(projection.text.len()));
+        assert!(projection.text_truncated);
+        assert_eq!(
+            projection.warnings(),
+            vec!["search_text_truncated".to_owned()]
+        );
+    }
 }
