@@ -245,3 +245,78 @@ pub(super) async fn feedback(
         .await?;
     Ok(Json(json!({"items":items})))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_filter() -> ReplayFilter {
+        ReplayFilter {
+            project_id: 1,
+            ..ReplayFilter::default()
+        }
+    }
+
+    #[test]
+    fn replay_filter_validation_covers_every_bounded_dimension() {
+        assert!(validate_filter(&valid_filter()).is_ok());
+
+        let mut filter = valid_filter();
+        filter.project_id = 0;
+        assert!(validate_filter(&filter).is_err());
+
+        let mut filter = valid_filter();
+        filter.before_started_ms = Some(1);
+        assert!(validate_filter(&filter).is_err());
+
+        let oversized = "x".repeat(4097);
+        for filter in [
+            ReplayFilter {
+                environment: Some(oversized.clone()),
+                ..valid_filter()
+            },
+            ReplayFilter {
+                release: Some(oversized.clone()),
+                ..valid_filter()
+            },
+            ReplayFilter {
+                url: Some(oversized.clone()),
+                ..valid_filter()
+            },
+            ReplayFilter {
+                user: Some(oversized),
+                ..valid_filter()
+            },
+        ] {
+            assert!(validate_filter(&filter).is_err());
+        }
+
+        let mut filter = valid_filter();
+        filter.started_after_ms = Some(2);
+        filter.started_before_ms = Some(2);
+        assert!(validate_filter(&filter).is_err());
+
+        let mut filter = valid_filter();
+        filter.min_duration_ms = Some(-1);
+        assert!(validate_filter(&filter).is_err());
+
+        let mut filter = valid_filter();
+        filter.max_duration_ms = Some(-1);
+        assert!(validate_filter(&filter).is_err());
+
+        let mut filter = valid_filter();
+        filter.min_duration_ms = Some(2);
+        filter.max_duration_ms = Some(1);
+        assert!(validate_filter(&filter).is_err());
+
+        let mut filter = valid_filter();
+        filter.before_started_ms = Some(1);
+        filter.before_id = Some("not-an-id".into());
+        assert!(validate_filter(&filter).is_err());
+
+        filter.before_id = Some("a".repeat(32));
+        assert!(validate_filter(&filter).is_ok());
+        assert!(validate_id(&"f".repeat(32)).is_ok());
+        assert!(validate_id("invalid").is_err());
+    }
+}

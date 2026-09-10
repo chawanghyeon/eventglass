@@ -473,6 +473,11 @@ async fn durable_http_segments_are_atomic_idempotent_order_independent_and_autho
         ))
         .await?;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = router
+        .clone()
+        .oneshot(get("/api/replays?project_id=1&viewport=wide".into()))
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     for group in ["narrow", "wide", "mixed", "unknown"] {
         let response = router
             .clone()
