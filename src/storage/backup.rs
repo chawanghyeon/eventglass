@@ -410,6 +410,29 @@ mod tests {
             launched.inner.disk.reserved_bytes().expect("released disk"),
             0
         );
+
+        let poisoned = BackupCoordinator::new(
+            app.db.clone(),
+            root.path(),
+            Arc::new(MemoryStore::default()),
+            app.disk_budget.clone(),
+        );
+        let job = poisoned
+            .begin_cut()
+            .await
+            .expect("poisoned backup handshake")
+            .expect("poisoned backup job");
+        let inner = Arc::clone(&poisoned.inner);
+        assert!(
+            tokio::task::spawn_blocking(move || {
+                let _guard = inner.tasks.lock().expect("lock task list before poisoning");
+                panic!("poison backup task list");
+            })
+            .await
+            .is_err()
+        );
+        job.launch();
+        tokio::task::yield_now().await;
     }
 
     #[tokio::test]
@@ -545,18 +568,22 @@ mod tests {
         let install = installation.clone();
         let id = shard_id.clone();
         db.call(move |connection| {
-            connection.execute(
-                "INSERT INTO runtime_state(singleton,installation_id,storage_generation,
+            connection
+                .execute(
+                    "INSERT INTO runtime_state(singleton,installation_id,storage_generation,
                     next_ingest_seq,last_applied_inbox_id,last_applied_ingest_seq)
                  VALUES(1,?1,?2,2,1,1)",
-                rusqlite::params![install, uuid::Uuid::new_v4().to_string()],
-            )?;
-            connection.execute(
-                "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
+                    rusqlite::params![install, uuid::Uuid::new_v4().to_string()],
+                )
+                .expect("insert backup runtime state");
+            connection
+                .execute(
+                    "INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,
                     last_applied_inbox_id,record_count,size_bytes,created_at_us,sealed_at_us)
                  VALUES(?1,1,?2,1,'local',1,0,?3,1,1)",
-                rusqlite::params![id, crate::db::shards::FORMAT_VERSION, size],
-            )?;
+                    rusqlite::params![id, crate::db::shards::FORMAT_VERSION, size],
+                )
+                .expect("insert backup shard");
             Ok(())
         })
         .await?;

@@ -30,9 +30,7 @@ pub fn open(path: &Path) -> Result<Connection> {
     let mut connection = Connection::open(path).context("open metadata database")?;
     configure(&connection)?;
     let integrity: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
-    if integrity != "ok" {
-        bail!("metadata integrity check failed");
-    }
+    validate_integrity(&integrity)?;
     migrate(&mut connection)?;
     Ok(connection)
 }
@@ -53,9 +51,7 @@ pub fn inspect(path: &Path) -> Result<Connection> {
     }
     let connection = open_reader(path)?;
     let integrity: String = connection.query_row("PRAGMA quick_check", [], |row| row.get(0))?;
-    if integrity != "ok" {
-        bail!("metadata integrity check failed");
-    }
+    validate_integrity(&integrity)?;
     let version: i64 = connection.query_row(
         "SELECT coalesce(max(version),0) FROM schema_migrations",
         [],
@@ -73,6 +69,14 @@ pub fn inspect(path: &Path) -> Result<Connection> {
         bail!("metadata foreign key check failed");
     }
     Ok(connection)
+}
+
+fn validate_integrity(integrity: &str) -> Result<()> {
+    if integrity == "ok" {
+        Ok(())
+    } else {
+        bail!("metadata integrity check failed")
+    }
 }
 
 fn configure(connection: &Connection) -> Result<()> {
@@ -343,6 +347,56 @@ mod tests {
         connection
             .execute("CREATE TABLE replays(conflict INTEGER)", [])
             .expect("conflicting v2 table");
+        assert!(migrate(&mut connection).is_err());
+    }
+
+    #[test]
+    fn migration_queries_and_version_record_writes_propagate_authorizer_denials() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        assert!(validate_integrity("corrupt").is_err());
+
+        for denied_select in [0, 1] {
+            let mut connection = Connection::open_in_memory().expect("migration query database");
+            let selects = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&selects);
+            connection
+                .authorizer(Some(move |context: AuthContext<'_>| {
+                    if matches!(context.action, AuthAction::Select)
+                        && observed.fetch_add(1, Ordering::SeqCst) == denied_select
+                    {
+                        Authorization::Deny
+                    } else {
+                        Authorization::Allow
+                    }
+                }))
+                .expect("install migration query authorizer");
+            assert!(migrate(&mut connection).is_err());
+        }
+
+        let mut connection = Connection::open_in_memory().expect("migration insert database");
+        connection
+            .execute_batch(INITIAL_SCHEMA)
+            .expect("install migration v1 schema");
+        let checksum = format!("{:x}", Sha256::digest(INITIAL_SCHEMA.as_bytes()));
+        connection
+            .execute(
+                "INSERT INTO schema_migrations(version,checksum,applied_at_us) VALUES(1,?1,0)",
+                [checksum],
+            )
+            .expect("install migration v1 record");
+        connection
+            .authorizer(Some(|context: AuthContext<'_>| match context.action {
+                AuthAction::Insert {
+                    table_name: "schema_migrations",
+                } => Authorization::Deny,
+                _ => Authorization::Allow,
+            }))
+            .expect("install migration insert authorizer");
         assert!(migrate(&mut connection).is_err());
     }
 }

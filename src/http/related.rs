@@ -103,20 +103,22 @@ pub(super) async fn related(
     .await?
     .ok_or(ApiError(StatusCode::NOT_FOUND, "record_not_found"))?;
     let seed = reference.correlation;
-    let (strategy, mut project_ids, filters, effective_window) =
+    let (strategy, project_ids, filters, effective_window) =
         correlation_strategy(&seed, project_id, window_seconds);
     let delta_us = i64::from(effective_window).saturating_mul(1_000_000);
     let start_us = seed.timestamp_us.saturating_sub(delta_us);
     let end_us = seed.timestamp_us.saturating_add(delta_us).saturating_add(1);
-    if matches!(strategy, Strategy::Trace) {
-        let all = state
+    let project_ids = if matches!(strategy, Strategy::Trace) {
+        state
             .app
             .db
             .call(move |db| authorization::capture(db, principal_id, Vec::new()))
             .await
-            .map_err(scope_error)?;
-        project_ids = all.projects;
-    }
+            .map_err(scope_error)?
+            .projects
+    } else {
+        project_ids
+    };
     let candidate_ids = state
         .app
         .db

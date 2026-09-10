@@ -258,9 +258,34 @@ async fn cold_hydration_is_single_flight_verified_and_atomic() -> Result<()> {
             destination: eventglass::alerts::Destination::Webhook { url: "https://example.invalid/hook".into() },
         };
         eventglass::db::alerts::create(db, 1, &configuration, eventglass::model::now_us()? - 120_000_000)?;
+        let timestamp_configuration = eventglass::alerts::Configuration {
+            name: "Cold timestamp count".into(),
+            project_id: Some(1),
+            enabled: true,
+            condition: eventglass::alerts::Condition::ErrorCount {
+                query: String::new(),
+                window_seconds: 60,
+                threshold: 1,
+                cooldown_seconds: 0,
+                time_basis: eventglass::alerts::TimeBasis::Timestamp,
+            },
+            destination: eventglass::alerts::Destination::Webhook {
+                url: "https://example.invalid/hook".into(),
+            },
+        };
+        eventglass::db::alerts::create(
+            db,
+            1,
+            &timestamp_configuration,
+            eventglass::model::now_us()? - 120_000_000,
+        )?;
         Ok(())
     }).await?;
     assert!(!eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit, None).await?);
+    assert!(
+        eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit, Some(&cold))
+            .await?
+    );
     assert!(
         eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit, Some(&cold))
             .await?
@@ -333,6 +358,29 @@ async fn cold_hydration_is_single_flight_verified_and_atomic() -> Result<()> {
         })
         .await?;
     assert_eq!(cold.reclaim_for_ingest(&app.disk_budget).await?, 0);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let shard_root = root.path().join("shards");
+        let original_mode = std::fs::metadata(&shard_root)?.permissions().mode();
+        std::fs::set_permissions(&shard_root, std::fs::Permissions::from_mode(0o500))?;
+        let failed = cold.evict_remote_verified(&ids[0]).await;
+        std::fs::set_permissions(&shard_root, std::fs::Permissions::from_mode(original_mode))?;
+        assert!(failed.is_err());
+        let id = ids[0].clone();
+        let state = app
+            .db
+            .call(move |db| {
+                db.query_row("SELECT state FROM shards WHERE id=?1", [id], |row| {
+                    row.get::<_, String>(0)
+                })
+                .map_err(Into::into)
+            })
+            .await?;
+        assert_eq!(state, "remote_verified");
+    }
 
     app.db
         .call(|db| {

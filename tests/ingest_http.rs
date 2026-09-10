@@ -1,10 +1,58 @@
+use async_trait::async_trait;
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
-use eventglass::{app::AppState, config::Config};
+use eventglass::{
+    app::AppState,
+    config::Config,
+    storage::{
+        cold::ColdStorage,
+        s3::{ObjectMetadata, ObjectPage, ObjectStore},
+    },
+};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use tower::ServiceExt;
+
+struct UnusedStore;
+
+#[async_trait]
+impl ObjectStore for UnusedStore {
+    async fn list(&self, _continuation: Option<String>) -> anyhow::Result<ObjectPage> {
+        unreachable!()
+    }
+
+    async fn get_small(&self, _relative: &str, _max_bytes: u64) -> anyhow::Result<Vec<u8>> {
+        unreachable!()
+    }
+
+    async fn put_if_absent(&self, _relative: &str, _bytes: Vec<u8>) -> anyhow::Result<()> {
+        unreachable!()
+    }
+
+    async fn put_bytes(&self, _relative: &str, _bytes: Vec<u8>) -> anyhow::Result<()> {
+        unreachable!()
+    }
+
+    async fn put_file(
+        &self,
+        _relative: &str,
+        _path: &std::path::Path,
+        _sha: &str,
+    ) -> anyhow::Result<()> {
+        unreachable!()
+    }
+
+    async fn download(
+        &self,
+        _relative: &str,
+        _destination: &std::path::Path,
+        _max_bytes: u64,
+    ) -> anyhow::Result<ObjectMetadata> {
+        unreachable!()
+    }
+}
 
 async fn app() -> anyhow::Result<(tempfile::TempDir, AppState, axum::Router)> {
     let dir = tempfile::tempdir()?;
@@ -159,14 +207,24 @@ async fn sdk_transaction_ack_reaches_index_without_creating_an_issue() -> anyhow
     assert_eq!(receipt["accepted"], 1);
     let state = state.start_core().await?;
     let indexer = state.indexer.as_ref().unwrap();
+    let running_router = eventglass::http::router(state.clone());
+    let second = running_router
+        .oneshot(
+            Request::post("/api/1/envelope/?sentry_key=public-test-key").body(Body::from(
+                include_bytes!("fixtures/sentry/rust-http-transaction/transaction.envelope")
+                    .as_slice(),
+            ))?,
+        )
+        .await?;
+    assert_eq!(second.status(), StatusCode::ACCEPTED);
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
-        while indexer.snapshot()?.boundary.ingest_seq < 1 {
+        while indexer.snapshot()?.boundary.ingest_seq < 2 {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         Ok::<_, anyhow::Error>(())
     })
     .await??;
-    assert_eq!(indexer.snapshot()?.searcher.num_docs(), 1);
+    assert_eq!(indexer.snapshot()?.searcher.num_docs(), 2);
     assert_eq!(
         state
             .db
@@ -178,6 +236,53 @@ async fn sdk_transaction_ack_reaches_index_without_creating_an_issue() -> anyhow
         0
     );
     indexer.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn disk_reclaim_failure_is_reported_before_acceptance() -> anyhow::Result<()> {
+    let (directory, mut state, _router) = app().await?;
+    let installation = state
+        .db
+        .call(|db| {
+            db.query_row(
+                "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .map_err(Into::into)
+        })
+        .await?;
+    state.cold = Some(ColdStorage::new(
+        state.db.clone(),
+        directory.path(),
+        installation.clone(),
+        Arc::new(UnusedStore),
+        eventglass::storage::registry::Registry::new(directory.path(), installation),
+        state.disk_budget.clone(),
+    ));
+    state
+        .db
+        .call(|db| {
+            db.execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE shards")?;
+            Ok(())
+        })
+        .await?;
+    let disk = state.disk_budget.status()?;
+    let held = state.disk_budget.reserve(
+        disk.free_bytes
+            .saturating_sub(disk.minimum_free_bytes)
+            .saturating_sub(8 * 1024 * 1024),
+    )?;
+    assert!(!state.disk_budget.status()?.ingest_accepting);
+
+    let response = eventglass::http::router(state)
+        .oneshot(Request::post("/api/1/envelope/").body(Body::from(envelope("public-test-key")))?)
+        .await?;
+    drop(held);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 8192).await?)?;
+    assert_eq!(body["error"]["code"], "disk_reclaim_failed");
     Ok(())
 }
 

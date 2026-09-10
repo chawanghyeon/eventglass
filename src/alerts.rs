@@ -501,11 +501,10 @@ struct CoordinatorControl {
 impl Drop for CoordinatorControl {
     fn drop(&mut self) {
         let _ = self.stop.send(true);
-        if let Ok(joins) = self.joins.get_mut() {
-            for join in joins.drain(..) {
-                join.abort();
-            }
-        }
+        let Ok(joins) = self.joins.get_mut() else {
+            return;
+        };
+        joins.drain(..).for_each(|join| join.abort());
     }
 }
 

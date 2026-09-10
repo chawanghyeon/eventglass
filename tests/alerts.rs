@@ -160,6 +160,7 @@ async fn threshold_evaluation_waits_for_cut_uses_native_count_and_advances_once(
             Ok(())
         })
         .await?;
+    let indexer = eventglass::indexer::Indexer::start(app.db.clone(), directory.path()).await?;
     let minute = eventglass::model::now_us()? / 60_000_000 * 60_000_000;
     let received_at = minute - 1;
     let records = sentry::normalize_store(
@@ -212,7 +213,7 @@ async fn threshold_evaluation_waits_for_cut_uses_native_count_and_advances_once(
     app.db
         .call(move |db| alerts::create(db, 1, &configuration, minute - 60_000_000))
         .await?;
-    let indexer = eventglass::indexer::Indexer::start(app.db.clone(), directory.path()).await?;
+    assert!(!eventglass::alerts::evaluate_once(&app.db, &indexer, &app.query_permit, None).await?);
     indexer.wake();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {

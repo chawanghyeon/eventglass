@@ -1,6 +1,6 @@
 //! Alert administration and durable outbox state transitions.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use sha2::Digest;
@@ -171,9 +171,7 @@ pub fn create(
             [project],
             |row| row.get(0),
         )?;
-        if !exists {
-            return Err(AlertError::Invalid.into());
-        }
+        ensure!(exists, AlertError::Invalid);
     }
     tx.execute(
         "INSERT INTO alerts(project_id,name,condition_type,condition_json,destination_type,
@@ -214,9 +212,7 @@ pub fn update(
             [project],
             |row| row.get(0),
         )?;
-        if !exists {
-            return Err(AlertError::Invalid.into());
-        }
+        ensure!(exists, AlertError::Invalid);
     }
     if tx.execute(
         "UPDATE alerts SET project_id=?1,name=?2,condition_type=?3,condition_json=?4,
@@ -776,6 +772,49 @@ mod tests {
             retry(&mut db, 1, "missing", 3).unwrap_err(),
             AlertError::NotFound,
         );
+    }
+
+    #[test]
+    fn administrative_conflict_probes_propagate_sqlite_authorization_failures() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let (_directory, mut update_db) = database();
+        let id = create(&mut update_db, 1, &configuration(), 1).expect("create update alert");
+        let selects = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&selects);
+        update_db
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(context.action, AuthAction::Select)
+                    && observed.fetch_add(1, Ordering::SeqCst) == 2
+                {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .expect("install update authorizer");
+        assert!(update(&mut update_db, 1, id, 99, &configuration(), 2).is_err());
+
+        let (_directory, mut delete_db) = database();
+        let id = create(&mut delete_db, 1, &configuration(), 1).expect("create delete alert");
+        let selects = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&selects);
+        delete_db
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(context.action, AuthAction::Select)
+                    && observed.fetch_add(1, Ordering::SeqCst) == 1
+                {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .expect("install delete authorizer");
+        assert!(delete(&mut delete_db, 1, id, 99, 2).is_err());
     }
 
     #[test]

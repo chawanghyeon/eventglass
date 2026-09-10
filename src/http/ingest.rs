@@ -104,10 +104,10 @@ fn key_from_transport(uri: &Uri, headers: &HeaderMap) -> ApiResult<Option<String
         key = Some(candidate.to_owned());
         Ok(())
     };
-    for (name, value) in url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()) {
-        if name == "sentry_key" {
-            add(&value)?;
-        }
+    for value in url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
+        .filter_map(|(name, value)| (name == "sentry_key").then_some(value))
+    {
+        add(&value)?;
     }
     for value in headers.get_all("x-sentry-auth") {
         let value = value

@@ -267,7 +267,14 @@ mod tests {
         drop(pin);
         wait_for_state(&maintenance, "ready").await?;
         assert!(maintenance.status().last_success_us.is_some());
-        maintenance.shutdown().await?;
+        maintenance
+            .shutdown()
+            .await
+            .expect("first maintenance shutdown");
+        maintenance
+            .shutdown()
+            .await
+            .expect("idempotent maintenance shutdown");
 
         std::fs::write(root.path().join("replay-blobs"), b"not a directory")?;
         let failing = ReplayMaintenance::start_with_interval(
