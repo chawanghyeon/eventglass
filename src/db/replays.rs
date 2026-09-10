@@ -409,3 +409,70 @@ pub fn feedback_list(
         .map(|value| serde_json::from_str(&value))
         .collect::<serde_json::Result<Vec<_>>>()?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metadata(segment_id: u64) -> ReplayMetadata {
+        ReplayMetadata {
+            replay_id: "a".repeat(32),
+            segment_id,
+            started_at_ms: 20,
+            finished_at_ms: 30,
+            user: None,
+            environment: None,
+            release: None,
+            browser: None,
+            os: None,
+            device: None,
+            urls: Vec::new(),
+            error_ids: Vec::new(),
+            trace_ids: Vec::new(),
+            sdk_version: None,
+            replay_type: None,
+        }
+    }
+
+    #[test]
+    fn errors_merge_limits_and_pre_replay_backups_are_explicit() {
+        for error in [
+            ReplayError::Conflict,
+            ReplayError::TooLarge,
+            ReplayError::Forbidden,
+            ReplayError::NotFound,
+        ] {
+            assert!(!error.to_string().is_empty());
+        }
+
+        let mut first = metadata(2);
+        first.started_at_ms = 10;
+        first.urls = vec!["first".into()];
+        let mut second = metadata(1);
+        second.finished_at_ms = 40;
+        second.urls = vec!["second".into()];
+        let merged = merge(first.clone(), second.clone()).expect("merge later segment");
+        assert_eq!(merged.segment_id, 2);
+        assert_eq!(merged.started_at_ms, 10);
+        assert_eq!(merged.finished_at_ms, 40);
+        assert_eq!(merged.urls, ["first", "second"]);
+        let merged = merge(second, first).expect("merge earlier segment");
+        assert_eq!(merged.segment_id, 2);
+
+        let mut oversized = metadata(3);
+        oversized.urls = (0..=10_000).map(|index| index.to_string()).collect();
+        assert!(matches!(
+            merge(metadata(0), oversized)
+                .expect_err("union cardinality must remain bounded")
+                .downcast_ref::<ReplayError>(),
+            Some(ReplayError::TooLarge)
+        ));
+
+        let database = Connection::open_in_memory().expect("open legacy database");
+        assert!(
+            blob_references(&database)
+                .expect("read legacy references")
+                .is_empty()
+        );
+    }
+}
