@@ -240,3 +240,87 @@ fn validate_position(position: &Position, watermark: i64) -> Result<(), TokenErr
         Err(TokenError::Invalid)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context() -> TokenContext {
+        TokenContext {
+            storage_generation: "generation".into(),
+            authorization_epoch: 1,
+            authorization_hash: "authorization".into(),
+            request_hash: "request".into(),
+        }
+    }
+
+    fn signed(codec: &TokenCodec, kind: TokenKind, bytes: &[u8]) -> String {
+        let mut mac = Hmac::<Sha256>::new_from_slice(&codec.key).unwrap();
+        mac.update(kind.domain());
+        mac.update(bytes);
+        format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(bytes),
+            URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+        )
+    }
+
+    #[test]
+    fn token_errors_and_issue_limits_are_stable() {
+        assert_eq!(TokenError::Invalid.to_string(), "Invalid");
+        let codec = TokenCodec::new([1; 32]);
+        assert_eq!(
+            codec.issue(context(), -1, Position::Read, 0),
+            Err(TokenError::Invalid)
+        );
+        let mut invalid_context = context();
+        invalid_context.authorization_epoch = -1;
+        assert_eq!(
+            codec.issue(invalid_context, 0, Position::Read, 0),
+            Err(TokenError::Invalid)
+        );
+        assert_eq!(
+            codec.issue(context(), 0, Position::Read, i64::MAX),
+            Err(TokenError::Invalid)
+        );
+        let mut huge = context();
+        huge.request_hash = "x".repeat(8192);
+        assert_eq!(
+            codec.issue(huge, 0, Position::Read, 0),
+            Err(TokenError::Invalid)
+        );
+    }
+
+    #[test]
+    fn signed_but_invalid_payloads_are_rejected_after_authentication() {
+        let codec = TokenCodec::new([2; 32]);
+        let oversized = vec![b' '; 8193];
+        assert_eq!(
+            codec.verify(
+                &signed(&codec, TokenKind::Read, &oversized),
+                TokenKind::Read,
+                &context(),
+                1
+            ),
+            Err(TokenError::Invalid)
+        );
+        let base = Payload {
+            version: 2,
+            context: context(),
+            watermark: 0,
+            issued_at_us: 0,
+            expires_at_us: TokenKind::Read.ttl_us(),
+            position: Position::Read,
+        };
+        let bytes = serde_json::to_vec(&base).unwrap();
+        assert_eq!(
+            codec.verify(
+                &signed(&codec, TokenKind::Read, &bytes),
+                TokenKind::Read,
+                &context(),
+                1
+            ),
+            Err(TokenError::Invalid)
+        );
+    }
+}

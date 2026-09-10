@@ -788,3 +788,194 @@ fn histogram_key_us(bucket: &tantivy::aggregation::agg_result::BucketEntry) -> R
         .checked_mul(1_000)
         .ok_or(AggregateError::UnexpectedNativeResult)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tantivy::aggregation::{Key, agg_result::BucketEntry, metric::SingleMetricResult};
+
+    fn request() -> AggregateRequest {
+        AggregateRequest {
+            query: String::new(),
+            scope: QueryScope {
+                project_ids: vec![1],
+                start_us: 0,
+                end_us: 1,
+                watermark: 1,
+                time_field: TimeField::Timestamp,
+            },
+            filters: Vec::new(),
+            metrics: Vec::new(),
+            group_by: Vec::new(),
+            histogram: None,
+        }
+    }
+
+    #[test]
+    fn metric_group_and_error_variants_have_stable_mappings() {
+        let field = NumericField::Json("duration".into());
+        let metrics = [
+            MetricSpec::Count {
+                name: "count".into(),
+            },
+            MetricSpec::Sum {
+                name: "sum".into(),
+                field: field.clone(),
+            },
+            MetricSpec::Min {
+                name: "min".into(),
+                field: field.clone(),
+            },
+            MetricSpec::Max {
+                name: "max".into(),
+                field: field.clone(),
+            },
+            MetricSpec::Avg {
+                name: "avg".into(),
+                field,
+            },
+        ];
+        assert_eq!(
+            metrics.map(|metric| metric.op()),
+            [
+                MetricOp::Count,
+                MetricOp::Sum,
+                MetricOp::Min,
+                MetricOp::Max,
+                MetricOp::Avg
+            ]
+        );
+        assert_eq!(
+            [
+                GroupField::Service,
+                GroupField::Level,
+                GroupField::Environment,
+                GroupField::Release
+            ]
+            .map(GroupField::native_name),
+            ["service", "level", "environment", "release"]
+        );
+
+        let errors = [
+            AggregateError::InvalidRequest("bad"),
+            AggregateError::BucketLimitExceeded {
+                limit: 1,
+                current: 2,
+            },
+            AggregateError::MemoryLimitExceeded {
+                limit: 1,
+                current: 2,
+            },
+            AggregateError::NumericOverflow { metric: "m".into() },
+            AggregateError::InexactNativeResult,
+            AggregateError::UnexpectedNativeResult,
+            AggregateError::Native(TantivyError::InvalidArgument("bad".into())),
+        ];
+        for error in &errors {
+            assert!(!error.to_string().is_empty());
+        }
+        assert!(!errors[0].is_unprocessable());
+        assert!(errors[1].is_unprocessable());
+        assert!(errors[2].is_unprocessable());
+        assert!(errors[3].is_unprocessable());
+        assert!(Error::source(&errors[6]).is_some());
+        assert!(Error::source(&errors[0]).is_none());
+    }
+
+    #[test]
+    fn request_validation_rejects_every_aggregation_dimension() {
+        let mut input = request();
+        input.metrics = (0..=MAX_METRICS)
+            .map(|index| MetricSpec::Count {
+                name: index.to_string(),
+            })
+            .collect();
+        assert!(validate_request(&input).is_err());
+        input = request();
+        input.group_by = (0..=MAX_GROUPS)
+            .map(|_| GroupSpec {
+                field: GroupField::Service,
+                limit: 1,
+            })
+            .collect();
+        assert!(validate_request(&input).is_err());
+        for name in ["", "\n", &"x".repeat(MAX_METRIC_NAME_BYTES + 1)] {
+            input = request();
+            input.metrics.push(MetricSpec::Count { name: name.into() });
+            assert!(validate_request(&input).is_err());
+        }
+        input = request();
+        input.metrics = vec![
+            MetricSpec::Count {
+                name: "same".into(),
+            },
+            MetricSpec::Count {
+                name: "same".into(),
+            },
+        ];
+        assert!(validate_request(&input).is_err());
+        for path in ["", "tail\\", &"x".repeat(MAX_JSON_PATH_BYTES + 1)] {
+            input = request();
+            input.metrics.push(MetricSpec::Sum {
+                name: "sum".into(),
+                field: NumericField::Json(path.into()),
+            });
+            assert!(validate_request(&input).is_err());
+        }
+        for limit in [0, MAX_GROUP_LIMIT + 1] {
+            input = request();
+            input.group_by.push(GroupSpec {
+                field: GroupField::Service,
+                limit,
+            });
+            assert!(validate_request(&input).is_err());
+        }
+        input = request();
+        input.group_by = vec![
+            GroupSpec {
+                field: GroupField::Service,
+                limit: 1,
+            },
+            GroupSpec {
+                field: GroupField::Service,
+                limit: 1,
+            },
+        ];
+        assert!(validate_request(&input).is_err());
+        input = request();
+        input.scope.time_field = TimeField::ReceivedAt;
+        input.histogram = Some(HistogramSpec { interval_ms: 1 });
+        assert!(validate_request(&input).is_err());
+        input.scope.time_field = TimeField::Timestamp;
+        input.histogram = Some(HistogramSpec { interval_ms: 0 });
+        assert!(validate_request(&input).is_err());
+    }
+
+    #[test]
+    fn native_projection_rejects_wrong_shapes_nonfinite_values_and_keys() {
+        let empty = AggregationResults::default();
+        assert!(native_stats(&empty, 0).is_err());
+        assert!(native_single(&empty, 0, MetricOp::Min).is_err());
+        assert!(validate_finite("metric", Some(f64::NAN)).is_err());
+        assert!(validate_finite("metric", None).is_ok());
+
+        let mut results = AggregationResults::default();
+        results.0.insert(
+            metric_name(0),
+            AggregationResult::MetricResult(NativeMetricResult::Max(SingleMetricResult::from(1.0))),
+        );
+        assert!(native_single(&results, 0, MetricOp::Min).is_err());
+        let bucket = |key| BucketEntry {
+            key_as_string: None,
+            key,
+            doc_count: 1,
+            sub_aggregation: AggregationResults::default(),
+        };
+        assert!(native_string_key(&bucket(Key::I64(1))).is_err());
+        assert_eq!(histogram_key_us(&bucket(Key::I64(2))).unwrap(), 2_000);
+        assert_eq!(histogram_key_us(&bucket(Key::F64(2.0))).unwrap(), 2_000);
+        assert!(histogram_key_us(&bucket(Key::F64(2.5))).is_err());
+        assert!(histogram_key_us(&bucket(Key::U64(2))).is_err());
+        assert!(histogram_key_us(&bucket(Key::I64(i64::MAX))).is_err());
+    }
+}
