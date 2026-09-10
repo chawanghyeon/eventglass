@@ -921,4 +921,190 @@ mod tests {
         assert_eq!(maps.pages["page"].depth_elements["1"]["button"], 2);
         assert_eq!(maps.pages["page"].scroll_reach_replays["1"], 1);
     }
+
+    #[test]
+    fn rrweb_mutations_movements_and_click_metadata_are_bounded() {
+        let mut analysis = Analysis::default();
+        analysis.event(&serde_json::json!({
+            "type": 4, "timestamp": 1,
+            "data": {"href": "https://example.test/", "width": 320, "height": 200}
+        }));
+        analysis.event(&serde_json::json!({
+            "type": 2, "timestamp": 2,
+            "data": {"node": {"type": 0, "id": 1, "childNodes": [
+                {"type": 2, "id": 2, "childNodes": []}
+            ]}, "initialOffset": {"top": 250}}
+        }));
+        analysis.event(&serde_json::json!({
+            "type": 3, "timestamp": 3,
+            "data": {"source": 0, "adds": [
+                {"parentId": 2, "node": {"type": 2, "id": 3}},
+                {"parentId": 999, "node": {"type": 2, "id": 4}}
+            ]}
+        }));
+        analysis.event(&serde_json::json!({
+            "type": 3, "timestamp": 4, "data": {"source": 0, "adds": null}
+        }));
+        analysis.event(&serde_json::json!({
+            "type": 3, "timestamp": 5,
+            "data": {"source": 1, "positions": [
+                {"id": 3, "x": 16, "y": 20, "timeOffset": 1},
+                {"id": 3, "x": 32, "y": 40, "timeOffset": 100000}
+            ]}
+        }));
+        analysis.event(&serde_json::json!({
+            "type": 3, "timestamp": 6, "data": {"source": 1, "positions": null}
+        }));
+        assert!(analysis.top_nodes.contains(&3));
+        assert!(!analysis.top_nodes.contains(&4));
+        assert_eq!(
+            analysis.pages["https://example.test/"]
+                .movement
+                .values()
+                .sum::<u32>(),
+            2
+        );
+
+        analysis.event(&serde_json::json!({
+            "type": 5, "timestamp": 7,
+            "data": {"tag": "breadcrumb", "payload": {
+                "category": "ui.click", "message": "button.save"
+            }}
+        }));
+        let page = analysis.pages.get_mut("https://example.test/").unwrap();
+        assert_eq!(page.depth_elements["1"]["button.save"], 1);
+        page.elements = (0..1000).map(|n| (n.to_string(), 1)).collect();
+        analysis.event(&serde_json::json!({
+            "type": 5, "timestamp": 8,
+            "data": {"tag": "breadcrumb", "payload": {
+                "category": "ui.click", "message": "overflow"
+            }}
+        }));
+        assert!(
+            !analysis.pages["https://example.test/"]
+                .elements
+                .contains_key("overflow")
+        );
+    }
+
+    #[test]
+    fn frustration_categories_and_limits_preserve_their_meaning() {
+        let mut analysis = Analysis::default();
+        analysis.navigate("https://example.test/", 0, "load");
+        for (time, category, end_reason, tag, count, expected) in [
+            (
+                1,
+                "ui.slowClickDetected",
+                "timeout",
+                "button",
+                5,
+                "rage click",
+            ),
+            (
+                2,
+                "ui.slowClickDetected",
+                "timeout",
+                "button",
+                1,
+                "dead click",
+            ),
+            (
+                3,
+                "ui.slowClickDetected",
+                "mutation",
+                "div",
+                1,
+                "slow click",
+            ),
+            (4, "ui.multiClick", "", "div", 1, "multi click"),
+        ] {
+            analysis.event(&serde_json::json!({
+                "type": 5, "timestamp": time,
+                "data": {"tag": "breadcrumb", "payload": {
+                    "category": category, "message": expected,
+                    "data": {"endReason": end_reason, "node": {"tagName": tag},
+                             "clickCount": count, "timeAfterClickMs": 7}
+                }}
+            }));
+        }
+        assert_eq!(
+            analysis
+                .timeline
+                .iter()
+                .skip(1)
+                .map(|event| event.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["rage click", "dead click", "slow click", "multi click"]
+        );
+
+        analysis
+            .signals
+            .resize(MAX_TIMELINE, (0, Default::default()));
+        analysis.event(&serde_json::json!({
+            "type": 5, "timestamp": 5,
+            "data": {"tag": "breadcrumb", "payload": {
+                "category": "ui.multiClick", "data": {"clickCount": 1}
+            }}
+        }));
+        assert!(analysis.truncated);
+        analysis.finish(10);
+        let page = &analysis.pages["https://example.test/"];
+        assert_eq!(
+            (
+                page.frustration.slow,
+                page.frustration.dead,
+                page.frustration.rage,
+                page.frustration.multi
+            ),
+            (3, 2, 1, 1)
+        );
+    }
+
+    #[test]
+    fn journey_and_point_caps_mark_incomplete_analysis() {
+        let mut untimed = Analysis::default();
+        untimed.pages.insert("one".into(), PageActivity::default());
+        untimed.pages.insert("two".into(), PageActivity::default());
+        untimed.journey.push(Visit {
+            url: "one".into(),
+            started_at_ms: 0,
+            duration_ms: None,
+        });
+        untimed.journey.push(Visit {
+            url: "two".into(),
+            started_at_ms: 1,
+            duration_ms: None,
+        });
+        untimed.finish(2);
+        assert_eq!(untimed.pages["one"].visits, 1);
+        assert!(untimed.pages["one"].next_pages.is_empty());
+
+        let mut capped = Analysis::default();
+        capped.resize(&serde_json::json!({"width": 1000, "height": 100}), 0);
+        capped.journey = (0..MAX_PAGES)
+            .map(|n| Visit {
+                url: format!("https://{n}.test/"),
+                started_at_ms: n as i64,
+                duration_ms: Some(1),
+            })
+            .collect();
+        capped.navigate("https://overflow.test/", 1000, "navigation");
+        assert!(capped.truncated);
+        assert_eq!(capped.journey.len(), MAX_PAGES);
+        assert_eq!(capped.pages["https://overflow.test/"].wide_replays, 1);
+
+        let mut point = Analysis::default();
+        point.top_nodes.insert(1);
+        point.viewport_history.push_back((0, 100.0, 100.0));
+        point.journey.push(Visit {
+            url: "overflow".into(),
+            started_at_ms: 0,
+            duration_ms: None,
+        });
+        point.pages = (0..MAX_PAGES)
+            .map(|n| (format!("page-{n}"), PageActivity::default()))
+            .collect();
+        point.point(&serde_json::json!({"id": 1, "x": 1, "y": 1}), false, 1);
+        assert!(point.truncated);
+    }
 }
