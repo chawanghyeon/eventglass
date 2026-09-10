@@ -52,7 +52,13 @@ pub(super) async fn doctor(
         crate::operations::doctor(&data_dir)
     })
     .await
-    .map_err(|error| match error {
+    .map_err(doctor_failure)??;
+    authenticate(&state, &headers, false, true).await?;
+    Ok(Json(json!(report)))
+}
+
+fn doctor_failure(error: super::NativeTaskFailure) -> super::ApiError {
+    match error {
         super::NativeTaskFailure::Timeout => {
             super::ApiError(axum::http::StatusCode::GATEWAY_TIMEOUT, "doctor_timeout")
         }
@@ -60,7 +66,21 @@ pub(super) async fn doctor(
             axum::http::StatusCode::SERVICE_UNAVAILABLE,
             "doctor_unavailable",
         ),
-    })??;
-    authenticate(&state, &headers, false, true).await?;
-    Ok(Json(json!(report)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn doctor_worker_failures_have_stable_public_statuses() {
+        let timeout = doctor_failure(super::super::NativeTaskFailure::Timeout);
+        assert_eq!(timeout.0, StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(timeout.1, "doctor_timeout");
+        let unavailable = doctor_failure(super::super::NativeTaskFailure::Join);
+        assert_eq!(unavailable.0, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(unavailable.1, "doctor_unavailable");
+    }
 }
