@@ -784,6 +784,22 @@ fn required_fast_value<T>(value: Option<T>, shard: &SearchShard, field: &'static
     })
 }
 
+fn optional_string(
+    present: bool,
+    value: Option<&str>,
+    shard: &SearchShard,
+    field: &'static str,
+) -> Result<Option<String>> {
+    match (present, value) {
+        (false, _) => Ok(None),
+        (true, Some(value)) => Ok(Some(value.to_owned())),
+        (true, None) => Err(SearchError::CorruptDocument {
+            shard_id: shard.id.clone(),
+            field,
+        }),
+    }
+}
+
 fn keep_smallest<T: Ord>(selected: &mut BinaryHeap<T>, candidate: T, limit: usize) {
     if selected.len() < limit {
         selected.push(candidate);
@@ -855,18 +871,13 @@ fn load_row(shard: &SearchShard, address: DocAddress) -> Result<LogRow> {
     };
     let optional_str = |name: &'static str| -> Result<Option<String>> {
         let field = schema.get_field(name).map_err(SearchError::Native)?;
-        document
-            .get_first(field)
-            .map(|value| {
-                value
-                    .as_str()
-                    .map(str::to_owned)
-                    .ok_or_else(|| SearchError::CorruptDocument {
-                        shard_id: shard.id.clone(),
-                        field: name,
-                    })
-            })
-            .transpose()
+        let value = document.get_first(field);
+        optional_string(
+            value.is_some(),
+            value.and_then(|value| value.as_str()),
+            shard,
+            name,
+        )
     };
     let required_i64 = |name: &'static str| -> Result<i64> {
         let field = schema.get_field(name).map_err(SearchError::Native)?;
@@ -1303,12 +1314,38 @@ mod tests {
 
     #[test]
     fn bounded_selection_and_row_byte_accounting_cover_every_outcome() {
-        let mut values = BinaryHeap::new();
-        keep_smallest(&mut values, 2, 2);
-        keep_smallest(&mut values, 3, 2);
-        keep_smallest(&mut values, 4, 2);
-        keep_smallest(&mut values, 1, 2);
-        assert_eq!(values.into_sorted_vec(), vec![1, 2]);
+        let candidate = |ingest_seq| Candidate {
+            time_us: ingest_seq,
+            ingest_seq,
+            shard_index: 0,
+            address: DocAddress::new(0, ingest_seq as u32),
+        };
+        let mut rows = BinaryHeap::new();
+        for value in [2, 3, 4, 1] {
+            keep_smallest(&mut rows, Reverse(candidate(value)), 2);
+        }
+        assert_eq!(
+            rows.into_iter()
+                .map(|value| value.0.ingest_seq)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([3, 4])
+        );
+
+        let live_candidate = |ingest_seq| LiveCandidate {
+            ingest_seq,
+            shard_index: 0,
+            address: DocAddress::new(0, ingest_seq as u32),
+        };
+        let mut live = BinaryHeap::new();
+        for value in [2, 3, 4, 1] {
+            keep_smallest(&mut live, live_candidate(value), 2);
+        }
+        assert_eq!(
+            live.into_iter()
+                .map(|value| value.ingest_seq)
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([1, 2])
+        );
 
         assert_eq!(checked_row_string_bytes(1, 2).unwrap(), 3);
         assert!(checked_row_string_bytes(MAX_ROW_STRING_BYTES, 1).is_err());
@@ -1331,5 +1368,30 @@ mod tests {
             required_fast_value(Some(7), &shard, "ingest_seq").unwrap(),
             7
         );
+        assert!(required_fast_value::<DateTime>(None, &shard, "timestamp").is_err());
+        assert_eq!(
+            required_fast_value(
+                Some(DateTime::from_timestamp_micros(7)),
+                &shard,
+                "timestamp"
+            )
+            .unwrap(),
+            DateTime::from_timestamp_micros(7)
+        );
+        assert_eq!(
+            optional_string(true, Some("value"), &shard, "environment").unwrap(),
+            Some("value".into())
+        );
+        assert_eq!(
+            optional_string(false, None, &shard, "environment").unwrap(),
+            None
+        );
+        assert!(matches!(
+            optional_string(true, None, &shard, "environment"),
+            Err(SearchError::CorruptDocument {
+                field: "environment",
+                ..
+            })
+        ));
     }
 }
