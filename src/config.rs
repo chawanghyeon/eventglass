@@ -60,12 +60,8 @@ impl Config {
             bail!("EVENTGLASS_BASE_URL must be an HTTP(S) origin without credentials or path");
         }
         if self.base_url.scheme() == "http" {
-            let local = match self.base_url.host() {
-                Some(url::Host::Domain(name)) => name == "localhost",
-                Some(url::Host::Ipv4(address)) => address.is_loopback(),
-                Some(url::Host::Ipv6(address)) => address.is_loopback(),
-                None => false,
-            };
+            let local =
+                is_loopback_host(self.base_url.host().expect("validated base URL has a host"));
             if !local {
                 bail!(
                     "HTTP is allowed only for a loopback base URL; configure HTTPS for remote access"
@@ -86,12 +82,8 @@ impl Config {
                 bail!("EVENTGLASS_S3_ENDPOINT requires EVENTGLASS_S3_URL");
             }
             if endpoint.scheme() == "http" {
-                let local = match endpoint.host() {
-                    Some(url::Host::Domain(name)) => name == "localhost",
-                    Some(url::Host::Ipv4(address)) => address.is_loopback(),
-                    Some(url::Host::Ipv6(address)) => address.is_loopback(),
-                    None => false,
-                };
+                let local =
+                    is_loopback_host(endpoint.host().expect("validated S3 endpoint has a host"));
                 if !local {
                     bail!("HTTP S3 endpoints are limited to loopback compatibility tests");
                 }
@@ -101,6 +93,14 @@ impl Config {
             bail!("EVENTGLASS_S3_INITIALIZE requires EVENTGLASS_S3_URL");
         }
         Ok(())
+    }
+}
+
+fn is_loopback_host(host: url::Host<&str>) -> bool {
+    match host {
+        url::Host::Domain(name) => name == "localhost",
+        url::Host::Ipv4(address) => address.is_loopback(),
+        url::Host::Ipv6(address) => address.is_loopback(),
     }
 }
 
@@ -202,9 +202,11 @@ mod tests {
     #[test]
     fn environment_guard_restores_a_preexisting_value() {
         let _lock = ENV_LOCK.lock().unwrap();
-        let original = std::env::var_os("EVENTGLASS_DATA_DIR");
+        let _process_environment = Environment::cleared(&["EVENTGLASS_DATA_DIR"]);
         // SAFETY: this test serializes all mutations of this process variable.
         unsafe { std::env::set_var("EVENTGLASS_DATA_DIR", "/tmp/original-eventglass-data") };
+        let original = std::env::var_os("EVENTGLASS_DATA_DIR")
+            .expect("test installs an original environment value");
         {
             let _environment = Environment::cleared(&["EVENTGLASS_DATA_DIR"]);
             assert!(std::env::var_os("EVENTGLASS_DATA_DIR").is_none());
@@ -215,11 +217,7 @@ mod tests {
         );
         // SAFETY: this test serializes all mutations of this process variable.
         unsafe {
-            if let Some(value) = original {
-                std::env::set_var("EVENTGLASS_DATA_DIR", value);
-            } else {
-                std::env::remove_var("EVENTGLASS_DATA_DIR");
-            }
+            std::env::set_var("EVENTGLASS_DATA_DIR", original);
         }
     }
 
