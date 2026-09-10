@@ -197,6 +197,8 @@ mod tests {
         assert!(Config::from_env().is_err());
         environment.set("EVENTGLASS_S3_INITIALIZE", "0");
         assert!(!Config::from_env().unwrap().s3_initialize);
+        environment.set("EVENTGLASS_S3_ENDPOINT", "http://192.168.1.1:9000");
+        assert!(Config::from_env().is_err());
     }
 
     #[test]

@@ -46,6 +46,24 @@ struct StagedChunk {
     bytes: Vec<u8>,
 }
 
+fn required_i64(db: &Connection, sql: &str) -> Result<i64> {
+    Ok(db.query_row(sql, [], |row| row.get(0))?)
+}
+
+fn inbox_bytes(db: &Connection) -> Result<i64> {
+    required_i64(
+        db,
+        "SELECT inbox_bytes FROM runtime_state WHERE singleton=1",
+    )
+}
+
+fn next_ingest_seq(db: &Connection) -> Result<i64> {
+    required_i64(
+        db,
+        "SELECT next_ingest_seq FROM runtime_state WHERE singleton=1",
+    )
+}
+
 impl StagedChunk {
     fn serialize(payload: &InboxPayload) -> Result<Self> {
         let first = payload.records.first().expect("nonempty staged chunk");
@@ -118,19 +136,11 @@ pub fn accept_with_replay(
     }
     // Prevent an indefinitely stalled Indexer from filling the volume; disk reservation
     // admission is an additional independent requirement at the HTTP boundary.
-    let pending: i64 = tx.query_row(
-        "SELECT inbox_bytes FROM runtime_state WHERE singleton=1",
-        [],
-        |r| r.get(0),
-    )?;
+    let pending = inbox_bytes(&tx)?;
     if pending >= 256 * 1024 * 1024 {
         return Err(IngestError::InboxFull.into());
     }
-    let mut next: i64 = tx.query_row(
-        "SELECT next_ingest_seq FROM runtime_state WHERE singleton=1",
-        [],
-        |r| r.get(0),
-    )?;
+    let mut next = next_ingest_seq(&tx)?;
     let first = next;
     let accepted = records.len();
     let mut current = InboxPayload {

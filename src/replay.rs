@@ -234,13 +234,7 @@ impl Analysis {
                         {
                             *page.elements.entry(label.clone()).or_default() += 1;
                             page.example("element", &label, time);
-                            if let Some(depth) = depth {
-                                page.example("depth", &depth, time);
-                                let elements = page.depth_elements.entry(depth).or_default();
-                                if elements.len() < 50 || elements.contains_key(&label) {
-                                    *elements.entry(label.clone()).or_default() += 1;
-                                }
-                            }
+                            record_depth_element(page, depth.as_deref(), &label, time);
                         }
                         self.push(time, category, label, None, Some(payload));
                     } else if matches!(category, "ui.slowClickDetected" | "ui.multiClick") {
@@ -477,7 +471,7 @@ impl Analysis {
             (x / width * 20.0) as u32,
             (y / height * 20.0) as u32
         );
-        let Some(url) = self
+        let url = self
             .journey
             .iter()
             .rev()
@@ -487,10 +481,8 @@ impl Analysis {
                         .duration_ms
                         .is_none_or(|duration| time <= visit.started_at_ms.saturating_add(duration))
             })
-            .map(|visit| visit.url.clone())
-        else {
-            return;
-        };
+            .map(|visit| visit.url.clone());
+        let Some(url) = url else { return };
         if !self.pages.contains_key(&url) && self.pages.len() >= MAX_PAGES {
             self.truncated = true;
             return;
@@ -556,6 +548,14 @@ impl Analysis {
             trace_id: id("trace_id"),
             span_id: id("span_id"),
         });
+    }
+}
+fn record_depth_element(page: &mut PageActivity, depth: Option<&str>, label: &str, time: i64) {
+    let Some(depth) = depth else { return };
+    page.example("depth", depth, time);
+    let elements = page.depth_elements.entry(depth.to_owned()).or_default();
+    if elements.len() < 50 || elements.contains_key(label) {
+        *elements.entry(label.to_owned()).or_default() += 1;
     }
 }
 fn viewport(data: &Value) -> Option<(f64, f64)> {
@@ -766,7 +766,13 @@ mod tests {
         analysis.point(&serde_json::json!({"id": 1}), false, 10);
         analysis.point(&serde_json::json!({"id": 1, "x": -1, "y": 1}), false, 10);
         analysis.journey.clear();
-        analysis.point(&serde_json::json!({"id": 1, "x": 1, "y": 1}), false, 10);
+        analysis.point(&serde_json::json!({"id": 1, "x": 1, "y": 1}), false, 139);
+        analysis.journey.push(Visit {
+            url: "https://missing.test/".into(),
+            started_at_ms: 0,
+            duration_ms: None,
+        });
+        analysis.point(&serde_json::json!({"id": 1, "x": 1, "y": 1}), false, 139);
     }
 
     #[test]

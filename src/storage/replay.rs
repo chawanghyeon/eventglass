@@ -46,27 +46,30 @@ pub fn write(root: &Path, bytes: &[u8]) -> Result<ObjectReference> {
         );
     } else {
         let temporary = directory.join(format!(".{}.tmp", uuid::Uuid::new_v4()));
-        let result = (|| -> Result<()> {
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&temporary)?;
-            file.write_all(&compressed)?;
-            file.sync_all()?;
-            fs::rename(&temporary, &destination)?;
-            File::open(&directory)?.sync_all()?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result?;
+        let guard = RemoveFile(temporary.clone());
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&compressed)?;
+        file.sync_all()?;
+        fs::rename(&temporary, &destination)?;
+        File::open(&directory)?.sync_all()?;
+        drop(guard);
     }
     Ok(ObjectReference {
         key: key(&hash)?,
         size: compressed.len() as u64,
         sha256: hash,
     })
+}
+
+struct RemoveFile(PathBuf);
+
+impl Drop for RemoveFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 pub fn read(root: &Path, reference: &ObjectReference) -> Result<Vec<u8>> {

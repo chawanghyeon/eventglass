@@ -111,9 +111,7 @@ pub fn decode_envelope(
             }
             let recording = serde_json::to_vec(&events)
                 .map_err(|_| SentryError::Malformed("invalid recording"))?;
-            if recording.len() > MAX_RECORDING_BYTES {
-                return Err(SentryError::TooLarge("normalized recording exceeds limit"));
-            }
+            validate_normalized_size(recording.len())?;
             Ok(Some(ReplaySegment {
                 metadata,
                 recording,
@@ -122,6 +120,14 @@ pub fn decode_envelope(
         _ => Err(SentryError::Malformed(
             "replay requires metadata and recording",
         )),
+    }
+}
+
+fn validate_normalized_size(size: usize) -> Result<(), SentryError> {
+    if size > MAX_RECORDING_BYTES {
+        Err(SentryError::TooLarge("normalized recording exceeds limit"))
+    } else {
+        Ok(())
     }
 }
 
@@ -388,6 +394,11 @@ mod tests {
 
     #[test]
     fn recording_shape_and_metadata_ranges_are_bounded() {
+        assert!(validate_normalized_size(MAX_RECORDING_BYTES).is_ok());
+        assert!(matches!(
+            validate_normalized_size(MAX_RECORDING_BYTES + 1),
+            Err(SentryError::TooLarge(_))
+        ));
         let oversized = vec![b' '; MAX_RECORDING_BYTES + 1];
         assert!(matches!(
             recording_events(&oversized),

@@ -48,12 +48,7 @@ pub fn create(
         &mut cancelled,
     )?;
     for entry in &manifest.files {
-        append_file(
-            &mut archive,
-            source.join(&entry.path),
-            &entry.path,
-            &mut cancelled,
-        )?;
+        append_manifest_file(&mut archive, source, &entry.path, &mut cancelled)?;
     }
     let encoder = archive.into_inner()?;
     let output = encoder.finish()?;
@@ -94,13 +89,12 @@ pub fn hydrate(
         );
         let path = entry.path()?;
         ensure!(path.components().count() == 1, "unsafe archive path");
-        let name = match path.components().next() {
-            Some(Component::Normal(name)) => name
-                .to_str()
-                .context("archive filename is not UTF-8")?
-                .to_owned(),
-            _ => anyhow::bail!("unsafe archive path"),
-        };
+        let name = path
+            .file_name()
+            .context("unsafe archive path")?
+            .to_str()
+            .context("archive filename is not UTF-8")?
+            .to_owned();
         ensure!(safe_name(&name), "unsafe archive filename");
         ensure!(names.insert(name.clone()), "duplicate archive path");
         let declared = entry.header().size()?;
@@ -131,6 +125,15 @@ pub fn hydrate(
     File::open(parent)?.sync_all()?;
     drop(guard);
     Ok(verified)
+}
+
+fn append_manifest_file<W: Write>(
+    archive: &mut tar::Builder<W>,
+    source: &Path,
+    name: &str,
+    cancelled: &mut dyn FnMut() -> bool,
+) -> Result<()> {
+    append_file(archive, source.join(name), name, cancelled)
 }
 
 fn append_file<W: Write>(
@@ -254,7 +257,17 @@ mod tests {
     fn archive_names_and_short_streams_are_rejected_safely() -> Result<()> {
         assert!(safe_name(manifest::NAME));
         assert!(safe_name("segment.store"));
-        for name in ["", "../escape", "a/b", "a\\b", "a:b", "x.lock", "x.tmp"] {
+        for name in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "a/b",
+            "a\\b",
+            "a:b",
+            "x.lock",
+            "x.tmp",
+        ] {
             assert!(!safe_name(name), "{name}");
         }
 

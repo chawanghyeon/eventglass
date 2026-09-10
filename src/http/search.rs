@@ -222,10 +222,7 @@ async fn execute(
     input: SearchInput,
 ) -> ApiResult<Json<Value>> {
     let started = std::time::Instant::now();
-    let limit = input.limit.unwrap_or(100);
-    if !(1..=1000).contains(&limit) {
-        return Err(invalid());
-    }
+    let limit = valid_limit(input.limit.unwrap_or(100))?;
     let has_read_token = input.read_token.is_some();
     let prepared = capture_read(
         &state,
@@ -261,28 +258,13 @@ async fn execute(
             .tokens
             .verify(&token, TokenKind::Rows, &rows_context, now)
             .map_err(token_error)?;
-        if has_read_token && verified.watermark != watermark {
-            return Err(invalid());
-        }
+        matching_watermark(has_read_token, verified.watermark, watermark)?;
         watermark = verified.watermark;
-        match verified.position {
-            Position::Rows {
-                timestamp_us,
-                ingest_seq,
-                record_id,
-            } => Some(RowCursor {
-                timestamp_us,
-                ingest_seq,
-                record_id,
-            }),
-            _ => return Err(invalid()),
-        }
+        Some(row_cursor(verified.position)?)
     } else {
         None
     };
-    if watermark > active_boundary.ingest_seq {
-        return Err(unavailable());
-    }
+    published_watermark(watermark, active_boundary.ingest_seq)?;
     let hydrated_shards = hydrate_candidates(&state, &candidate_ids).await?;
     let permit = state
         .app
@@ -304,25 +286,8 @@ async fn execute(
         indexer.search(&candidate_ids, &request)
     })
     .await
-    .map_err(|failure| match failure {
-        super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
-        super::NativeTaskFailure::Join => unavailable(),
-    })?
-    .map_err(|error| {
-        if error
-            .downcast_ref::<query::SearchError>()
-            .is_some_and(query::SearchError::is_bad_request)
-        {
-            invalid()
-        } else if error
-            .downcast_ref::<query::SearchError>()
-            .is_some_and(query::SearchError::is_unprocessable)
-        {
-            ApiError(StatusCode::UNPROCESSABLE_ENTITY, "search_result_too_large")
-        } else {
-            unavailable()
-        }
-    })?;
+    .map_err(search_task_failure)?
+    .map_err(search_error)?;
     revalidate_read(&state, &headers, &auth).await?;
     let now = crate::model::now_us()?;
     let next_cursor = if page.has_more {
@@ -387,6 +352,67 @@ async fn execute(
     ))
 }
 
+fn valid_limit(limit: usize) -> ApiResult<usize> {
+    (1..=1000)
+        .contains(&limit)
+        .then_some(limit)
+        .ok_or_else(invalid)
+}
+
+fn matching_watermark(has_read_token: bool, cursor: i64, read: i64) -> ApiResult<()> {
+    if has_read_token && cursor != read {
+        Err(invalid())
+    } else {
+        Ok(())
+    }
+}
+
+fn row_cursor(position: Position) -> ApiResult<RowCursor> {
+    match position {
+        Position::Rows {
+            timestamp_us,
+            ingest_seq,
+            record_id,
+        } => Ok(RowCursor {
+            timestamp_us,
+            ingest_seq,
+            record_id,
+        }),
+        _ => Err(invalid()),
+    }
+}
+
+fn published_watermark(requested: i64, published: i64) -> ApiResult<()> {
+    if requested > published {
+        Err(unavailable())
+    } else {
+        Ok(())
+    }
+}
+
+fn search_task_failure(failure: super::NativeTaskFailure) -> ApiError {
+    match failure {
+        super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
+        super::NativeTaskFailure::Join => unavailable(),
+    }
+}
+
+fn search_error(error: anyhow::Error) -> ApiError {
+    if error
+        .downcast_ref::<query::SearchError>()
+        .is_some_and(query::SearchError::is_bad_request)
+    {
+        invalid()
+    } else if error
+        .downcast_ref::<query::SearchError>()
+        .is_some_and(query::SearchError::is_unprocessable)
+    {
+        ApiError(StatusCode::UNPROCESSABLE_ENTITY, "search_result_too_large")
+    } else {
+        unavailable()
+    }
+}
+
 pub(super) async fn hydrate_candidates(
     state: &HttpState,
     shard_ids: &[String],
@@ -429,9 +455,7 @@ pub(super) async fn capture_read(
     let principal = authenticate(state, headers, false, false).await?;
     let start_us = timestamp(&input.start)?;
     let end_us = timestamp(&input.end)?;
-    if start_us >= end_us || input.projects.len() > 1000 {
-        return Err(invalid());
-    }
+    valid_read_bounds(start_us, end_us, input.projects.len())?;
     input.filters.canonicalize()?;
     let requested = input
         .projects
@@ -477,9 +501,7 @@ pub(super) async fn capture_read(
     } else {
         published.boundary.ingest_seq
     };
-    if watermark > published.boundary.ingest_seq {
-        return Err(unavailable());
-    }
+    published_watermark(watermark, published.boundary.ingest_seq)?;
     let candidate_ids = state
         .app
         .db
@@ -517,14 +539,28 @@ pub(super) async fn revalidate_read(
         .call(move |db| authorization::capture(db, current_principal.id, selected))
         .await
         .map_err(scope_error)?;
-    if current.storage_generation != auth.storage_generation {
-        return Err(token_error(TokenError::GenerationChanged));
+    compare_read_authorization(auth, &current)
+}
+
+fn valid_read_bounds(start: i64, end: i64, projects: usize) -> ApiResult<()> {
+    if start >= end || projects > 1000 {
+        Err(invalid())
+    } else {
+        Ok(())
     }
-    if current.hash != auth.hash || current.epoch != auth.epoch || current.projects != auth.projects
+}
+
+fn compare_read_authorization(before: &Authorization, after: &Authorization) -> ApiResult<()> {
+    if after.storage_generation != before.storage_generation {
+        Err(token_error(TokenError::GenerationChanged))
+    } else if after.hash != before.hash
+        || after.epoch != before.epoch
+        || after.projects != before.projects
     {
-        return Err(token_error(TokenError::AuthorizationChanged));
+        Err(token_error(TokenError::AuthorizationChanged))
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -645,5 +681,55 @@ mod tests {
         assert_eq!(context.authorization_epoch, 3);
         assert_eq!(context.authorization_hash, "authorization");
         assert_eq!(context.request_hash, "request");
+
+        assert_eq!(valid_limit(1).unwrap(), 1);
+        assert!(valid_limit(0).is_err());
+        assert!(valid_limit(1001).is_err());
+        assert!(matching_watermark(false, 2, 1).is_ok());
+        assert!(matching_watermark(true, 2, 1).is_err());
+        assert!(published_watermark(1, 1).is_ok());
+        assert!(published_watermark(2, 1).is_err());
+        assert!(valid_read_bounds(0, 1, 1000).is_ok());
+        assert!(valid_read_bounds(1, 1, 0).is_err());
+        assert!(valid_read_bounds(0, 1, 1001).is_err());
+        assert!(row_cursor(Position::Read).is_err());
+        let cursor = row_cursor(Position::Rows {
+            timestamp_us: 1,
+            ingest_seq: 2,
+            record_id: "r".into(),
+        })
+        .unwrap();
+        assert_eq!((cursor.timestamp_us, cursor.ingest_seq), (1, 2));
+        assert_eq!(
+            search_task_failure(super::super::NativeTaskFailure::Timeout).0,
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            search_task_failure(super::super::NativeTaskFailure::Join).0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            search_error(anyhow::Error::from(query::SearchError::InvalidQuery)).0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            search_error(anyhow::Error::from(query::SearchError::ResultTooLarge {
+                limit_bytes: 1
+            }))
+            .0,
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_eq!(
+            search_error(anyhow::anyhow!("private")).0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        assert!(compare_read_authorization(&authorization, &authorization).is_ok());
+        let mut changed = authorization.clone();
+        changed.storage_generation.push('x');
+        assert!(compare_read_authorization(&authorization, &changed).is_err());
+        let mut changed = authorization.clone();
+        changed.epoch += 1;
+        assert!(compare_read_authorization(&authorization, &changed).is_err());
     }
 }

@@ -184,4 +184,37 @@ mod tests {
         assert_eq!(pins[0].published().searcher.num_docs(), 0);
         Ok(())
     }
+
+    #[test]
+    fn eviction_decline_and_rename_failure_preserve_catalog_state() {
+        let directory = tempfile::tempdir().expect("registry fixture");
+        let root = directory.path().join("shards");
+        std::fs::create_dir(&root).expect("shard root");
+        let shard = uuid::Uuid::new_v4().to_string();
+        let path = root.join(&shard);
+        std::fs::create_dir(&path).expect("shard directory");
+        let registry = Registry::new(directory.path(), uuid::Uuid::new_v4().to_string());
+
+        assert!(
+            !registry
+                .evict_local(&shard, || Ok(false), || panic!("rollback must not run"))
+                .expect("declined eviction")
+        );
+        assert!(path.is_dir());
+
+        let rolled_back = std::cell::Cell::new(false);
+        let result = registry.evict_local(
+            &shard,
+            || {
+                std::fs::remove_dir(&path).expect("remove before rename");
+                Ok(true)
+            },
+            || {
+                rolled_back.set(true);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert!(rolled_back.get());
+    }
 }

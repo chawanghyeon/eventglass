@@ -310,28 +310,25 @@ pub fn list(
     AND (?12 IS NULL OR (started_at_ms,replay_id)<(?12,?13))
     AND (?14 IS NULL OR started_at_ms>=?14) AND (?15 IS NULL OR started_at_ms<?15)
     ORDER BY started_at_ms DESC,replay_id DESC LIMIT 51"))?;
-    Ok(query
-        .query_map(
-            params![
-                filter.project_id,
-                now,
-                filter.environment,
-                filter.release,
-                filter.url,
-                filter.user,
-                filter.has_error,
-                filter.rage_click,
-                filter.dead_click,
-                filter.min_duration_ms,
-                filter.max_duration_ms,
-                filter.before_started_ms,
-                filter.before_id,
-                filter.started_after_ms,
-                filter.started_before_ms
-            ],
-            summary,
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
+    let parameters = params![
+        filter.project_id,
+        now,
+        filter.environment,
+        filter.release,
+        filter.url,
+        filter.user,
+        filter.has_error,
+        filter.rage_click,
+        filter.dead_click,
+        filter.min_duration_ms,
+        filter.max_duration_ms,
+        filter.before_started_ms,
+        filter.before_id,
+        filter.started_after_ms,
+        filter.started_before_ms
+    ];
+    let rows = query.query_map(parameters, summary)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 pub fn get(
@@ -381,11 +378,10 @@ pub fn associations(
     let mut statement=db.prepare("SELECT o.source_event_id,o.record_id,o.issue_id FROM issue_occurrences o JOIN issues i ON i.id=o.issue_id WHERE i.project_id=?1 AND o.source_event_id IN (SELECT value FROM json_each(?2)) LIMIT 1000")?;
     let errors=statement.query_map(params![project,ids],|r|Ok(serde_json::json!({"event_id":r.get::<_,String>(0)?,"record_id":r.get::<_,String>(1)?,"issue_id":r.get::<_,String>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut statement=db.prepare("SELECT payload FROM feedback WHERE project_id=?1 AND replay_id=?2 AND expires_at_us>?3 ORDER BY timestamp_ms LIMIT 100")?;
-    let raw = statement
-        .query_map(params![project, replay.metadata.replay_id, now], |r| {
-            r.get::<_, String>(0)
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows = statement.query_map(params![project, replay.metadata.replay_id, now], |r| {
+        r.get::<_, String>(0)
+    })?;
+    let raw = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     let feedback = raw
         .iter()
         .map(|r| serde_json::from_str::<serde_json::Value>(r))
@@ -413,6 +409,19 @@ pub fn feedback_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn database() -> (tempfile::TempDir, Connection) {
+        let directory = tempfile::tempdir().expect("replay database directory");
+        let database =
+            crate::db::open(&directory.path().join("meta.db")).expect("open replay database");
+        database
+            .execute(
+                "INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'p','P',0,0)",
+                [],
+            )
+            .expect("insert project");
+        (directory, database)
+    }
 
     fn metadata(segment_id: u64) -> ReplayMetadata {
         ReplayMetadata {
@@ -474,5 +483,100 @@ mod tests {
                 .expect("read legacy references")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn acceptance_enforces_session_and_metadata_byte_limits() {
+        let (_directory, mut database) = database();
+        let prior = metadata(0);
+        database
+            .execute(
+                "INSERT INTO replays(project_id,replay_id,started_at_ms,finished_at_ms,expires_at_us,metadata,segment_count,max_segment_id,recording_bytes) VALUES(1,?1,0,1,1,?2,1,0,?3)",
+                params![prior.replay_id, serde_json::to_string(&prior).expect("metadata"), MAX_SESSION_BYTES as i64],
+            )
+            .expect("insert replay");
+        let prepared = PreparedReplay {
+            metadata: metadata(1),
+            blob: ObjectReference {
+                key: "replay-blobs/unused.zlib".into(),
+                size: 1,
+                sha256: "0".repeat(64),
+            },
+            recording_bytes: 1,
+            frustration: Frustration::default(),
+        };
+        let transaction = database.transaction().expect("transaction");
+        assert!(matches!(
+            accept(&transaction, 1, &prepared, 0)
+                .expect_err("session cap")
+                .downcast_ref::<ReplayError>(),
+            Some(ReplayError::TooLarge)
+        ));
+        drop(transaction);
+
+        database
+            .execute("DELETE FROM replays", [])
+            .expect("clear replay");
+        let mut oversized = metadata(0);
+        oversized.urls.push("x".repeat(1024 * 1024 + 1));
+        let prepared = PreparedReplay {
+            metadata: oversized,
+            ..prepared
+        };
+        let transaction = database.transaction().expect("transaction");
+        assert!(matches!(
+            accept(&transaction, 1, &prepared, 0)
+                .expect_err("metadata cap")
+                .downcast_ref::<ReplayError>(),
+            Some(ReplayError::TooLarge)
+        ));
+    }
+
+    #[test]
+    fn expiration_batches_bound_segments_and_remove_owned_orphans() {
+        let (directory, mut database) = database();
+        let value = serde_json::to_string(&metadata(0)).expect("metadata");
+        for (id, count) in [("a".repeat(32), 200), ("b".repeat(32), 200)] {
+            database
+                .execute(
+                    "INSERT INTO replays(project_id,replay_id,started_at_ms,finished_at_ms,expires_at_us,metadata,segment_count,max_segment_id,recording_bytes) VALUES(1,?1,0,1,0,?2,?3,0,0)",
+                    params![id, value, count],
+                )
+                .expect("insert expiring replay");
+        }
+        expire_batch(&mut database, 0).expect("bounded expiration");
+        assert_eq!(
+            database
+                .query_row("SELECT count(*) FROM replays", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("remaining replays"),
+            1
+        );
+
+        let blobs = directory.path().join("replay-blobs");
+        std::fs::create_dir(&blobs).expect("blob directory");
+        let blob = format!("{}.zlib", "0".repeat(64));
+        let temporary = format!(".{}.tmp", uuid::Uuid::new_v4());
+        std::fs::write(blobs.join(&blob), b"orphan").expect("orphan blob");
+        std::fs::write(blobs.join(&temporary), b"temporary").expect("temporary blob");
+        std::fs::write(blobs.join("unowned"), b"keep").expect("unowned file");
+        expire_at_startup(&mut database, directory.path(), 0).expect("startup cleanup");
+        assert!(!blobs.join(blob).exists());
+        assert!(!blobs.join(temporary).exists());
+        assert!(blobs.join("unowned").exists());
+    }
+
+    #[test]
+    fn summary_rejects_invalid_metadata_and_marks_segment_gaps() {
+        let database = Connection::open_in_memory().expect("summary database");
+        let invalid = database.query_row("SELECT 1,'not-json',1,0,0,0,0,0,0", [], summary);
+        assert!(invalid.is_err());
+
+        let value = serde_json::to_string(&metadata(2)).expect("metadata");
+        let replay = database
+            .query_row("SELECT 1,?1,2,2,10,1,2,3,4", [value], summary)
+            .expect("valid summary");
+        assert!(replay.partial);
+        assert_eq!(replay.frustration.rage, 3);
     }
 }

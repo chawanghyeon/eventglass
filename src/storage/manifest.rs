@@ -369,6 +369,8 @@ mod tests {
     fn manifest_validation_rejects_unsafe_names_and_partial_ranges() {
         for name in [
             "",
+            ".",
+            "..",
             "../escape",
             "a/b",
             "a\\b",

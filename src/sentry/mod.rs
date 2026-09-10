@@ -154,9 +154,7 @@ pub fn normalize_envelope(
                 {
                     return Err(SentryError::Malformed("invalid feedback"));
                 }
-                if let Some(id) = value.pointer("/contexts/feedback/replay_id") {
-                    replay::canonical_id(id)?;
-                }
+                validate_feedback_replay_id(&value)?;
                 scrub::scrub(&mut value, &project.scrub_keys);
                 feedback.push(value);
             }
@@ -167,6 +165,14 @@ pub fn normalize_envelope(
     normalized.replay = replay;
     normalized.feedback = feedback;
     Ok(normalized)
+}
+
+fn validate_feedback_replay_id(value: &serde_json::Value) -> Result<(), SentryError> {
+    value
+        .pointer("/contexts/feedback/replay_id")
+        .map(replay::canonical_id)
+        .transpose()
+        .map(|_| ())
 }
 
 pub fn normalize_store(
