@@ -308,8 +308,9 @@ mod tests {
         let segment = crate::sentry::replay::decode_envelope(
             include_bytes!("../../tests/fixtures/replay/plain-0.envelope"),
             &[],
-        )?
-        .unwrap();
+        )
+        .expect("decode Replay fixture")
+        .expect("Replay fixture pair");
         let blob = super::super::replay::write(root.path(), &segment.recording)?;
         let reference = blob.clone();
         app.db.call(move |db| {
@@ -397,7 +398,8 @@ mod tests {
             std::fs::write(
                 root.path().join(format!("replay-blobs/{index:064x}.zlib")),
                 b"orphan",
-            )?;
+            )
+            .expect("orphan fixture");
         }
         std::fs::write(root.path().join("replay-blobs/keep.txt"), b"keep")?;
         std::fs::write(root.path().join("replay-blobs/not-a-hash.zlib"), b"keep")?;
@@ -424,6 +426,17 @@ mod tests {
         .await?
         .unwrap();
         assert_eq!(first.0 + second.0, 300);
+        let third = sweep(
+            &app.db,
+            root.path().to_owned(),
+            Arc::new(Mutex::new(None)),
+            &app.ingress_permit,
+            &app.query_permit,
+            None,
+        )
+        .await?
+        .unwrap();
+        assert_eq!((third.0, third.1), (0, 0));
         assert!(root.path().join("replay-blobs/keep.txt").exists());
         Ok(())
     }

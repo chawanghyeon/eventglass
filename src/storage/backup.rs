@@ -387,8 +387,9 @@ mod tests {
         let segment = crate::sentry::replay::decode_envelope(
             include_bytes!("../../tests/fixtures/replay/plain-0.envelope"),
             &[],
-        )?
-        .context("SDK recording")?;
+        )
+        .expect("decode SDK recording")
+        .expect("SDK recording pair");
         let blob = super::super::replay::write(root.path(), &segment.recording)?;
         let stored = blob.clone();
         let installation = app.db.call(move |db| {
@@ -401,15 +402,17 @@ mod tests {
             db.query_row("SELECT installation_id FROM runtime_state", [], |r| r.get::<_,String>(0)).map_err(Into::into)
         }).await?;
         let store = Arc::new(MemoryStore::default());
-        store.put(
-            "installation.json",
-            serde_json::to_vec(&super::super::remote::InstallationDocument {
-                format_version: 1,
-                installation_id: installation,
-                created_at_us: 1,
-            })?,
-            true,
-        )?;
+        store
+            .put(
+                "installation.json",
+                serde_json::to_vec(&super::super::remote::InstallationDocument {
+                    format_version: 1,
+                    installation_id: installation,
+                    created_at_us: 1,
+                })?,
+                true,
+            )
+            .expect("installation document");
         let backup = BackupCoordinator::new(
             app.db.clone(),
             root.path(),
@@ -440,14 +443,15 @@ mod tests {
         backup.shutdown().await;
         let latest: super::super::remote::LatestDocument =
             serde_json::from_slice(&store.get_small("latest.json", 4096).await?)?;
-        let document: CheckpointDocument = serde_json::from_slice(
-            &store
-                .get_small(
-                    &format!("checkpoints/{}.json", latest.checkpoint_id),
-                    1024 * 1024,
-                )
-                .await?,
-        )?;
+        let checkpoint_bytes = store
+            .get_small(
+                &format!("checkpoints/{}.json", latest.checkpoint_id),
+                1024 * 1024,
+            )
+            .await
+            .expect("checkpoint document");
+        let document: CheckpointDocument =
+            serde_json::from_slice(&checkpoint_bytes).expect("decode checkpoint");
         assert_eq!(document.cut.boundary, Boundary::default());
         assert_eq!(document.cut.replay_blobs, vec![blob.clone()]);
         assert!(document.cut.replay_revision > 0);
@@ -479,19 +483,21 @@ mod tests {
         active.publish(Boundary::default())?;
         active.commit(&[], boundary)?;
         active.publish(boundary)?;
-        let manifest = active.seal(
-            &shard_path,
-            ShardStats {
-                record_count: 0,
-                min_timestamp_us: None,
-                max_timestamp_us: None,
-                min_received_at_us: None,
-                max_received_at_us: None,
-                min_ingest_seq: None,
-                max_ingest_seq: None,
-            },
-            1,
-        )?;
+        let manifest = active
+            .seal(
+                &shard_path,
+                ShardStats {
+                    record_count: 0,
+                    min_timestamp_us: None,
+                    max_timestamp_us: None,
+                    min_received_at_us: None,
+                    max_received_at_us: None,
+                    min_ingest_seq: None,
+                    max_ingest_seq: None,
+                },
+                1,
+            )
+            .expect("seal backup fixture");
         let size = i64::try_from(manifest::local_size(&shard_path, &manifest)?)?;
         let lock = Arc::new(File::open(data)?);
         let db = DbWorker::start(&data.join("meta.db"), lock)?;
@@ -516,8 +522,9 @@ mod tests {
         let replay = crate::sentry::replay::decode_envelope(
             include_bytes!("../../tests/fixtures/replay/plain-0.envelope"),
             &[],
-        )?
-        .context("Replay fixture")?;
+        )
+        .expect("decode Replay fixture")
+        .expect("Replay fixture pair");
         let replay_raw = replay.recording.clone();
         let replay_blob = super::super::replay::write(data, &replay.recording)?;
         let blob_for_db = replay_blob.clone();
@@ -528,15 +535,17 @@ mod tests {
             tx.commit()?;Ok(())
         }).await?;
         let store = Arc::new(MemoryStore::default());
-        store.put(
-            "installation.json",
-            serde_json::to_vec(&super::super::remote::InstallationDocument {
-                format_version: 1,
-                installation_id: installation.clone(),
-                created_at_us: 1,
-            })?,
-            false,
-        )?;
+        store
+            .put(
+                "installation.json",
+                serde_json::to_vec(&super::super::remote::InstallationDocument {
+                    format_version: 1,
+                    installation_id: installation.clone(),
+                    created_at_us: 1,
+                })?,
+                false,
+            )
+            .expect("installation document");
         let coordinator = BackupCoordinator::new(
             db.clone(),
             data,

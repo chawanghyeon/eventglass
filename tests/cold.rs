@@ -172,9 +172,13 @@ async fn cold_hydration_is_single_flight_verified_and_atomic() -> Result<()> {
         .await?;
 
     let disk = app.disk_budget.status()?;
-    let held = app
-        .disk_budget
-        .reserve(disk.free_bytes.saturating_sub(disk.minimum_free_bytes))?;
+    // Leave a small race margin for concurrent compiler/coverage writes while still
+    // remaining below the 40 MiB ingest admission requirement.
+    let held = app.disk_budget.reserve(
+        disk.free_bytes
+            .saturating_sub(disk.minimum_free_bytes)
+            .saturating_sub(8 * 1024 * 1024),
+    )?;
     assert!(!app.disk_budget.status()?.ingest_accepting);
     assert_eq!(cold.reclaim_for_ingest(&app.disk_budget).await?, 1);
     assert!(!root.path().join("shards").join(&ids[0]).exists());

@@ -35,6 +35,24 @@ struct RemoteShard {
     expanded_bytes: u64,
 }
 
+type CatalogRow = (String, Option<String>, Option<String>, Option<String>, i64);
+
+fn remote_shard(row: CatalogRow) -> Result<Option<RemoteShard>> {
+    match row.0.as_str() {
+        "active" | "local" | "remote_verified" => Ok(None),
+        "remote_only" => {
+            ensure!(row.3.is_some(), "cold shard has no recovery checkpoint");
+            Ok(Some(RemoteShard {
+                key: row.1.context("cold shard has no archive key")?,
+                sha256: row.2.context("cold shard has no archive checksum")?,
+                expanded_bytes: u64::try_from(row.4)
+                    .context("cold shard has invalid local size")?,
+            }))
+        }
+        _ => anyhow::bail!("unsupported shard state"),
+    }
+}
+
 impl ColdStorage {
     pub fn new(
         db: DbWorker,
@@ -168,19 +186,7 @@ impl ColdStorage {
                         ))
                     },
                 )?;
-                match row.0.as_str() {
-                    "active" | "local" | "remote_verified" => Ok(None),
-                    "remote_only" => {
-                        ensure!(row.3.is_some(), "cold shard has no recovery checkpoint");
-                        Ok(Some(RemoteShard {
-                            key: row.1.context("cold shard has no archive key")?,
-                            sha256: row.2.context("cold shard has no archive checksum")?,
-                            expanded_bytes: u64::try_from(row.4)
-                                .context("cold shard has invalid local size")?,
-                        }))
-                    }
-                    _ => anyhow::bail!("unsupported shard state"),
-                }
+                remote_shard(row)
             })
             .await?;
         let Some(remote) = remote else {
@@ -345,5 +351,87 @@ struct RemoveFile(PathBuf);
 impl Drop for RemoveFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(state: &str) -> CatalogRow {
+        (
+            state.into(),
+            Some("archive".into()),
+            Some("0".repeat(64)),
+            Some("checkpoint".into()),
+            10,
+        )
+    }
+
+    #[test]
+    fn catalog_rows_fail_closed_and_cancellation_is_armed_until_disarmed() {
+        for state in ["active", "local", "remote_verified"] {
+            assert!(remote_shard(row(state)).unwrap().is_none());
+        }
+        let remote = remote_shard(row("remote_only")).unwrap().unwrap();
+        assert_eq!(
+            (remote.key.as_str(), remote.expanded_bytes),
+            ("archive", 10)
+        );
+        for damaged in [
+            (
+                "remote_only".into(),
+                None,
+                Some("0".repeat(64)),
+                Some("c".into()),
+                1,
+            ),
+            (
+                "remote_only".into(),
+                Some("a".into()),
+                None,
+                Some("c".into()),
+                1,
+            ),
+            (
+                "remote_only".into(),
+                Some("a".into()),
+                Some("0".repeat(64)),
+                None,
+                1,
+            ),
+            (
+                "remote_only".into(),
+                Some("a".into()),
+                Some("0".repeat(64)),
+                Some("c".into()),
+                -1,
+            ),
+            row("unknown"),
+        ] {
+            assert!(remote_shard(damaged).is_err());
+        }
+
+        let armed = Cancellation::new();
+        let flag = Arc::clone(&armed.flag);
+        drop(armed);
+        assert!(flag.load(Ordering::Relaxed));
+        let mut disarmed = Cancellation::new();
+        let flag = Arc::clone(&disarmed.flag);
+        disarmed.disarm();
+        drop(disarmed);
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn archive_checksum_and_temporary_file_cleanup_are_exact() {
+        let directory = tempfile::tempdir().expect("cold fixture directory");
+        let path = directory.path().join("archive");
+        std::fs::write(&path, b"archive").expect("archive fixture");
+        assert!(verify_file(&path, &crate::storage::remote::sha256(b"archive")).is_ok());
+        assert!(verify_file(&path, "short").is_err());
+        assert!(verify_file(&path, &"0".repeat(64)).is_err());
+        drop(RemoveFile(path.clone()));
+        assert!(!path.exists());
     }
 }

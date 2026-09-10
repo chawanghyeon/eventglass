@@ -688,3 +688,79 @@ fn crash_point(name: &str) {
     #[cfg(not(feature = "failpoints"))]
     let _ = name;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Boundary;
+
+    fn empty_candidate(root: &Path, installation: &str, id: &str) {
+        let path = root.join("shards").join(id);
+        std::fs::create_dir(&path).expect("candidate directory");
+        drop(
+            ActiveShard::create(&path, installation, id, Boundary::default())
+                .expect("empty candidate"),
+        );
+    }
+
+    #[test]
+    fn orphan_reconciliation_adopts_one_and_removes_all_other_owned_work() {
+        let directory = tempfile::tempdir().expect("indexer directory");
+        let root = directory.path().join("shards");
+        std::fs::create_dir(&root).expect("shard root");
+        let installation = uuid::Uuid::new_v4().to_string();
+        let mut ids = [
+            uuid::Uuid::new_v4().to_string(),
+            uuid::Uuid::new_v4().to_string(),
+        ];
+        ids.sort();
+        for id in &ids {
+            empty_candidate(directory.path(), &installation, id);
+        }
+        let staging = root.join(format!(".hydrate-{}.tmp", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&staging).expect("hydration staging");
+
+        let adopted = reconcile_empty_orphans(
+            directory.path(),
+            &installation,
+            Boundary::default(),
+            &HashSet::new(),
+            true,
+        )
+        .expect("reconcile candidates");
+        assert_eq!(adopted.as_deref(), Some(ids[0].as_str()));
+        assert!(root.join(&ids[0]).is_dir());
+        assert!(!root.join(&ids[1]).exists());
+        assert!(!staging.exists());
+
+        let removed = reconcile_empty_orphans(
+            directory.path(),
+            &installation,
+            Boundary::default(),
+            &HashSet::new(),
+            false,
+        )
+        .expect("remove remaining candidate");
+        assert!(removed.is_none());
+        assert!(!root.join(&ids[0]).exists());
+    }
+
+    #[test]
+    fn orphan_reconciliation_rejects_non_directory_owned_names() {
+        let directory = tempfile::tempdir().expect("indexer directory");
+        let root = directory.path().join("shards");
+        std::fs::create_dir(&root).expect("shard root");
+        std::fs::write(root.join(uuid::Uuid::new_v4().to_string()), b"file")
+            .expect("invalid shard entry");
+        assert!(
+            reconcile_empty_orphans(
+                directory.path(),
+                &uuid::Uuid::new_v4().to_string(),
+                Boundary::default(),
+                &HashSet::new(),
+                false,
+            )
+            .is_err()
+        );
+    }
+}

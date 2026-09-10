@@ -102,24 +102,34 @@ fn native_names(root: &Path, index: &Index) -> Result<BTreeSet<String>> {
         // Native metadata lists possible optional components as well as required ones.
         // Opening the native reader below validates required components; no directory glob.
         for path in segment.list_files() {
-            match fs::symlink_metadata(root.join(&path)) {
-                Ok(metadata) => {
-                    ensure!(
-                        metadata.file_type().is_file(),
-                        "non-regular native component"
-                    );
-                    names.insert(
-                        path.to_str()
-                            .context("native filename encoding")?
-                            .to_owned(),
-                    );
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                Err(error) => return Err(error.into()),
+            if let Some(metadata) = optional_metadata(&root.join(&path))? {
+                ensure!(
+                    metadata.file_type().is_file(),
+                    "non-regular native component"
+                );
+                names.insert(
+                    path.to_str()
+                        .context("native filename encoding")?
+                        .to_owned(),
+                );
             }
         }
     }
     Ok(names)
+}
+
+fn optional_metadata(path: &Path) -> Result<Option<fs::Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn committed_payload(index: &Index) -> Result<CommitPayload> {
+    let metas = index.load_metas()?;
+    let payload = metas.payload.context("missing native boundary")?;
+    Ok(serde_json::from_str(&payload)?)
 }
 fn validate(manifest: &Manifest) -> Result<()> {
     ensure!(
@@ -192,12 +202,7 @@ pub(crate) fn write(
     ensure!(!root.join(NAME).exists(), "sealed manifest already exists");
     let index = Index::open_in_dir(root)?;
     ensure!(index.schema() == schema::build(), "sealed schema mismatch");
-    let actual: CommitPayload = serde_json::from_str(
-        &index
-            .load_metas()?
-            .payload
-            .context("missing native boundary")?,
-    )?;
+    let actual = committed_payload(&index)?;
     ensure!(&actual == committed, "seal changed native boundary");
     ensure!(
         index.reader()?.searcher().num_docs() == stats.record_count,
@@ -264,12 +269,7 @@ pub fn verify(root: &Path, installation: &str, shard: &str) -> Result<Manifest> 
     }
     let index = Index::open_in_dir(root)?;
     ensure!(index.schema() == schema::build(), "sealed schema mismatch");
-    let actual: CommitPayload = serde_json::from_str(
-        &index
-            .load_metas()?
-            .payload
-            .context("missing native boundary")?,
-    )?;
+    let actual = committed_payload(&index)?;
     ensure!(
         actual.version == 1
             && actual.installation_id == installation
@@ -399,5 +399,23 @@ mod tests {
         fs::create_dir(directory.path().join("nested"))?;
         assert!(active_size(directory.path()).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn metadata_and_commit_payload_errors_are_explicit() {
+        let directory = tempfile::tempdir().expect("manifest directory");
+        assert!(
+            optional_metadata(&directory.path().join("missing"))
+                .unwrap()
+                .is_none()
+        );
+        let file = directory.path().join("file");
+        std::fs::write(&file, b"not a directory").expect("fixture file");
+        assert!(optional_metadata(&file.join("child")).is_err());
+
+        let index_root = directory.path().join("index");
+        std::fs::create_dir(&index_root).expect("index directory");
+        let index = Index::create_in_dir(&index_root, schema::build()).expect("empty index");
+        assert!(committed_payload(&index).is_err());
     }
 }

@@ -916,6 +916,7 @@ mod tests {
         objects: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
         writes: Arc<Mutex<Vec<String>>>,
         fail_key: Arc<Mutex<Option<String>>>,
+        list_pages: Arc<Mutex<Option<Vec<ObjectPage>>>>,
     }
 
     impl MemoryStore {
@@ -949,6 +950,9 @@ mod tests {
     #[async_trait]
     impl ObjectStore for MemoryStore {
         async fn list(&self, _continuation: Option<String>) -> Result<ObjectPage> {
+            if let Some(pages) = self.list_pages.lock().unwrap().as_mut() {
+                return Ok(pages.remove(0));
+            }
             Ok(ObjectPage {
                 objects: self
                     .objects
@@ -1206,15 +1210,53 @@ mod tests {
         let store = MemoryStore::default();
         let id = uuid::Uuid::new_v4().to_string();
         let expected = installation(&id);
+        assert_eq!(read_installation(&store).await?, None);
         assert!(ensure_installation(&store, &expected, false).await.is_err());
         assert!(store.keys().is_empty());
         assert_eq!(
             ensure_installation(&store, &expected, true).await?,
             expected
         );
+        assert_eq!(read_installation(&store).await?, Some(expected.clone()));
         let other = installation(&uuid::Uuid::new_v4().to_string());
         assert!(ensure_installation(&store, &other, false).await.is_err());
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn object_listing_requires_advancing_nonempty_continuations() {
+        let object = ObjectMetadata {
+            key: "one".into(),
+            size: 1,
+            etag: None,
+        };
+        let store = MemoryStore::default();
+        *store.list_pages.lock().unwrap() = Some(vec![
+            ObjectPage {
+                objects: vec![object.clone()],
+                continuation: Some("next".into()),
+            },
+            ObjectPage {
+                objects: vec![object],
+                continuation: None,
+            },
+        ]);
+        assert_eq!(list_all(&store).await.expect("paged list").len(), 2);
+
+        for continuation in ["", "same"] {
+            let store = MemoryStore::default();
+            *store.list_pages.lock().unwrap() = Some(vec![
+                ObjectPage {
+                    objects: Vec::new(),
+                    continuation: Some(continuation.into()),
+                },
+                ObjectPage {
+                    objects: Vec::new(),
+                    continuation: Some(continuation.into()),
+                },
+            ]);
+            assert!(list_all(&store).await.is_err());
+        }
     }
 
     #[tokio::test]

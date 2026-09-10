@@ -314,68 +314,99 @@ fn is_zero(value: &i64) -> bool {
 mod tests {
     use super::*;
 
-    fn database(root: &Path) -> Result<(PathBuf, Connection)> {
+    fn database(root: &Path) -> (PathBuf, Connection) {
         let path = root.join("meta.db");
-        let writer = crate::db::open(&path)?;
+        let writer = crate::db::open(&path).expect("checkpoint database");
         writer.execute(
             "INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
              VALUES(1,?1,?2,1)",
             rusqlite::params![uuid::Uuid::new_v4().to_string(), uuid::Uuid::new_v4().to_string()],
-        )?;
-        writer.execute(
-            "INSERT INTO settings(key,value_json,updated_at_us) VALUES('cut','10',0)",
-            [],
-        )?;
-        Ok((path, writer))
+        )
+        .expect("runtime state");
+        writer
+            .execute(
+                "INSERT INTO settings(key,value_json,updated_at_us) VALUES('cut','10',0)",
+                [],
+            )
+            .expect("cut setting");
+        (path, writer)
     }
 
     #[test]
-    fn snapshot_stays_at_handshake_cut_while_writes_continue() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let (path, writer) = database(root.path())?;
-        let snapshot = PinnedSnapshot::open(&path)?;
-        writer.execute("UPDATE settings SET value_json='20' WHERE key='cut'", [])?;
+    fn snapshot_stays_at_handshake_cut_while_writes_continue() {
+        let root = tempfile::tempdir().expect("checkpoint directory");
+        let (path, writer) = database(root.path());
+        let snapshot = PinnedSnapshot::open(&path).expect("pinned snapshot");
+        assert_eq!(snapshot.cut().boundary, Boundary::default());
+        assert!(
+            snapshot
+                .recovery_checkpoints()
+                .expect("recovery map")
+                .is_empty()
+        );
+        writer
+            .execute("UPDATE settings SET value_json='20' WHERE key='cut'", [])
+            .expect("concurrent update");
         let destination = root.path().join("snapshot.db");
-        let artifact = snapshot.backup_to(&destination, SnapshotLimits::default(), || false)?;
-        let restored = Connection::open(&destination)?;
+        let artifact = snapshot
+            .backup_to(&destination, SnapshotLimits::default(), || false)
+            .expect("snapshot backup");
+        let restored = Connection::open(&destination).expect("restored snapshot");
         assert_eq!(
-            restored.query_row(
-                "SELECT value_json FROM settings WHERE key='cut'",
-                [],
-                |row| row.get::<_, String>(0)
-            )?,
+            restored
+                .query_row(
+                    "SELECT value_json FROM settings WHERE key='cut'",
+                    [],
+                    |row| row.get::<_, String>(0)
+                )
+                .expect("cut value"),
             "10"
         );
         assert_eq!(artifact.cut.boundary, Boundary::default());
-        assert_eq!(artifact.size, fs::metadata(&destination)?.len());
+        assert_eq!(
+            artifact.size,
+            fs::metadata(&destination).expect("snapshot metadata").len()
+        );
         assert_eq!(artifact.sha256.len(), 64);
         assert_eq!(
-            writer.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row
-                .get::<_, i64>(0))?,
+            writer
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("checkpoint result"),
             0
         );
-        Ok(())
     }
 
     #[test]
-    fn cancelled_snapshot_never_publishes_a_partial_database() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let (path, writer) = database(root.path())?;
-        writer.execute(
-            "INSERT INTO settings(key,value_json,updated_at_us) VALUES('large',?1,0)",
-            ["x".repeat(512 * 1024)],
-        )?;
+    fn cancelled_snapshot_never_publishes_a_partial_database() {
+        let root = tempfile::tempdir().expect("checkpoint directory");
+        let (path, writer) = database(root.path());
+        writer
+            .execute(
+                "INSERT INTO settings(key,value_json,updated_at_us) VALUES('large',?1,0)",
+                ["x".repeat(512 * 1024)],
+            )
+            .expect("large fixture row");
         let destination = root.path().join("snapshot.db");
-        let error = PinnedSnapshot::open(&path)?
+        let error = PinnedSnapshot::open(&path)
+            .expect("pinned snapshot")
             .backup_to(&destination, SnapshotLimits::default(), || true)
             .unwrap_err();
         assert!(error.to_string().contains("cancelled"));
         assert!(!destination.exists());
         assert_eq!(
-            writer.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row
-                .get::<_, i64>(0))?,
+            writer
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row
+                    .get::<_, i64>(0))
+                .expect("checkpoint result"),
             0
         );
-        Ok(())
+
+        #[cfg(unix)]
+        {
+            let loop_path = root.path().join("loop");
+            std::os::unix::fs::symlink(&loop_path, &loop_path).expect("symlink loop");
+            assert!(file_size(&loop_path).is_err());
+        }
     }
 }

@@ -158,11 +158,7 @@ fn merge(a: ReplayMetadata, b: ReplayMetadata) -> Result<ReplayMetadata> {
 
 /// Also supports pre-Replay checkpoints when restoring an earlier release.
 pub fn blob_references(db: &Connection) -> Result<Vec<ObjectReference>> {
-    let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='replay_segments' AND type='table')",
-        [],
-        |r| r.get(0),
-    )?;
+    let exists = replay_segments_exist(db)?;
     if !exists {
         return Ok(Vec::new());
     }
@@ -182,6 +178,19 @@ pub fn blob_references(db: &Connection) -> Result<Vec<ObjectReference>> {
             })
         })
         .collect()
+}
+
+fn replay_segments_exist(db: &Connection) -> Result<bool> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='replay_segments' AND type='table')",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+fn first_string(row: &rusqlite::Row<'_>) -> rusqlite::Result<String> {
+    row.get(0)
 }
 
 /// Up to 16 small sessions / 256 segments, or one larger session (SDK max 10,001).
@@ -378,9 +387,10 @@ pub fn associations(
     let mut statement=db.prepare("SELECT o.source_event_id,o.record_id,o.issue_id FROM issue_occurrences o JOIN issues i ON i.id=o.issue_id WHERE i.project_id=?1 AND o.source_event_id IN (SELECT value FROM json_each(?2)) LIMIT 1000")?;
     let errors=statement.query_map(params![project,ids],|r|Ok(serde_json::json!({"event_id":r.get::<_,String>(0)?,"record_id":r.get::<_,String>(1)?,"issue_id":r.get::<_,String>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
     let mut statement=db.prepare("SELECT payload FROM feedback WHERE project_id=?1 AND replay_id=?2 AND expires_at_us>?3 ORDER BY timestamp_ms LIMIT 100")?;
-    let rows = statement.query_map(params![project, replay.metadata.replay_id, now], |r| {
-        r.get::<_, String>(0)
-    })?;
+    let rows = statement.query_map(
+        params![project, replay.metadata.replay_id, now],
+        first_string,
+    )?;
     let raw = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     let feedback = raw
         .iter()
@@ -483,6 +493,17 @@ mod tests {
                 .expect("read legacy references")
                 .is_empty()
         );
+        assert_eq!(
+            database
+                .query_row("SELECT 'value'", [], first_string)
+                .expect("first string"),
+            "value"
+        );
+        let damaged = Connection::open_in_memory().expect("damaged reference database");
+        damaged
+            .execute("CREATE TABLE replay_segments(other TEXT)", [])
+            .expect("damaged reference schema");
+        assert!(blob_references(&damaged).is_err());
     }
 
     #[test]
