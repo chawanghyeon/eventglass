@@ -273,3 +273,151 @@ pub fn next_batch(db: &Connection, limits: &Limits) -> Result<Vec<InboxChunk>> {
     }
     Ok(batch)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::RecordKind;
+    use serde_json::json;
+
+    fn database() -> (tempfile::TempDir, Connection, IngestProject) {
+        let directory = tempfile::tempdir().expect("temporary ingest database");
+        let database =
+            crate::db::open(&directory.path().join("meta.db")).expect("open ingest database");
+        database
+            .execute_batch(
+                "INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'p','Project',0,0);
+                 INSERT INTO project_keys(id,project_id,public_key,created_at_us) VALUES(1,1,'public',0);
+                 INSERT INTO runtime_state(singleton,installation_id,storage_generation,next_ingest_seq)
+                 VALUES(1,'installation','generation',1);",
+            )
+            .expect("seed ingest authorization and runtime");
+        (
+            directory,
+            database,
+            IngestProject {
+                id: 1,
+                slug: "p".into(),
+                public_key: "public".into(),
+            },
+        )
+    }
+
+    fn record() -> Record {
+        Record {
+            record_id: "r".into(),
+            kind: RecordKind::Log,
+            project_id: 1,
+            source_event_id: None,
+            ingest_seq: 0,
+            received_at_us: 1,
+            timestamp_us: 1,
+            service: "service".into(),
+            environment: None,
+            release: None,
+            level: "info".into(),
+            logger: None,
+            message: "message".into(),
+            trace_id: None,
+            span_id: None,
+            request_id: None,
+            user_id: None,
+            user_email: None,
+            issue_id: None,
+            fingerprint_version: None,
+            fingerprint: None,
+            attributes: json!({}),
+            search_text: "message".into(),
+            raw_json: json!({}),
+            normalizer_version: 1,
+            indexing_warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn acceptance_limits_fail_before_any_durable_ack() {
+        for error in [
+            IngestError::Unauthorized,
+            IngestError::TooLarge,
+            IngestError::InvalidRecord,
+            IngestError::InboxFull,
+        ] {
+            assert!(!error.to_string().is_empty());
+        }
+
+        let (_directory, mut database, project) = database();
+        let limits = Limits {
+            request_records: 0,
+            ..Limits::default()
+        };
+        assert!(accept(&mut database, project.clone(), "a", vec![record()], &limits).is_err());
+
+        database
+            .execute(
+                "UPDATE runtime_state SET inbox_bytes=?1",
+                [256 * 1024 * 1024],
+            )
+            .expect("fill fixture Inbox");
+        assert!(
+            accept(
+                &mut database,
+                project.clone(),
+                "b",
+                Vec::new(),
+                &Limits::default()
+            )
+            .is_err()
+        );
+
+        database
+            .execute("UPDATE runtime_state SET inbox_bytes=0", [])
+            .expect("empty fixture Inbox");
+        let limits = Limits {
+            decoded_bytes: 0,
+            ..Limits::default()
+        };
+        assert!(accept(&mut database, project.clone(), "c", vec![record()], &limits).is_err());
+
+        database
+            .execute(
+                "UPDATE runtime_state SET inbox_bytes=?1",
+                [256 * 1024 * 1024 - 1],
+            )
+            .expect("nearly fill fixture Inbox");
+        assert!(
+            accept(
+                &mut database,
+                project.clone(),
+                "d",
+                vec![record()],
+                &Limits::default()
+            )
+            .is_err()
+        );
+
+        database
+            .execute("UPDATE runtime_state SET inbox_bytes=0", [])
+            .expect("empty fixture Inbox again");
+        let limits = Limits {
+            record_bytes: 1,
+            ..Limits::default()
+        };
+        let feedback = json!({
+            "event_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "contexts":{"feedback":{"message":"safe"}}
+        });
+        assert!(
+            accept_with_replay(
+                &mut database,
+                project,
+                "e",
+                Vec::new(),
+                &limits,
+                None,
+                vec![feedback],
+                1,
+            )
+            .is_err()
+        );
+    }
+}
