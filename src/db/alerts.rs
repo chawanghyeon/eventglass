@@ -928,5 +928,69 @@ mod tests {
             finish_evaluation(&mut db, &invalid, 1, 60_000_000).unwrap_err(),
             AlertError::Invalid,
         );
+
+        let mut log_pending = pending;
+        log_pending.condition = Condition::LogCount {
+            query: String::new(),
+            window_seconds: 60,
+            threshold: 1,
+            cooldown_seconds: 0,
+            time_basis: TimeBasis::Timestamp,
+        };
+        assert!(finish_evaluation(&mut db, &log_pending, 0, 60_000_000).unwrap());
+    }
+
+    #[test]
+    fn damaged_administrative_tables_propagate_every_write_failure() {
+        let missing_users = Connection::open_in_memory().expect("missing users database");
+        assert!(require_admin(&missing_users, 1).is_err());
+
+        let (_directory, mut missing_projects) = database();
+        missing_projects
+            .execute_batch("PRAGMA foreign_keys=OFF; DROP TABLE projects")
+            .expect("drop projects");
+        assert!(create(&mut missing_projects, 1, &configuration(), 1).is_err());
+
+        let (_directory, mut missing_alerts) = database();
+        missing_alerts
+            .execute_batch(
+                "PRAGMA foreign_keys=OFF; DROP TABLE alert_deliveries; DROP TABLE alerts",
+            )
+            .expect("drop alerts");
+        assert!(create(&mut missing_alerts, 1, &configuration(), 1).is_err());
+        assert!(deliveries(&missing_alerts, 1, 1).is_err());
+        let delivery = DueDelivery {
+            id: "missing".into(),
+            payload_json: "{}".into(),
+            attempts: 0,
+        };
+        for result in [
+            DeliveryResult::Sent { status: 200 },
+            DeliveryResult::Retry {
+                status: None,
+                next_retry_at_us: 1,
+                error: "retry",
+            },
+            DeliveryResult::Failed {
+                status: None,
+                error: "failed",
+            },
+        ] {
+            assert!(finish_delivery(&missing_alerts, &delivery, result, 1).is_err());
+        }
+
+        let pending = PendingEvaluation {
+            alert_id: 1,
+            revision: 0,
+            project_ids: vec![1],
+            project_id: Some(1),
+            condition: configuration().condition,
+            destination: configuration().destination,
+            evaluation_end_us: 1,
+            cut_seq: 0,
+            last_triggered_at_us: None,
+        };
+        assert!(finish_evaluation(&mut missing_alerts, &pending, 0, 1).is_err());
+        assert!(fail_evaluation(&missing_alerts, &pending, "failure").is_err());
     }
 }

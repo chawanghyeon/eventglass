@@ -152,12 +152,7 @@ async fn receive_inner(
     body: Body,
     is_envelope: bool,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
-    if app.indexer.as_ref().is_some_and(|indexer| !indexer.ready()) {
-        return Err(ApiError(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "indexer_unavailable",
-        ));
-    }
+    require_indexer_ready(!app.indexer.as_ref().is_some_and(|indexer| !indexer.ready()))?;
     if project_id <= 0 {
         return Err(ApiError(StatusCode::UNAUTHORIZED, "invalid_ingest_key"));
     }
@@ -177,9 +172,7 @@ async fn receive_inner(
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .ok_or(ApiError(StatusCode::BAD_REQUEST, "invalid_content_length"))?;
-        if length > limits.wire_bytes {
-            return Err(ApiError(StatusCode::PAYLOAD_TOO_LARGE, "ingest_too_large"));
-        }
+        validate_content_length(length, limits.wire_bytes)?;
     }
     if !app.disk_budget.status()?.ingest_accepting
         && let Some(cold) = &app.cold
@@ -319,6 +312,25 @@ async fn receive_inner(
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
 
+fn require_indexer_ready(ready: bool) -> ApiResult<()> {
+    if ready {
+        Ok(())
+    } else {
+        Err(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "indexer_unavailable",
+        ))
+    }
+}
+
+fn validate_content_length(length: usize, limit: usize) -> ApiResult<()> {
+    if length <= limit {
+        Ok(())
+    } else {
+        Err(ApiError(StatusCode::PAYLOAD_TOO_LARGE, "ingest_too_large"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +338,16 @@ mod tests {
 
     #[test]
     fn wire_errors_have_stable_public_status_and_codes() {
+        assert!(require_indexer_ready(true).is_ok());
+        assert_eq!(
+            require_indexer_ready(false).unwrap_err().1,
+            "indexer_unavailable"
+        );
+        assert!(validate_content_length(10, 10).is_ok());
+        assert_eq!(
+            validate_content_length(11, 10).unwrap_err().1,
+            "ingest_too_large"
+        );
         for (error, status, code) in [
             (
                 sentry::SentryError::TooLarge("private"),

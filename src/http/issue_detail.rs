@@ -36,12 +36,8 @@ pub(super) async fn get_occurrence_detail(
     Path((issue_id, record_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> ApiResult<Response> {
-    if !canonical_digest(&issue_id) {
-        return Err(invalid_id("invalid_issue_id"));
-    }
-    if !canonical_digest(&record_id) {
-        return Err(invalid_id("invalid_record_id"));
-    }
+    require_digest(&issue_id, "invalid_issue_id")?;
+    require_digest(&record_id, "invalid_record_id")?;
     let principal = authenticate(&state, &headers, false, false).await?;
     let principal_id = principal.id;
     let initial = lookup(&state, principal_id, issue_id, record_id).await?;
@@ -53,9 +49,7 @@ pub(super) async fn get_occurrence_detail(
         .ok_or_else(unavailable)?
         .snapshot()
         .map_err(|_| unavailable())?;
-    if published.boundary.ingest_seq < initial.location.ingest_seq {
-        return Err(unavailable());
-    }
+    require_published(published.boundary.ingest_seq, initial.location.ingest_seq)?;
     let mut detail = load_native(
         &state,
         initial.location.shard_id.clone(),
@@ -69,9 +63,7 @@ pub(super) async fn get_occurrence_detail(
     .ok_or_else(unavailable)?;
 
     let current_principal = authenticate(&state, &headers, false, false).await?;
-    if current_principal.id != principal_id {
-        return Err(token_error(TokenError::AuthorizationChanged));
-    }
+    require_same_principal(principal_id, current_principal.id)?;
     let current = lookup(
         &state,
         current_principal.id,
@@ -80,9 +72,7 @@ pub(super) async fn get_occurrence_detail(
     )
     .await?;
     compare_authorization(&initial.authorization, &current.authorization)?;
-    if current.location != initial.location {
-        return Err(unavailable());
-    }
+    require_same_location(&initial.location, &current.location)?;
     detail.detail_token = Some(
         state
             .app
@@ -123,6 +113,31 @@ fn canonical_digest(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn require_digest(value: &str, code: &'static str) -> ApiResult<()> {
+    canonical_digest(value)
+        .then_some(())
+        .ok_or_else(|| invalid_id(code))
+}
+
+fn require_published(published: i64, required: i64) -> ApiResult<()> {
+    (published >= required)
+        .then_some(())
+        .ok_or_else(unavailable)
+}
+
+fn require_same_principal(before: i64, after: i64) -> ApiResult<()> {
+    (before == after)
+        .then_some(())
+        .ok_or_else(|| token_error(TokenError::AuthorizationChanged))
+}
+
+fn require_same_location(
+    before: &metadata::OccurrenceLocation,
+    after: &metadata::OccurrenceLocation,
+) -> ApiResult<()> {
+    (before == after).then_some(()).ok_or_else(unavailable)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +157,25 @@ mod tests {
         assert!(canonical_digest(&"f".repeat(64)));
         assert!(!canonical_digest(&"F".repeat(64)));
         assert!(!canonical_digest("short"));
+        assert!(require_digest(&"0".repeat(64), "invalid").is_ok());
+        assert_eq!(
+            require_digest("bad", "invalid_record_id").unwrap_err().1,
+            "invalid_record_id"
+        );
+        assert!(require_published(2, 2).is_ok());
+        assert!(require_published(1, 2).is_err());
+        assert!(require_same_principal(1, 1).is_ok());
+        assert!(require_same_principal(1, 2).is_err());
+        let location = metadata::OccurrenceLocation {
+            issue_id: "issue".into(),
+            project_id: 1,
+            shard_id: "shard".into(),
+            record_id: "record".into(),
+            ingest_seq: 1,
+        };
+        assert!(require_same_location(&location, &location).is_ok());
+        let mut changed = location.clone();
+        changed.ingest_seq = 2;
+        assert!(require_same_location(&location, &changed).is_err());
     }
 }

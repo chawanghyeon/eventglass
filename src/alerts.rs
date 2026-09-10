@@ -608,7 +608,7 @@ pub async fn evaluate_once(
     else {
         return Ok(false);
     };
-    if indexer.snapshot()?.boundary.ingest_seq < pending.cut_seq {
+    if !cut_is_ready(indexer.snapshot()?.boundary.ingest_seq, pending.cut_seq) {
         return Ok(false);
     }
     let result = evaluate_pending(db, indexer, query_permit, cold, &pending).await;
@@ -649,21 +649,7 @@ async fn evaluate_pending(
         aggregate::{AggregateRequest, MetricSpec},
         query::{KeywordField, QueryScope, TimeField, TypedFilter},
     };
-    let (query, window_seconds, kind, time_basis) = match &pending.condition {
-        Condition::ErrorCount {
-            query,
-            window_seconds,
-            time_basis,
-            ..
-        } => (query.clone(), *window_seconds, "error", *time_basis),
-        Condition::LogCount {
-            query,
-            window_seconds,
-            time_basis,
-            ..
-        } => (query.clone(), *window_seconds, "log", *time_basis),
-        _ => anyhow::bail!("non-threshold alert reached evaluator"),
-    };
+    let (query, window_seconds, kind, time_basis) = threshold_parts(&pending.condition)?;
     ensure!(
         pending.project_id.is_none() || !pending.project_ids.is_empty(),
         "configured alert project is inactive"
@@ -679,21 +665,15 @@ async fn evaluate_pending(
     let candidate_start = start_us;
     let candidate_end = pending.evaluation_end_us;
     let candidate_cut = pending.cut_seq;
-    let candidate_time = time_field;
     let candidate_ids = db
-        .call(move |database| match candidate_time {
-            TimeField::ReceivedAt => crate::db::search::received_candidates(
+        .call(move |database| {
+            alert_candidates(
                 database,
                 candidate_start,
                 candidate_end,
                 candidate_cut,
-            ),
-            TimeField::Timestamp => crate::db::search::event_candidates(
-                database,
-                candidate_start,
-                candidate_end,
-                candidate_cut,
-            ),
+                time_field,
+            )
         })
         .await?;
     if let Some(cold) = cold {
@@ -732,6 +712,45 @@ async fn evaluate_pending(
         .await
         .context("alert query timed out")?
         .context("alert query task failed")?
+}
+
+fn cut_is_ready(published: i64, required: i64) -> bool {
+    published >= required
+}
+
+fn threshold_parts(condition: &Condition) -> Result<(String, u32, &'static str, TimeBasis)> {
+    match condition {
+        Condition::ErrorCount {
+            query,
+            window_seconds,
+            time_basis,
+            ..
+        } => Ok((query.clone(), *window_seconds, "error", *time_basis)),
+        Condition::LogCount {
+            query,
+            window_seconds,
+            time_basis,
+            ..
+        } => Ok((query.clone(), *window_seconds, "log", *time_basis)),
+        _ => anyhow::bail!("non-threshold alert reached evaluator"),
+    }
+}
+
+fn alert_candidates(
+    database: &rusqlite::Connection,
+    start: i64,
+    end: i64,
+    cut: i64,
+    time_field: crate::search::query::TimeField,
+) -> Result<Vec<String>> {
+    match time_field {
+        crate::search::query::TimeField::ReceivedAt => {
+            crate::db::search::received_candidates(database, start, end, cut)
+        }
+        crate::search::query::TimeField::Timestamp => {
+            crate::db::search::event_candidates(database, start, end, cut)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -868,6 +887,45 @@ mod tests {
         configuration.name = "valid".into();
         configuration.project_id = Some(0);
         assert!(configuration.validate().is_err());
+
+        assert!(!cut_is_ready(1, 2));
+        assert!(cut_is_ready(2, 2));
+        assert_eq!(
+            threshold_parts(&threshold_condition(true)).unwrap().2,
+            "error"
+        );
+        let mut log = threshold_condition(false);
+        if let Condition::LogCount { time_basis, .. } = &mut log {
+            *time_basis = TimeBasis::Timestamp;
+        }
+        assert_eq!(threshold_parts(&log).unwrap().2, "log");
+        assert!(threshold_parts(&Condition::NewIssue).is_err());
+
+        let directory = tempfile::tempdir().expect("candidate database directory");
+        let database =
+            crate::db::open(&directory.path().join("meta.db")).expect("candidate database");
+        assert!(
+            alert_candidates(
+                &database,
+                0,
+                1,
+                0,
+                crate::search::query::TimeField::ReceivedAt,
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert!(
+            alert_candidates(
+                &database,
+                0,
+                1,
+                0,
+                crate::search::query::TimeField::Timestamp,
+            )
+            .unwrap()
+            .is_empty()
+        );
     }
 
     #[test]

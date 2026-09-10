@@ -101,9 +101,7 @@ async fn prepare(
     let principal = authenticate(state, headers, false, false).await?;
     let start_us = timestamp(&input.start)?;
     let end_us = timestamp(&input.end)?;
-    if start_us >= end_us {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_live_request"));
-    }
+    valid_live_window(start_us, end_us)?;
     let projects = input
         .projects
         .map(|projects| {
@@ -116,10 +114,7 @@ async fn prepare(
         .unwrap_or_default();
     let mut filters: Filters = input
         .filters
-        .map(|filters| {
-            serde_json::from_str(&filters)
-                .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "invalid_live_request"))
-        })
+        .map(|filters| parse_live_filters(&filters))
         .transpose()?
         .unwrap_or_default();
     filters.canonicalize()?;
@@ -150,9 +145,7 @@ async fn prepare(
                 .map_err(|_| ApiError(StatusCode::BAD_REQUEST, "invalid_live_request"))
         })
         .transpose()?;
-    if input.resume.is_some() && header_resume.is_some() && input.resume != header_resume {
-        return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_live_request"));
-    }
+    matching_resume(input.resume.as_deref(), header_resume.as_deref())?;
     let resume = input.resume.or(header_resume);
     let scan_seq = if let Some(resume) = resume {
         let verified = state
@@ -165,10 +158,7 @@ async fn prepare(
                 crate::model::now_us()?,
             )
             .map_err(token_error)?;
-        match verified.position {
-            Position::Live { scan_seq } => scan_seq,
-            _ => return Err(ApiError(StatusCode::BAD_REQUEST, "invalid_live_request")),
-        }
+        live_scan_seq(verified.position)?
     } else {
         0
     };
@@ -181,6 +171,33 @@ async fn prepare(
         filters,
         scan_seq,
     })
+}
+
+fn invalid_live() -> ApiError {
+    ApiError(StatusCode::BAD_REQUEST, "invalid_live_request")
+}
+
+fn valid_live_window(start: i64, end: i64) -> ApiResult<()> {
+    (start < end).then_some(()).ok_or_else(invalid_live)
+}
+
+fn parse_live_filters(value: &str) -> ApiResult<Filters> {
+    serde_json::from_str(value).map_err(|_| invalid_live())
+}
+
+fn matching_resume(query: Option<&str>, header: Option<&str>) -> ApiResult<()> {
+    if query.is_some() && header.is_some() && query != header {
+        Err(invalid_live())
+    } else {
+        Ok(())
+    }
+}
+
+fn live_scan_seq(position: Position) -> ApiResult<i64> {
+    match position {
+        Position::Live { scan_seq } => Ok(scan_seq),
+        _ => Err(invalid_live()),
+    }
 }
 
 async fn produce(
@@ -415,12 +432,21 @@ async fn send_json_with_timeout(
 
 #[cfg(test)]
 mod tests {
-    use super::{Event, Infallible, MAX_EVENT_BYTES, live_task_failure, send_json_with_timeout};
+    use super::*;
     use std::time::Duration;
     use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn slow_client_is_bounded_when_the_sse_queue_stays_full() {
+        assert!(valid_live_window(0, 1).is_ok());
+        assert!(valid_live_window(1, 1).is_err());
+        assert!(parse_live_filters("{}").is_ok());
+        assert!(parse_live_filters("{").is_err());
+        assert!(matching_resume(None, Some("a")).is_ok());
+        assert!(matching_resume(Some("a"), Some("a")).is_ok());
+        assert!(matching_resume(Some("a"), Some("b")).is_err());
+        assert_eq!(live_scan_seq(Position::Live { scan_seq: 7 }).unwrap(), 7);
+        assert!(live_scan_seq(Position::Read).is_err());
         let (sender, _receiver) = mpsc::channel::<Result<Event, Infallible>>(1);
         sender.send(Ok(Event::default())).await.unwrap();
 

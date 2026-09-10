@@ -18,7 +18,7 @@ use crate::{
     db::search as authorization,
     search::{
         query::{KeywordField, QueryScope, SearchRequest, TimeField, TypedFilter},
-        tokens::{Position, TokenError, TokenKind},
+        tokens::{Position, TokenKind},
     },
 };
 
@@ -83,14 +83,7 @@ pub(super) async fn related(
             crate::model::now_us()?,
         )
         .map_err(token_error)?;
-    let Position::Detail {
-        project_id,
-        shard_id,
-        record_id,
-    } = verified.position
-    else {
-        return Err(token_error(TokenError::Invalid));
-    };
+    let (project_id, shard_id, record_id) = super::records::detail_position(verified.position)?;
     let selected_project = project_id;
     let project_auth = state
         .app
@@ -157,12 +150,7 @@ pub(super) async fn related(
         indexer.search(&candidate_ids, &request)
     })
     .await
-    .map_err(|failure| match failure {
-        super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
-        super::NativeTaskFailure::Join => {
-            ApiError(StatusCode::SERVICE_UNAVAILABLE, "search_unavailable")
-        }
-    })?
+    .map_err(related_task_failure)?
     .map_err(|_| ApiError(StatusCode::SERVICE_UNAVAILABLE, "search_unavailable"))?;
     let selected_auth = state
         .app
@@ -173,9 +161,7 @@ pub(super) async fn related(
     compare_authorization(&identity, &selected_auth)?;
     compare_authorization(&project_auth, &selected_auth)?;
     let current = authenticate(&state, &headers, false, false).await?;
-    if current.id != principal_id {
-        return Err(token_error(TokenError::AuthorizationChanged));
-    }
+    super::records::require_principal(principal_id, current.id)?;
 
     let now_us = crate::model::now_us()?;
     let search_has_more = page.has_more;
@@ -234,6 +220,15 @@ pub(super) async fn related(
         "truncated":truncated,
         "rows":rows,
     })))
+}
+
+fn related_task_failure(failure: super::NativeTaskFailure) -> ApiError {
+    match failure {
+        super::NativeTaskFailure::Timeout => ApiError(StatusCode::GATEWAY_TIMEOUT, "query_timeout"),
+        super::NativeTaskFailure::Join => {
+            ApiError(StatusCode::SERVICE_UNAVAILABLE, "search_unavailable")
+        }
+    }
 }
 
 fn keyword(field: KeywordField, value: String) -> TypedFilter {
@@ -304,6 +299,14 @@ mod tests {
 
     #[test]
     fn correlation_strategy_prefers_exact_ids_and_bounds_fallback_scope() {
+        assert_eq!(
+            related_task_failure(super::super::NativeTaskFailure::Timeout).0,
+            StatusCode::GATEWAY_TIMEOUT
+        );
+        assert_eq!(
+            related_task_failure(super::super::NativeTaskFailure::Join).0,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
         let mut value = seed();
         value.trace_id = Some("trace".into());
         let (strategy, projects, filters, window) = correlation_strategy(&value, 7, 600);

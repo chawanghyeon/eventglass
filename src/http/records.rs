@@ -48,14 +48,7 @@ pub(super) async fn get_record(
             crate::model::now_us()?,
         )
         .map_err(token_error)?;
-    let Position::Detail {
-        project_id,
-        shard_id,
-        record_id,
-    } = verified.position
-    else {
-        return Err(token_error(TokenError::Invalid));
-    };
+    let (project_id, shard_id, record_id) = detail_position(verified.position)?;
 
     // Verify current access only after the opaque token has authenticated its project identity.
     let selected_project = project_id;
@@ -72,9 +65,7 @@ pub(super) async fn get_record(
         .ok_or_else(unavailable)?
         .snapshot()
         .map_err(|_| unavailable())?;
-    if verified.watermark > published.boundary.ingest_seq {
-        return Err(unavailable());
-    }
+    require_published(verified.watermark, published.boundary.ingest_seq)?;
     let mut detail = load_native(
         &state,
         shard_id,
@@ -89,9 +80,7 @@ pub(super) async fn get_record(
 
     // A read that crossed a session, permission epoch or restore generation is never returned.
     let current_principal = authenticate(&state, &headers, false, false).await?;
-    if current_principal.id != principal_id {
-        return Err(token_error(TokenError::AuthorizationChanged));
-    }
+    require_principal(principal_id, current_principal.id)?;
     let current_id = current_principal.id;
     let current_identity = state
         .app
@@ -108,9 +97,7 @@ pub(super) async fn get_record(
         .await
         .map_err(scope_error)?;
     compare_authorization(&scope, &current_scope)?;
-    if current_scope.projects != scope.projects {
-        return Err(token_error(TokenError::AuthorizationChanged));
-    }
+    require_projects(&scope.projects, &current_scope.projects)?;
     detail.detail_token = Some(detail_token);
 
     Ok(detail_response(detail))
@@ -127,6 +114,35 @@ pub(super) enum NativeDetail {
         record_id: String,
         ingest_seq: i64,
     },
+}
+
+pub(super) fn detail_position(position: Position) -> ApiResult<(i64, String, String)> {
+    match position {
+        Position::Detail {
+            project_id,
+            shard_id,
+            record_id,
+        } => Ok((project_id, shard_id, record_id)),
+        _ => Err(token_error(TokenError::Invalid)),
+    }
+}
+
+fn require_published(watermark: i64, published: i64) -> ApiResult<()> {
+    (watermark <= published)
+        .then_some(())
+        .ok_or_else(unavailable)
+}
+
+pub(super) fn require_principal(before: i64, after: i64) -> ApiResult<()> {
+    (before == after)
+        .then_some(())
+        .ok_or_else(|| token_error(TokenError::AuthorizationChanged))
+}
+
+fn require_projects(before: &[i64], after: &[i64]) -> ApiResult<()> {
+    (before == after)
+        .then_some(())
+        .ok_or_else(|| token_error(TokenError::AuthorizationChanged))
 }
 
 pub(super) async fn load_native(
@@ -233,5 +249,20 @@ mod tests {
         let mut hash = before.clone();
         hash.hash = "changed".into();
         assert!(compare_authorization(&before, &hash).is_err());
+
+        assert!(detail_position(Position::Read).is_err());
+        let position = detail_position(Position::Detail {
+            project_id: 1,
+            shard_id: "s".into(),
+            record_id: "r".into(),
+        })
+        .unwrap();
+        assert_eq!(position.0, 1);
+        assert!(require_published(1, 1).is_ok());
+        assert!(require_published(2, 1).is_err());
+        assert!(require_principal(1, 1).is_ok());
+        assert!(require_principal(1, 2).is_err());
+        assert!(require_projects(&[1], &[1]).is_ok());
+        assert!(require_projects(&[1], &[2]).is_err());
     }
 }
