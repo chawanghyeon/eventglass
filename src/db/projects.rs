@@ -142,3 +142,61 @@ pub fn list_keys(db: &Connection, actor: i64, project: i64) -> Result<Vec<Projec
         })?
         .collect::<Result<Vec<_>, _>>()?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn database() -> (tempfile::TempDir, Connection) {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::db::open(&directory.path().join("meta.db")).unwrap();
+        db.execute_batch(
+            "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
+             VALUES(1,'admin@example.test','x','admin',1,0,0),
+                   (2,'member@example.test','x','member',1,0,0);
+             INSERT INTO projects(id,slug,name,is_active,created_at_us,updated_at_us)
+             VALUES(1,'active','Active',1,0,0),(2,'inactive','Inactive',0,0,0)",
+        )
+        .unwrap();
+        (directory, db)
+    }
+
+    fn kind(error: anyhow::Error) -> String {
+        error.downcast_ref::<ManagementError>().unwrap().to_string()
+    }
+
+    #[test]
+    fn project_management_enforces_admin_conflict_and_missing_boundaries() -> Result<()> {
+        let (_directory, mut db) = database();
+        assert_eq!(
+            kind(create(&mut db, 2, "new", "New").unwrap_err()),
+            "Forbidden"
+        );
+        assert_eq!(
+            kind(create(&mut db, 1, "active", "Again").unwrap_err()),
+            "Conflict"
+        );
+        let id = create(&mut db, 1, "new", "New")?;
+        assert_eq!(list(&db, 2)?.len(), 2);
+        assert_eq!(list(&db, 1)?.len(), 3);
+        assert_eq!(
+            kind(set_active(&mut db, 1, 999, false).unwrap_err()),
+            "NotFound"
+        );
+        assert_eq!(
+            kind(create_key(&mut db, 1, 999, "key").unwrap_err()),
+            "NotFound"
+        );
+        let key = create_key(&mut db, 1, id, "key")?;
+        assert_eq!(list_keys(&db, 1, id)?.len(), 1);
+        revoke_key(&mut db, 1, id, key)?;
+        assert!(list_keys(&db, 1, id)?.is_empty());
+        assert_eq!(
+            kind(revoke_key(&mut db, 1, id, 999).unwrap_err()),
+            "NotFound"
+        );
+        assert_eq!(kind(list_keys(&db, 1, 999).unwrap_err()), "NotFound");
+        assert!(std::error::Error::source(&ManagementError::Forbidden).is_none());
+        Ok(())
+    }
+}

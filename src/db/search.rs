@@ -198,3 +198,58 @@ pub fn local_detail_shard(db: &Connection, shard_id: &str) -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn database() -> (tempfile::TempDir, Connection) {
+        let directory = tempfile::tempdir().unwrap();
+        let db = crate::db::open(&directory.path().join("meta.db")).unwrap();
+        db.execute_batch(
+            "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
+             VALUES(1,'admin@example.test','x','admin',1,0,0);
+             INSERT INTO projects(id,slug,name,is_active,created_at_us,updated_at_us)
+             VALUES(1,'one','One',1,0,0)",
+        )
+        .unwrap();
+        (directory, db)
+    }
+
+    #[test]
+    fn authorization_and_candidate_limits_fail_closed() -> Result<()> {
+        assert_eq!(ScopeError::Forbidden.to_string(), "Forbidden");
+        let (_directory, mut db) = database();
+        assert!(capture(&mut db, 1, vec![1; 1001]).is_err());
+        assert!(capture(&mut db, 1, vec![0]).is_err());
+        assert!(capture(&mut db, 1, vec![2]).is_err());
+        assert!(identity(&db, 999).is_err());
+        assert!(event_candidates(&db, 1, 1, 0).is_err());
+        assert!(received_candidates(&db, 1, 1, -1).is_err());
+
+        let shard = uuid::Uuid::new_v4().to_string();
+        db.execute(
+            "INSERT INTO shards(id,schema_version,format_version,state,created_at_us)
+             VALUES(?1,1,'test','local',0)",
+            [&shard],
+        )?;
+        db.execute_batch("PRAGMA ignore_check_constraints=ON; UPDATE shards SET state='creating'")?;
+        assert!(event_candidates(&db, 0, 1, 0).is_err());
+        assert!(received_candidates(&db, 0, 1, 0).is_err());
+        assert!(local_detail_shard(&db, &shard).is_err());
+        db.execute("UPDATE shards SET state='local' WHERE id=?1", [&shard])?;
+        db.execute_batch("PRAGMA ignore_check_constraints=OFF")?;
+        assert_eq!(event_candidates(&db, 0, 1, 0)?, vec![shard.clone()]);
+        local_detail_shard(&db, &shard)?;
+        assert!(local_detail_shard(&db, "missing").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn token_key_is_stable_across_reads() -> Result<()> {
+        let (_directory, mut db) = database();
+        let first = token_key(&mut db)?;
+        assert_eq!(token_key(&mut db)?, first);
+        Ok(())
+    }
+}

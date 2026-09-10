@@ -95,3 +95,48 @@ fn canonical_digest(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lookup_rejects_invalid_and_cross_project_occurrence_identity() -> Result<()> {
+        assert_eq!(IssueDetailError::NotFound.to_string(), "NotFound");
+        assert_eq!(IssueDetailError::Corrupt.to_string(), "Corrupt");
+        let directory = tempfile::tempdir()?;
+        let db = crate::db::open(&directory.path().join("meta.db"))?;
+        let issue = "a".repeat(64);
+        let record = "b".repeat(64);
+        assert!(lookup(&db, 0, &issue, &record).is_err());
+        assert!(lookup(&db, 1, "invalid", &record).is_err());
+        assert!(lookup(&db, 1, &issue, "invalid").is_err());
+
+        let shard = uuid::Uuid::new_v4().to_string();
+        db.execute_batch(
+            "INSERT INTO users(id,email,password_hash,role,is_active,created_at_us,updated_at_us)
+             VALUES(1,'admin@example.test','x','admin',1,0,0);
+             INSERT INTO projects(id,slug,name,is_active,created_at_us,updated_at_us)
+             VALUES(1,'one','One',1,0,0),(2,'two','Two',1,0,0)",
+        )?;
+        db.execute(
+            "INSERT INTO shards(id,schema_version,format_version,state,created_at_us)
+             VALUES(?1,1,'test','local',0)",
+            [&shard],
+        )?;
+        db.execute(
+            "INSERT INTO issues(id,project_id,fingerprint,fingerprint_version,title,level,status,
+                 first_seen_us,last_seen_us,occurrence_count,first_seen_ingest_seq,
+                 last_seen_ingest_seq,created_at_us,updated_at_us)
+             VALUES(?1,1,'fingerprint',1,'title','error','unresolved',0,0,1,1,1,0,0)",
+            [&issue],
+        )?;
+        db.execute(
+            "INSERT INTO issue_occurrences(event_key,project_id,issue_id,record_id,shard_id,
+                 ingest_seq,occurred_at_us) VALUES(?1,2,?2,?3,?4,1,0)",
+            params![record.clone(), issue, record.clone(), shard],
+        )?;
+        assert!(lookup(&db, 1, &"a".repeat(64), &record).is_err());
+        Ok(())
+    }
+}
