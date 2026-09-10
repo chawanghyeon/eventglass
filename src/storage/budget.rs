@@ -133,5 +133,32 @@ mod tests {
             admit(3 * gib - 1, 20 * gib, gib / 2, gib / 2),
             Err(ReserveError::Exhausted)
         );
+        assert_eq!(
+            admit(u64::MAX, u64::MAX, u64::MAX, 1),
+            Err(ReserveError::Exhausted)
+        );
+        assert_eq!(
+            ReserveError::Unavailable.to_string(),
+            "disk capacity is unavailable"
+        );
+        assert_eq!(
+            ReserveError::Exhausted.to_string(),
+            "disk reserve would be crossed"
+        );
+    }
+
+    #[test]
+    fn real_budget_tracks_and_releases_reservations() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let budget = DiskBudget::new(directory.path());
+        assert_eq!(budget.reserved_bytes()?, 0);
+        let status = budget.status()?;
+        assert!(status.total_bytes >= status.free_bytes);
+        let reservation = budget.reserve(1)?;
+        assert_eq!(budget.reserved_bytes()?, 1);
+        drop(reservation);
+        assert_eq!(budget.reserved_bytes()?, 0);
+        assert!(budget.reserve(0).is_err());
+        Ok(())
     }
 }

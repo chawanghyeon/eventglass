@@ -324,3 +324,78 @@ fn crash_point(name: &str) {
     #[cfg(not(feature = "failpoints"))]
     let _ = name;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid_manifest() -> Manifest {
+        Manifest {
+            manifest_version: 1,
+            installation_id: uuid::Uuid::new_v4().to_string(),
+            shard_id: uuid::Uuid::new_v4().to_string(),
+            schema_version: schema::APPLICATION_SCHEMA_VERSION,
+            normalizer_version: 1,
+            tokenizer_version: schema::TOKENIZER_VERSION,
+            tantivy_version: tantivy::version_string().into(),
+            index_format_version: tantivy::INDEX_FORMAT_VERSION,
+            boundary: Boundary::default(),
+            stats: ShardStats {
+                record_count: 0,
+                min_timestamp_us: None,
+                max_timestamp_us: None,
+                min_received_at_us: None,
+                max_received_at_us: None,
+                min_ingest_seq: None,
+                max_ingest_seq: None,
+            },
+            sealed_at_us: 0,
+            files: vec![
+                FileEntry {
+                    path: "meta.json".into(),
+                    size: 0,
+                    sha256: "0".repeat(64),
+                },
+                FileEntry {
+                    path: ".managed.json".into(),
+                    size: 0,
+                    sha256: "0".repeat(64),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn manifest_validation_rejects_unsafe_names_and_partial_ranges() {
+        for name in [
+            "",
+            "../escape",
+            "a/b",
+            "a\\b",
+            "a:b",
+            NAME,
+            "x.lock",
+            "x.tmp",
+        ] {
+            assert!(!safe_name(name), "{name}");
+        }
+        assert!(safe_name("segment.store"));
+
+        let mut manifest = valid_manifest();
+        assert!(validate(&manifest).is_ok());
+        manifest.stats.min_timestamp_us = Some(1);
+        assert!(validate(&manifest).is_err());
+        manifest.stats.max_timestamp_us = Some(0);
+        assert!(validate(&manifest).is_err());
+    }
+
+    #[test]
+    fn size_helpers_reject_missing_manifest_and_non_regular_active_entries() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let manifest = valid_manifest();
+        assert!(local_size(directory.path(), &manifest).is_err());
+        fs::create_dir(directory.path().join("nested"))?;
+        assert!(active_size(directory.path()).is_err());
+        Ok(())
+    }
+}

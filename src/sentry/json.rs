@@ -117,6 +117,15 @@ impl<'de> Visitor<'de> for BoundedValue<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::de::Visitor;
+
+    struct Expected<'a>(&'a BoundedValue<'a>);
+
+    impl std::fmt::Display for Expected<'_> {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            self.0.expecting(formatter)
+        }
+    }
 
     #[test]
     fn shape_limit_stops_decoding_before_reading_an_oversized_tail() {
@@ -145,5 +154,16 @@ mod tests {
             serde_json::from_slice::<Value>(bytes).unwrap()
         );
         assert!(matches!(parse(b"{} {}"), Err(SentryError::Malformed(_))));
+    }
+
+    #[test]
+    fn visitor_supports_owned_strings_and_describes_its_input() {
+        let mut nodes = 0;
+        let mut limit_error = None;
+        let visitor = BoundedValue::new(&mut nodes, &mut limit_error);
+        assert_eq!(Expected(&visitor).to_string(), "bounded record JSON");
+        let value =
+            Visitor::visit_string::<serde::de::value::Error>(visitor, "owned".into()).unwrap();
+        assert_eq!(value, Value::String("owned".into()));
     }
 }

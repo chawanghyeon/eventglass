@@ -100,10 +100,10 @@ pub fn decode_body(
         return Ok(wire.to_vec());
     }
 
-    let reader: Box<dyn Read> = match content_encoding {
-        ContentEncoding::Gzip => Box::new(GzDecoder::new(wire)),
-        ContentEncoding::Deflate => Box::new(ZlibDecoder::new(wire)),
-        ContentEncoding::Identity => unreachable!(),
+    let reader: Box<dyn Read> = if content_encoding == ContentEncoding::Gzip {
+        Box::new(GzDecoder::new(wire))
+    } else {
+        Box::new(ZlibDecoder::new(wire))
     };
     let mut output = Vec::with_capacity(wire.len().min(limits.decoded_bytes));
     reader
@@ -336,5 +336,45 @@ mod transport_tests {
                 public_key: "public".into()
             })
         );
+    }
+
+    #[test]
+    fn normalizers_reject_oversized_bodies_and_malformed_feedback() {
+        let limits = Limits {
+            decoded_bytes: 4,
+            ..Limits::default()
+        };
+        let project = ProjectContext {
+            project_id: 1,
+            slug: "test".into(),
+            public_key: "public".into(),
+            scrub_keys: Vec::new(),
+        };
+        assert!(matches!(
+            normalize_store(b"12345", &project, Uuid::nil(), 0, &limits),
+            Err(SentryError::TooLarge(_))
+        ));
+        assert!(matches!(
+            normalize_envelope(b"12345", &project, Uuid::nil(), 0, &limits),
+            Err(SentryError::TooLarge(_))
+        ));
+
+        let limits = Limits::default();
+        let payload = br#"{"event_id":"00000000000000000000000000000000"}"#;
+        let missing_message = format!(
+            "{{}}\n{{\"type\":\"feedback\",\"length\":{}}}\n{}",
+            payload.len(),
+            std::str::from_utf8(payload).unwrap()
+        );
+        assert!(matches!(
+            normalize_envelope(
+                missing_message.as_bytes(),
+                &project,
+                Uuid::nil(),
+                0,
+                &limits
+            ),
+            Err(SentryError::Malformed("invalid feedback"))
+        ));
     }
 }

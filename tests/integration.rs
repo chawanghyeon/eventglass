@@ -138,6 +138,27 @@ async fn setup_session_dsn_csrf_revoke_logout() -> anyhow::Result<()> {
         ))
         .await?;
     assert_eq!(created.status(), StatusCode::CREATED);
+    for invalid in [
+        json!({"slug":"","name":"Test"}),
+        json!({"slug":"UPPER","name":"Test"}),
+        json!({"slug":"test","name":""}),
+        json!({"slug":"test","name":"x".repeat(201)}),
+    ] {
+        assert_eq!(
+            router
+                .clone()
+                .oneshot(request(
+                    "POST",
+                    "/api/projects",
+                    invalid,
+                    Some(&cookie),
+                    Some(csrf),
+                ))
+                .await?
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
     let key = router
         .clone()
         .oneshot(request(

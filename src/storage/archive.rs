@@ -245,3 +245,42 @@ impl Drop for RemoveDirectory {
         let _ = fs::remove_dir_all(&self.0);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn archive_names_and_short_streams_are_rejected_safely() -> Result<()> {
+        assert!(safe_name(manifest::NAME));
+        assert!(safe_name("segment.store"));
+        for name in ["", "../escape", "a/b", "a\\b", "a:b", "x.lock", "x.tmp"] {
+            assert!(!safe_name(name), "{name}");
+        }
+
+        let mut input: &[u8] = b"short";
+        let mut output = Vec::new();
+        assert_eq!(copy_exact(&mut input, &mut output, 10, &mut || false)?, 5);
+        assert_eq!(output, b"short");
+        assert!(copy_exact(&mut &b"data"[..], &mut Vec::new(), 4, &mut || true).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn hashing_and_cancel_reader_honor_cancellation() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("data");
+        fs::write(&path, b"content")?;
+        assert!(hash_file(&path, &mut || true).is_err());
+        let file = File::open(path)?;
+        let mut reader = CancelReader {
+            inner: file,
+            cancelled: &mut || true,
+        };
+        assert_eq!(
+            reader.read(&mut [0; 8]).unwrap_err().to_string(),
+            "archive creation cancelled"
+        );
+        Ok(())
+    }
+}

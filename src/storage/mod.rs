@@ -87,4 +87,20 @@ mod cleanup_tests {
     fn non_utf8_names_are_never_classified_as_interrupted_work() {
         assert!(!super::is_interrupted_name(None));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_named_symlinks_are_preserved() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let target = root.path().join("target");
+        std::fs::write(&target, b"preserve")?;
+        let link = root
+            .path()
+            .join(format!(".backup-{}.tmp", uuid::Uuid::new_v4()));
+        std::os::unix::fs::symlink(&target, &link)?;
+        super::reclaim_interrupted_temporary_work(root.path())?;
+        assert!(link.symlink_metadata()?.file_type().is_symlink());
+        assert_eq!(std::fs::read(target)?, b"preserve");
+        Ok(())
+    }
 }

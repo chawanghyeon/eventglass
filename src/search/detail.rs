@@ -242,3 +242,45 @@ fn exactly_one_i64(
     ensure!(values.next().is_none(), "duplicate native {name}");
     Ok(value)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tantivy::DateTime;
+
+    #[test]
+    fn stored_field_readers_reject_missing_wrong_and_duplicate_values() -> Result<()> {
+        let schema = schema::build();
+        let text = schema.get_field("service")?;
+        let integer = schema.get_field("project_id")?;
+        let date = schema.get_field("timestamp")?;
+        let mut document = TantivyDocument::default();
+
+        assert!(exactly_one_str(&document, text, "service").is_err());
+        assert!(exactly_one_i64(&document, integer, "project_id").is_err());
+        assert!(exactly_one_date(&document, date, "timestamp").is_err());
+        assert_eq!(optional_str(&document, text, "service")?, None);
+
+        document.add_i64(text, 1);
+        document.add_text(integer, "wrong");
+        document.add_text(date, "wrong");
+        assert!(exactly_one_str(&document, text, "service").is_err());
+        assert!(optional_str(&document, text, "service").is_err());
+        assert!(exactly_one_i64(&document, integer, "project_id").is_err());
+        assert!(exactly_one_date(&document, date, "timestamp").is_err());
+
+        let mut document = TantivyDocument::default();
+        document.add_text(text, "one");
+        document.add_text(text, "two");
+        document.add_i64(integer, 1);
+        document.add_i64(integer, 2);
+        document.add_date(date, DateTime::from_timestamp_micros(1));
+        document.add_date(date, DateTime::from_timestamp_micros(2));
+        assert!(optional_str(&document, text, "service").is_err());
+        assert!(exactly_one_str(&document, text, "service").is_err());
+        assert!(exactly_one_i64(&document, integer, "project_id").is_err());
+        assert!(exactly_one_date(&document, date, "timestamp").is_err());
+        assert!(document.get_first(text).unwrap().as_str().is_some());
+        Ok(())
+    }
+}
