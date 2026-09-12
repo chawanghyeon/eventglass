@@ -96,27 +96,26 @@ impl ColdStorage {
             .await
             .context("cold storage is closed")?;
         let cutoff = crate::model::now_us()?.saturating_sub(30_000_000);
-        let candidates = self
-            .db
-            .call(move |db| {
-                let mut statement = db.prepare(
-                    "SELECT id FROM shards
-                     WHERE state='remote_verified' AND remote_archive_key IS NOT NULL
-                       AND archive_sha256 IS NOT NULL AND recovery_checkpoint_id IS NOT NULL
-                       AND (last_accessed_at_us IS NULL OR last_accessed_at_us<?1)
-                     ORDER BY coalesce(last_accessed_at_us,sealed_at_us,created_at_us),id",
-                )?;
-                Ok(statement
-                    .query_map([cutoff], |row| row.get::<_, String>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?)
-            })
-            .await?;
+        let mut after = None;
         let mut reclaimed = 0usize;
-        for shard_id in candidates {
-            if disk.status()?.ingest_accepting {
+        loop {
+            let page_after = after.clone();
+            let mut candidates = self
+                .db
+                .call(move |db| eviction_candidates(db, cutoff, page_after))
+                .await?;
+            if candidates.is_empty() {
                 break;
             }
-            reclaimed += usize::from(self.evict_one(&shard_id).await?);
+            // Advance in original catalog order, even if a pinned candidate could not be evicted.
+            after = candidates.last().cloned();
+            self.registry.prioritize_eviction(&mut candidates);
+            for (_, shard_id) in candidates {
+                if disk.status()?.ingest_accepting {
+                    return Ok(reclaimed);
+                }
+                reclaimed += usize::from(self.evict_one(&shard_id).await?);
+            }
         }
         Ok(reclaimed)
     }
@@ -298,6 +297,31 @@ impl ColdStorage {
     }
 }
 
+fn eviction_candidates(
+    db: &rusqlite::Connection,
+    cutoff: i64,
+    after: Option<(i64, String)>,
+) -> Result<Vec<(i64, String)>> {
+    let mut statement = db.prepare(
+        "SELECT coalesce(last_accessed_at_us,sealed_at_us,created_at_us),id FROM shards
+         WHERE state='remote_verified' AND remote_archive_key IS NOT NULL
+           AND archive_sha256 IS NOT NULL AND recovery_checkpoint_id IS NOT NULL
+           AND (last_accessed_at_us IS NULL OR last_accessed_at_us<?1)
+           AND (?2 IS NULL OR (coalesce(last_accessed_at_us,sealed_at_us,created_at_us),id)>(?2,?3))
+         ORDER BY coalesce(last_accessed_at_us,sealed_at_us,created_at_us),id LIMIT 256",
+    )?;
+    Ok(statement
+        .query_map(
+            rusqlite::params![
+                cutoff,
+                after.as_ref().map(|pair| pair.0),
+                after.as_ref().map(|pair| pair.1.as_str())
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 fn rollback_eviction(db: &rusqlite::Connection, id: &str) -> Result<()> {
     ensure!(
         db.execute(
@@ -460,5 +484,37 @@ mod tests {
         let database = rusqlite::Connection::open_in_memory().expect("cold failure database");
         assert!(rollback_eviction(&database, "missing").is_err());
         assert!(promote_catalog(&database, "missing", "key", &"0".repeat(64), 1).is_err());
+    }
+    #[test]
+    fn eviction_pages_are_bounded_and_advance_past_removed_rows() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let db = crate::db::open(&root.path().join("metadata.db"))?;
+        for index in 0..300 {
+            let id = format!("00000000-0000-0000-0000-{index:012}");
+            db.execute("INSERT INTO shards(id,schema_version,format_version,state,created_at_us,last_accessed_at_us,remote_archive_key,archive_sha256,recovery_checkpoint_id) VALUES(?1,1,'7','remote_verified',0,0,'key','hash','cp')", [id])?;
+        }
+        let mut plan = db.prepare("EXPLAIN QUERY PLAN SELECT coalesce(last_accessed_at_us,sealed_at_us,created_at_us),id FROM shards WHERE state='remote_verified' AND remote_archive_key IS NOT NULL AND archive_sha256 IS NOT NULL AND recovery_checkpoint_id IS NOT NULL AND (last_accessed_at_us IS NULL OR last_accessed_at_us<1) ORDER BY coalesce(last_accessed_at_us,sealed_at_us,created_at_us),id LIMIT 256")?;
+        let details = plan
+            .query_map([], |row| row.get::<_, String>(3))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .join(" ");
+        assert!(details.contains("shards_eviction_candidates"), "{details}");
+        assert!(!details.contains("TEMP B-TREE"), "{details}");
+        drop(plan);
+        let first = eviction_candidates(&db, 1, None)?;
+        assert_eq!(first.len(), 256);
+        let after = first.last().cloned();
+        db.execute(
+            "UPDATE shards SET state='remote_only' WHERE id=?1",
+            [&first[0].1],
+        )?;
+        let second = eviction_candidates(&db, 1, after)?;
+        assert_eq!(second.len(), 44);
+        assert!(first.last().unwrap() < second.first().unwrap());
+        assert!(eviction_candidates(&db, 1, second.last().cloned())?.is_empty());
+        assert!(eviction_candidates(&db, 0, None)?.is_empty());
+        db.execute("DROP TABLE shards", [])?;
+        assert!(eviction_candidates(&db, 1, None).is_err());
+        Ok(())
     }
 }

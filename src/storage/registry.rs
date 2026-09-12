@@ -23,6 +23,7 @@ pub struct Registry {
 
 struct State {
     clock: u64,
+    reuse: super::reuse::ReuseHistory,
     open: HashMap<String, Cached>,
 }
 
@@ -48,6 +49,7 @@ impl Registry {
             installation_id,
             state: Arc::new(Mutex::new(State {
                 clock: 0,
+                reuse: super::reuse::ReuseHistory::default(),
                 open: HashMap::new(),
             })),
         }
@@ -66,9 +68,9 @@ impl Registry {
         let now = state.clock;
         if let Some(cached) = state.open.get_mut(shard_id) {
             cached.last_used = now;
-            return Ok(ShardPin {
-                shard: Arc::clone(&cached.shard),
-            });
+            let shard = Arc::clone(&cached.shard);
+            state.reuse.record(shard_id, std::time::Instant::now());
+            return Ok(ShardPin { shard });
         }
         if state.open.len() >= MAX_OPEN_SEALED_SHARDS {
             let evict = state
@@ -93,7 +95,16 @@ impl Registry {
                 shard: Arc::clone(&shard),
             },
         );
+        state.reuse.record(shard_id, std::time::Instant::now());
         Ok(ShardPin { shard })
+    }
+
+    /// Scores cannot authorize deletion; preserve the catalog order on absent observations.
+    pub(super) fn prioritize_eviction(&self, candidates: &mut [(i64, String)]) {
+        if let Ok(state) = self.state.lock() {
+            let now = std::time::Instant::now();
+            candidates.sort_by_cached_key(|(_, id)| state.reuse.score(id, now));
+        }
     }
 
     pub fn evict_local(
@@ -216,5 +227,44 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(rolled_back.get());
+    }
+    #[test]
+    fn reuse_orders_candidates_without_changing_eligibility_or_pins() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let registry = Registry::new(root.path(), "installation".into());
+        let mut candidates = vec![(1, "hot".to_owned()), (2, "cold".to_owned())];
+        registry.prioritize_eviction(&mut candidates);
+        assert_eq!(candidates[0].1, "hot");
+        let now = std::time::Instant::now();
+        {
+            let mut state = registry.state.lock().unwrap();
+            state.reuse.record("hot", now);
+            state.reuse.record("hot", now);
+        }
+        registry.prioritize_eviction(&mut candidates);
+        assert_eq!(candidates, vec![(2, "cold".into()), (1, "hot".into())]);
+        let poisoned = registry.state.clone();
+        assert!(
+            std::thread::spawn(move || {
+                let _guard = poisoned.lock().unwrap();
+                panic!("test poison");
+            })
+            .join()
+            .is_err()
+        );
+        let expected = candidates.clone();
+        registry.prioritize_eviction(&mut candidates);
+        assert_eq!(
+            candidates, expected,
+            "observations cannot turn an unavailable score into a failure"
+        );
+        let valid_id = uuid::Uuid::new_v4().to_string();
+        assert!(registry.pin_local(&valid_id).is_err());
+        assert!(
+            registry
+                .evict_local(&valid_id, || Ok(true), || Ok(()))
+                .is_err()
+        );
+        Ok(())
     }
 }

@@ -21,8 +21,9 @@ use sha2::{Digest, Sha256};
 
 const INITIAL_SCHEMA: &str = include_str!("../../migrations/0001_initial.sql");
 const REPLAY_SCHEMA: &str = include_str!("../../migrations/0002_replays.sql");
-const MIGRATIONS: &[&str] = &[INITIAL_SCHEMA, REPLAY_SCHEMA];
-pub const SCHEMA_VERSION: i64 = 2;
+const EVICTION_SCHEMA: &str = include_str!("../../migrations/0003_eviction_candidates.sql");
+const MIGRATIONS: &[&str] = &[INITIAL_SCHEMA, REPLAY_SCHEMA, EVICTION_SCHEMA];
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Open a database after the caller has acquired the exclusive data-directory lock.
 /// A corrupt or newer database is returned as an error, never replaced.
@@ -236,7 +237,7 @@ mod tests {
         assert_eq!(
             db.query_row("SELECT max(version) FROM schema_migrations", [], |r| r
                 .get::<_, i64>(0))?,
-            2
+            SCHEMA_VERSION
         );
         drop(db);
         drop(open(&path)?);
@@ -398,5 +399,46 @@ mod tests {
             }))
             .expect("install migration insert authorizer");
         assert!(migrate(&mut connection).is_err());
+    }
+    #[test]
+    fn version_two_upgrade_preserves_data_and_adds_only_the_eviction_index() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("upgrade.db");
+        let db = Connection::open(&path)?;
+        for (index, sql) in [INITIAL_SCHEMA, REPLAY_SCHEMA].into_iter().enumerate() {
+            db.execute_batch(sql)?;
+            db.execute(
+                "INSERT INTO schema_migrations(version,checksum,applied_at_us) VALUES(?1,?2,0)",
+                rusqlite::params![
+                    index as i64 + 1,
+                    format!("{:x}", Sha256::digest(sql.as_bytes()))
+                ],
+            )?;
+        }
+        db.execute("INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'keep','Keep',0,0)", [])?;
+        drop(db);
+        let db = open(&path)?;
+        assert_eq!(
+            db.query_row("SELECT name FROM projects WHERE id=1", [], |row| row
+                .get::<_, String>(0))?,
+            "Keep"
+        );
+        assert_eq!(
+            db.query_row("SELECT max(version) FROM schema_migrations", [], |row| row
+                .get::<_, i64>(
+                0
+            ))?,
+            3
+        );
+        let index_sql: String = db.query_row(
+            "SELECT sql FROM sqlite_master WHERE name='shards_eviction_candidates'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(index_sql.contains("recovery_checkpoint_id IS NOT NULL"));
+        drop(db);
+        inspect(&path)?;
+        open(&path)?;
+        Ok(())
     }
 }

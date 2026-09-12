@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use async_trait::async_trait;
 use eventglass::{
     app::AppState,
@@ -395,5 +395,99 @@ async fn cold_hydration_is_single_flight_verified_and_atomic() -> Result<()> {
     assert!(cold.reclaim_for_ingest(&app.disk_budget).await.is_err());
     assert!(cold.ensure_local(&ids).await.is_err());
     assert!(cold.evict_remote_verified(&ids[0]).await.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn observed_reuse_avoids_a_real_redownload_under_disk_pressure() -> Result<()> {
+    async fn run(keep_observations: bool) -> Result<usize> {
+        let root = tempfile::tempdir()?;
+        let app = AppState::open(config(root.path())).await?;
+        let installation: String = app
+            .db
+            .call(|db| {
+                db.query_row("SELECT installation_id FROM runtime_state", [], |row| {
+                    row.get(0)
+                })
+                .map_err(Into::into)
+            })
+            .await?;
+        let hot = uuid::Uuid::new_v4().to_string();
+        let cold_id = uuid::Uuid::new_v4().to_string();
+        let mut hot_bytes = Vec::new();
+        for (ordinal, id) in [&hot, &cold_id].into_iter().enumerate() {
+            let path = root.path().join("shards").join(id);
+            std::fs::create_dir_all(&path)?;
+            let mut active = ActiveShard::create(&path, &installation, id, Boundary::default())?;
+            active.publish(Boundary::default())?;
+            active.seal(
+                &path,
+                ShardStats {
+                    record_count: 0,
+                    min_timestamp_us: None,
+                    max_timestamp_us: None,
+                    min_received_at_us: None,
+                    max_received_at_us: None,
+                    min_ingest_seq: None,
+                    max_ingest_seq: None,
+                },
+                1,
+            )?;
+            let archive_path = root.path().join(format!("{id}.tar.gz"));
+            let artifact = archive::create(&path, &archive_path, &installation, id, || false)?;
+            if ordinal == 0 {
+                hot_bytes = std::fs::read(&archive_path)?;
+            }
+            // Real allocated disk space makes a single safe eviction relieve admission.
+            // The manifest excludes this temporary file, as the production archive does.
+            std::fs::write(path.join("unused.tmp"), vec![0xa5; 16 * 1024 * 1024])?;
+            let id = id.to_owned();
+            app.db.call(move |db| {
+                db.execute("INSERT INTO shards(id,schema_version,format_version,tokenizer_version,state,created_at_us,sealed_at_us,last_accessed_at_us,remote_archive_key,archive_sha256,recovery_checkpoint_id) VALUES(?1,1,'tantivy-0.26.1/format-7',1,'remote_verified',?2,?2,?2,?1,?3,'cp')", rusqlite::params![id, ordinal as i64, artifact.sha256])?;
+                Ok(())
+            }).await?;
+        }
+        let mut registry =
+            eventglass::storage::registry::Registry::new(root.path(), installation.clone());
+        for _ in 0..3 {
+            drop(registry.pin_local(&hot)?);
+        }
+        if !keep_observations {
+            // Reconstructing the disposable registry exercises the no-history fallback.
+            registry =
+                eventglass::storage::registry::Registry::new(root.path(), installation.clone());
+        }
+        let store = Arc::new(Store {
+            bytes: Mutex::new(hot_bytes),
+            downloads: AtomicUsize::new(0),
+        });
+        let cold = ColdStorage::new(
+            app.db.clone(),
+            root.path(),
+            installation,
+            store.clone(),
+            registry,
+            app.disk_budget.clone(),
+        );
+        let disk = app.disk_budget.status()?;
+        let held = app.disk_budget.reserve(
+            disk.free_bytes
+                .checked_sub(disk.minimum_free_bytes + 40 * 1024 * 1024 - 8 * 1024 * 1024)
+                .context("test needs sufficient isolated disk headroom")?,
+        )?;
+        assert!(!app.disk_budget.status()?.ingest_accepting);
+        assert_eq!(cold.reclaim_for_ingest(&app.disk_budget).await?, 1);
+        assert!(app.disk_budget.status()?.ingest_accepting);
+        drop(held);
+        cold.ensure_local(std::slice::from_ref(&hot)).await?;
+        drop(cold);
+        Ok(store.downloads.load(Ordering::SeqCst))
+    }
+    let no_history = run(false).await?;
+    let observed = run(true).await?;
+    assert_eq!((no_history, observed), (1, 0));
+    println!(
+        "real archive after safe eviction: no-history downloads={no_history}, observed downloads={observed}"
+    );
     Ok(())
 }
