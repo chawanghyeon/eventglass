@@ -54,11 +54,14 @@ function LocationProbe() {
   return <output data-testid="location">{location.search}</output>;
 }
 
-function renderPage(path = `/issues/${issueId}?project=${projectId}`) {
+function renderPage(
+  path = `/issues/${issueId}?project=${projectId}`,
+  currentSession: Session | null = session,
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  client.setQueryData(sessionQueryKey, session);
+  client.setQueryData(sessionQueryKey, currentSession);
   function Wrapper({ children }: PropsWithChildren) {
     return (
       <QueryClientProvider client={client}>
@@ -379,4 +382,98 @@ describe("IssueDetailPage", () => {
       ).not.toBeInTheDocument();
     },
   );
+});
+
+it("recovers issue, occurrence and raw loading failures independently", async () => {
+  const user = userEvent.setup();
+  const issue = vi
+    .spyOn(endpoints, "issue")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue(
+      makeIssue({
+        first_release: null,
+        last_release: null,
+        culprit: "checkout",
+      }),
+    );
+  const occurrences = vi
+    .spyOn(endpoints, "issueOccurrences")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue(oneOccurrence);
+  const detail = vi
+    .spyOn(endpoints, "issueOccurrenceDetail")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue({ record_id: occurrence.record_id, raw: {} });
+  renderPage(`/issues/${issueId}`);
+  await user.click(await screen.findByRole("button", { name: "다시 시도" }));
+  expect(
+    await screen.findByRole("heading", { name: "payment timeout" }),
+  ).toBeInTheDocument();
+  expect(screen.getByText("checkout")).toBeInTheDocument();
+  await user.click(await screen.findByRole("button", { name: "다시 시도" }));
+  await user.click(await screen.findByRole("button", { name: "원문 보기" }));
+  await user.click(await screen.findByRole("button", { name: "다시 시도" }));
+  expect(
+    await screen.findByText("Exception 정보가 없습니다."),
+  ).toBeInTheDocument();
+  expect(issue).toHaveBeenCalledTimes(2);
+  expect(occurrences).toHaveBeenCalledTimes(2);
+  expect(detail).toHaveBeenCalledTimes(2);
+});
+
+it("returns to the first occurrence page without losing project scope", async () => {
+  const user = userEvent.setup();
+  vi.spyOn(endpoints, "issue").mockResolvedValue(makeIssue());
+  const occurrences = vi
+    .spyOn(endpoints, "issueOccurrences")
+    .mockResolvedValue(emptyOccurrences);
+  renderPage(
+    `/issues/${issueId}?project=${projectId}&occurrence_time=100&occurrence_seq=99`,
+  );
+  const first = await screen.findByRole("button", { name: "처음으로" });
+  expect(first).toBeEnabled();
+  expect(screen.getByRole("button", { name: "다음 페이지" })).toBeDisabled();
+  await user.click(first);
+  await waitFor(() =>
+    expect(occurrences).toHaveBeenLastCalledWith(
+      issueId,
+      { cursorOccurredAtUs: undefined, cursorIngestSeq: undefined },
+      expect.anything(),
+    ),
+  );
+  expect(screen.getByTestId("location")).toHaveTextContent(
+    `?project=${projectId}`,
+  );
+  expect(screen.getByTestId("location")).not.toHaveTextContent("occurrence_");
+});
+
+it.each([
+  new Error("offline"),
+  new ApiError(403, {
+    error: {
+      code: "forbidden",
+      message: "forbidden",
+      request_id: "r",
+      retryable: false,
+    },
+  }),
+])("retains the saved issue status after a failed update", async (failure) => {
+  const user = userEvent.setup();
+  const issue = vi.spyOn(endpoints, "issue").mockResolvedValue(makeIssue());
+  vi.spyOn(endpoints, "issueOccurrences").mockResolvedValue(emptyOccurrences);
+  vi.spyOn(endpoints, "updateIssue").mockRejectedValue(failure);
+  renderPage();
+  await user.click(await screen.findByRole("button", { name: "해결 처리" }));
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "해결 처리" })).toBeEnabled();
+  expect(screen.queryByText("해결됨")).not.toBeInTheDocument();
+  expect(issue).toHaveBeenCalledTimes(1);
+});
+
+it("does not fetch private issue data without a session", () => {
+  const issue = vi.spyOn(endpoints, "issue");
+  const occurrences = vi.spyOn(endpoints, "issueOccurrences");
+  renderPage(`/issues/${issueId}`, null);
+  expect(issue).not.toHaveBeenCalled();
+  expect(occurrences).not.toHaveBeenCalled();
 });

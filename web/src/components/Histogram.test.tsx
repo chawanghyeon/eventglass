@@ -32,3 +32,47 @@ it("retains every bucket while bounding dense chart labels", () => {
     height: "100%",
   });
 });
+
+it("renders empty non-time data and a single zero-count time bucket safely", () => {
+  const { container, rerender } = render(
+    <Histogram
+      label="Empty"
+      buckets={{
+        dimension: { histogram: { interval_ms: 1000 } },
+        has_more: false,
+        buckets: [
+          {
+            key: { type: "string", value: "other" },
+            doc_count: "1",
+            metrics: [],
+            children: null,
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.getByText("표시할 시간 구간이 없습니다.")).toBeInTheDocument();
+  rerender(
+    <Histogram
+      label="Zero"
+      buckets={{
+        dimension: { histogram: { interval_ms: 1000 } },
+        has_more: false,
+        buckets: [
+          {
+            key: { type: "timestamp", timestamp_us: "0" },
+            doc_count: "0",
+            metrics: [],
+            children: null,
+          },
+        ],
+      }}
+    />,
+  );
+  expect(screen.getAllByRole("listitem")).toHaveLength(1);
+  expect(container.querySelectorAll("time")).toHaveLength(1);
+  expect(container.querySelector(".histogram__bar")).toHaveStyle({
+    height: "0%",
+  });
+  expect(container.querySelector(".histogram__value")).toHaveTextContent("0");
+});

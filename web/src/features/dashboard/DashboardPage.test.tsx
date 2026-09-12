@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { PropsWithChildren } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -135,20 +136,21 @@ const systemStatus: SystemStatus = {
   },
 };
 
-function renderPage() {
+function renderPage(
+  initialPath = "/?project=7&start=2026-09-08T00%3A00%3A00Z&end=2026-09-09T00%3A00%3A00Z",
+  currentSession: Session | null = session,
+  availableProjects: Project[] | null = projects,
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  client.setQueryData(sessionQueryKey, session);
-  client.setQueryData(["projects", session.id], projects);
+  client.setQueryData(sessionQueryKey, currentSession);
+  if (currentSession && availableProjects)
+    client.setQueryData(["projects", currentSession.id], availableProjects);
   function Wrapper({ children }: PropsWithChildren) {
     return (
       <QueryClientProvider client={client}>
-        <MemoryRouter
-          initialEntries={[
-            "/?project=7&start=2026-09-08T00%3A00%3A00Z&end=2026-09-09T00%3A00%3A00Z",
-          ]}
-        >
+        <MemoryRouter initialEntries={[initialPath]}>
           <Routes>
             <Route path="/" element={children} />
           </Routes>
@@ -202,4 +204,124 @@ describe("DashboardPage", () => {
     expect(screen.getByText("정상")).toBeInTheDocument();
     expect(screen.getByText("91 W")).toBeInTheDocument();
   });
+});
+
+it("automatically chooses the first active project and keeps absolute bounds when switching", async () => {
+  const user = userEvent.setup();
+  const rows = vi.spyOn(endpoints, "logs").mockResolvedValue({
+    ...searchPage,
+    rows: [{ ...searchPage.rows[0], message: "" }],
+  });
+  vi.spyOn(endpoints, "aggregate").mockResolvedValue(aggregateResponse);
+  vi.spyOn(endpoints, "issues").mockResolvedValue({
+    items: [],
+    next_cursor: { last_seen_us: "100", id: "next" },
+  });
+  const system = vi.spyOn(endpoints, "systemStatus");
+  renderPage("/", { ...session, role: "member" }, [
+    ...projects,
+    { id: "8", slug: "shop", name: "Shop", is_active: true },
+    { id: "9", slug: "old", name: "Old", is_active: false },
+  ]);
+  await waitFor(() => expect(rows).toHaveBeenCalledTimes(1));
+  const first = rows.mock.calls[0][0];
+  expect(first.projects).toEqual(["7"]);
+  expect(Date.parse(first.end) - Date.parse(first.start)).toBeGreaterThan(0);
+  expect(await screen.findByText("(빈 메시지)")).toBeInTheDocument();
+  expect(screen.getByText("다음 결과 있음")).toBeInTheDocument();
+  expect(screen.getByText("제한됨")).toBeInTheDocument();
+  expect(system).not.toHaveBeenCalled();
+  expect(screen.queryByRole("option", { name: "Old" })).not.toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("프로젝트"), "8");
+  await waitFor(() =>
+    expect(rows).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        projects: ["8"],
+        start: first.start,
+        end: first.end,
+      }),
+      expect.anything(),
+    ),
+  );
+});
+
+it.each(["admin", "member"] as const)(
+  "explains empty project access for %s without querying records",
+  async (role) => {
+    const rows = vi.spyOn(endpoints, "logs");
+    vi.spyOn(endpoints, "systemStatus").mockResolvedValue(systemStatus);
+    renderPage("/", { ...session, role }, []);
+    expect(screen.getByText("활성 프로젝트가 없습니다.")).toBeInTheDocument();
+    expect(screen.getByLabelText("프로젝트")).toBeDisabled();
+    if (role === "admin")
+      expect(
+        screen.getByRole("link", { name: "웹사이트 연결하기 →" }),
+      ).toHaveAttribute("href", "/projects");
+    else
+      expect(
+        screen.getByText("관리자에게 프로젝트 연결을 요청해 주세요."),
+      ).toBeInTheDocument();
+    expect(rows).not.toHaveBeenCalled();
+  },
+);
+
+it("does not silently replace unavailable project or malformed bounds", () => {
+  const rows = vi.spyOn(endpoints, "logs");
+  vi.spyOn(endpoints, "systemStatus").mockResolvedValue(systemStatus);
+  const view = renderPage("/?project=99&start=bad&end=bad");
+  expect(
+    screen.getByText("선택한 프로젝트가 없거나 중지되었습니다."),
+  ).toBeInTheDocument();
+  expect(rows).not.toHaveBeenCalled();
+  view.unmount();
+  renderPage("/?project=7&start=2026-09-09&end=2026-09-08");
+  expect(
+    screen.queryByRole("region", { name: "프로젝트 요약" }),
+  ).not.toBeInTheDocument();
+  expect(rows).not.toHaveBeenCalled();
+});
+
+it("exposes independent record, issue and system errors without replacing them with zero", async () => {
+  vi.spyOn(endpoints, "logs").mockRejectedValue(new Error("offline"));
+  vi.spyOn(endpoints, "issues").mockRejectedValue(new Error("offline"));
+  vi.spyOn(endpoints, "systemStatus").mockRejectedValue(new Error("offline"));
+  const aggregate = vi.spyOn(endpoints, "aggregate");
+  renderPage();
+  expect(await screen.findByText("오류")).toBeInTheDocument();
+  expect(screen.getAllByRole("alert")).toHaveLength(2);
+  expect(screen.getByText("최근 24시간 수집").parentElement).toHaveTextContent(
+    "—",
+  );
+  expect(aggregate).not.toHaveBeenCalled();
+});
+
+it("reports histogram failure separately from a successful empty record snapshot", async () => {
+  vi.spyOn(endpoints, "logs").mockResolvedValue({ ...searchPage, rows: [] });
+  vi.spyOn(endpoints, "issues").mockResolvedValue(issuePage);
+  vi.spyOn(endpoints, "systemStatus").mockResolvedValue({
+    ...systemStatus,
+    ready: false,
+  });
+  vi.spyOn(endpoints, "aggregate").mockRejectedValue(new Error("offline"));
+  renderPage();
+  expect(
+    await screen.findByText("최근 record가 없습니다."),
+  ).toBeInTheDocument();
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(screen.getByText("확인 중")).toBeInTheDocument();
+  expect(screen.getByText("91 W")).toBeInTheDocument();
+});
+
+it("shows project failures and makes no authenticated requests after session loss", async () => {
+  vi.spyOn(endpoints, "projects").mockRejectedValue(new Error("offline"));
+  vi.spyOn(endpoints, "systemStatus").mockResolvedValue(systemStatus);
+  const rows = vi.spyOn(endpoints, "logs");
+  const view = renderPage("/", session, null);
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(rows).not.toHaveBeenCalled();
+  view.unmount();
+  vi.clearAllMocks();
+  renderPage("/", null);
+  expect(endpoints.projects).not.toHaveBeenCalled();
+  expect(endpoints.systemStatus).not.toHaveBeenCalled();
 });

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PropsWithChildren } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
@@ -123,12 +123,17 @@ function LocationProbe() {
   return <output data-testid="location">{location.search}</output>;
 }
 
-function renderPage(path = basePath) {
+function renderPage(
+  path = basePath,
+  authenticated = true,
+  availableProjects: Project[] | null = projects,
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  client.setQueryData(sessionQueryKey, session);
-  client.setQueryData(["projects", session.id], projects);
+  client.setQueryData(sessionQueryKey, authenticated ? session : null);
+  if (availableProjects)
+    client.setQueryData(["projects", session.id], availableProjects);
   function Wrapper({ children }: PropsWithChildren) {
     return (
       <QueryClientProvider client={client}>
@@ -425,4 +430,158 @@ describe("LogsPage", () => {
       ),
     );
   });
+});
+
+it("retries each failed request and restores detail trigger focus", async () => {
+  const user = userEvent.setup();
+  const search = vi
+    .spyOn(endpoints, "logs")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue(page());
+  vi.mocked(endpoints.aggregate)
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue(aggregate());
+  const detail = vi
+    .spyOn(endpoints, "recordDetail")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue({ record_id: row().record_id, raw: {} });
+  renderPage();
+  await user.click(await screen.findByRole("button", { name: "다시 시도" }));
+  const trigger = await screen.findByRole("button", { name: "상세 보기" });
+  await user.click(screen.getByText("시간별 분포"));
+  await user.click(
+    await screen.findByRole("button", { name: "집계 다시 시도" }),
+  );
+  expect(await screen.findByLabelText(/7건/)).toBeInTheDocument();
+  await user.click(trigger);
+  await user.click(await screen.findByRole("button", { name: "다시 시도" }));
+  expect(
+    await screen.findByText("Exception 정보가 없습니다."),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "닫기" }));
+  expect(trigger).toHaveFocus();
+  await user.click(screen.getByRole("button", { name: "새 스냅샷" }));
+  await waitFor(() => expect(search).toHaveBeenCalledTimes(3));
+  expect(detail).toHaveBeenCalledTimes(2);
+});
+
+it("keeps table display changes local and applies clicked values as fresh filters", async () => {
+  const user = userEvent.setup();
+  const search = vi.spyOn(endpoints, "logs").mockResolvedValue(
+    page({
+      rows: [
+        row({
+          project_id: "77",
+          message: "",
+          environment: null,
+          release: null,
+          logger: null,
+        }),
+      ],
+    }),
+  );
+  const { container } = renderPage();
+  expect(await screen.findByText("프로젝트 77")).toBeInTheDocument();
+  expect(screen.getByText("(빈 메시지)")).toBeInTheDocument();
+  expect(screen.getByText("추가 메타데이터 없음")).toBeInTheDocument();
+  await user.click(screen.getByLabelText("메시지 줄바꿈"));
+  await user.click(screen.getByLabelText("메타데이터 열"));
+  expect(container.querySelector(".log-table-wrap")).not.toHaveClass(
+    "log-table--compact",
+  );
+  expect(container.querySelector(".log-table-wrap")).toHaveClass(
+    "log-table--hide-metadata",
+  );
+  expect(search).toHaveBeenCalledTimes(1);
+  await user.click(screen.getByRole("button", { name: "api" }));
+  await waitFor(() =>
+    expect(search).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ services: ["api"] }),
+        cursor: undefined,
+      }),
+      expect.anything(),
+    ),
+  );
+});
+
+it("adds initial bounds and distinguishes empty records, project failures and invalid criteria", async () => {
+  vi.spyOn(endpoints, "projects").mockRejectedValue(new Error("offline"));
+  const search = vi
+    .spyOn(endpoints, "logs")
+    .mockResolvedValue(page({ rows: [] }));
+  const view = renderPage("/logs", true, null);
+  expect(
+    await screen.findByText("조건에 맞는 로그가 없습니다."),
+  ).toBeInTheDocument();
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(screen.getByTestId("location")).toHaveTextContent("start=");
+  view.unmount();
+  vi.clearAllMocks();
+  const invalid = renderPage("/logs?start=bad&end=bad");
+  expect(screen.getByText(/시작과 종료를 올바른 RFC3339/)).toBeInTheDocument();
+  expect(search).not.toHaveBeenCalled();
+  invalid.unmount();
+  renderPage(basePath, false);
+  expect(search).not.toHaveBeenCalled();
+});
+
+it("renders real live connection transitions and opens live records on demand", async () => {
+  const instances: TestSource[] = [];
+  class TestSource extends EventTarget {
+    static CLOSED = 2;
+    readyState = 1;
+    onopen?: () => void;
+    close = vi.fn();
+    constructor() {
+      super();
+      instances.push(this);
+    }
+    emit(type: string, data: unknown) {
+      this.dispatchEvent(
+        new MessageEvent(type, { data: JSON.stringify(data) }),
+      );
+    }
+  }
+  vi.stubGlobal("EventSource", TestSource);
+  vi.spyOn(endpoints, "logs").mockResolvedValue(page({ rows: [] }));
+  const detail = vi
+    .spyOn(endpoints, "recordDetail")
+    .mockResolvedValue({ record_id: row().record_id, raw: {} });
+  const user = userEvent.setup();
+  renderPage();
+  await user.click(screen.getByRole("button", { name: "Live 시작" }));
+  expect(screen.getByText("연결 중")).toBeInTheDocument();
+  act(() => instances[0].onopen?.());
+  expect(screen.getByText("연결됨 · seq 동기화 중")).toBeInTheDocument();
+  expect(
+    screen.getByText("새로 수신된 조건 일치 기록이 없습니다."),
+  ).toBeInTheDocument();
+  act(() => instances[0].emit("checkpoint", { scan_seq: "9007199254740999" }));
+  expect(screen.getByText("연결됨 · seq 9007199254740999")).toBeInTheDocument();
+  act(() => instances[0].emit("record", row({ message: "live record" })));
+  expect(detail).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: /live record/ }));
+  await waitFor(() =>
+    expect(detail).toHaveBeenCalledWith("detail-token", expect.anything()),
+  );
+  await user.click(screen.getByRole("button", { name: "닫기" }));
+  act(() => instances[0].dispatchEvent(new Event("error")));
+  expect(screen.getByText("재연결 중")).toBeInTheDocument();
+  act(() => instances[0].emit("resync_required", {}));
+  expect(
+    screen.getByText(/처리 한도를 넘어 연결을 닫았습니다/),
+  ).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Live 중지" }));
+  expect(
+    screen.queryByRole("heading", { name: "Live Logs" }),
+  ).not.toBeInTheDocument();
+  expect(instances[0].close).toHaveBeenCalled();
+  await user.click(screen.getByRole("button", { name: "Live 시작" }));
+  act(() => instances[1].emit("record", row({ message: "" })));
+  expect(screen.getByRole("button", { name: /빈 메시지/ })).toBeInTheDocument();
+  act(() => instances[1].emit("error", { code: "search_access_denied" }));
+  expect(
+    screen.getByText(/Live 연결이 종료되었습니다.*search_access_denied/),
+  ).toBeInTheDocument();
 });

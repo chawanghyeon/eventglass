@@ -65,16 +65,21 @@ function LocationProbe() {
   return <output data-testid="location">{useLocation().search}</output>;
 }
 
-function renderPage() {
+function renderPage(
+  initialPath = path,
+  authenticated = true,
+  availableProjects: Project[] | null = projects,
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  client.setQueryData(sessionQueryKey, session);
-  client.setQueryData(["projects", session.id], projects);
+  client.setQueryData(sessionQueryKey, authenticated ? session : null);
+  if (availableProjects)
+    client.setQueryData(["projects", session.id], availableProjects);
   function Wrapper({ children }: PropsWithChildren) {
     return (
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={[path]}>
+        <MemoryRouter initialEntries={[initialPath]}>
           <Routes>
             <Route
               path="/explore"
@@ -168,4 +173,86 @@ describe("ExplorePage", () => {
       screen.queryByText("조건에 맞는 record가 없습니다."),
     ).not.toBeInTheDocument();
   });
+});
+
+it("retries failed aggregates and shows null metrics and empty results without fabricating buckets", async () => {
+  const user = userEvent.setup();
+  const empty = response();
+  empty.record_count = "0";
+  empty.metrics[0].value = null;
+  empty.buckets = null;
+  const aggregate = vi
+    .spyOn(endpoints, "aggregate")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue(empty);
+  renderPage();
+  await user.click(await screen.findByRole("button", { name: "다시 시도" }));
+  expect(
+    await screen.findByText("조건에 맞는 record가 없습니다."),
+  ).toBeInTheDocument();
+  expect(screen.getByText("값 없음")).toBeInTheDocument();
+  expect(aggregate).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("figure")).not.toBeInTheDocument();
+});
+
+it("initializes missing bounds once and commits search and grouping drafts together", async () => {
+  const user = userEvent.setup();
+  const aggregate = vi
+    .spyOn(endpoints, "aggregate")
+    .mockResolvedValue(response());
+  renderPage("/explore?project=7");
+  await waitFor(() => expect(aggregate).toHaveBeenCalledTimes(1));
+  const initial = aggregate.mock.calls[0][0];
+  expect(Date.parse(initial.end) - Date.parse(initial.start)).toBeGreaterThan(
+    0,
+  );
+  await user.type(screen.getByLabelText("검색어"), " checkout ");
+  await user.click(screen.getByRole("button", { name: "검색" }));
+  await waitFor(() =>
+    expect(aggregate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: "checkout",
+        start: initial.start,
+        end: initial.end,
+      }),
+      expect.anything(),
+    ),
+  );
+  await user.click(screen.getByRole("checkbox", { name: "서비스" }));
+  await user.click(screen.getByRole("checkbox", { name: "레벨" }));
+  expect(screen.getByRole("checkbox", { name: "환경" })).toBeDisabled();
+  await user.click(screen.getByRole("checkbox", { name: "서비스" }));
+  expect(screen.getByRole("checkbox", { name: "환경" })).toBeEnabled();
+  await user.selectOptions(screen.getByLabelText("Histogram"), "none");
+  await user.click(screen.getByRole("button", { name: "집계 적용" }));
+  await waitFor(() =>
+    expect(aggregate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        group_by: ["level"],
+        histogram: undefined,
+        query: "checkout",
+      }),
+      expect.anything(),
+    ),
+  );
+});
+
+it("does not query invalid bounds or unauthenticated scopes", async () => {
+  const aggregate = vi.spyOn(endpoints, "aggregate");
+  const view = renderPage("/explore?start=invalid&end=invalid");
+  expect(screen.getByText(/검색 시간과 필터를 확인/)).toBeInTheDocument();
+  expect(aggregate).not.toHaveBeenCalled();
+  view.unmount();
+  renderPage(path, false);
+  expect(aggregate).not.toHaveBeenCalled();
+});
+
+it("keeps project loading failures visible alongside a valid aggregate", async () => {
+  vi.spyOn(endpoints, "projects").mockRejectedValue(new Error("offline"));
+  vi.spyOn(endpoints, "aggregate").mockResolvedValue(response());
+  renderPage(path, true, null);
+  expect(await screen.findByRole("alert")).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { name: "12개 record" }),
+  ).toBeInTheDocument();
 });

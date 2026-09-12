@@ -50,12 +50,17 @@ function LocationProbe() {
   return <output data-testid="location">{location.search}</output>;
 }
 
-function renderPage(path: string) {
+function renderPage(
+  path: string,
+  availableProjects: Project[] | null = projects,
+  authenticated = true,
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  client.setQueryData(sessionQueryKey, session);
-  client.setQueryData(["projects", session.id], projects);
+  client.setQueryData(sessionQueryKey, authenticated ? session : null);
+  if (availableProjects)
+    client.setQueryData(["projects", session.id], availableProjects);
   function Wrapper({ children }: PropsWithChildren) {
     return (
       <QueryClientProvider client={client}>
@@ -213,4 +218,72 @@ describe("IssuesPage", () => {
       screen.queryByText("미해결 Issue가 없습니다."),
     ).not.toBeInTheDocument();
   });
+});
+
+it("recovers project then issue failures without losing the search", async () => {
+  const user = userEvent.setup();
+  const projectQuery = vi
+    .spyOn(endpoints, "projects")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue(projects);
+  const list = vi
+    .spyOn(endpoints, "issues")
+    .mockRejectedValueOnce(new Error("offline"))
+    .mockResolvedValue({ items: [], next_cursor: null });
+  renderPage("/issues?query=missing", null);
+  expect(screen.getByText("프로젝트 불러오는 중")).toBeInTheDocument();
+  await user.click(await screen.findByRole("button", { name: "다시 시도" }));
+  await waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+  await user.click(await screen.findByRole("button", { name: "다시 시도" }));
+  expect(
+    await screen.findByText("검색 조건에 맞는 오류가 없습니다."),
+  ).toBeInTheDocument();
+  expect(projectQuery).toHaveBeenCalledTimes(2);
+  expect(list).toHaveBeenCalledTimes(2);
+  await user.click(screen.getByRole("button", { name: "오류 검색 조건 삭제" }));
+  expect(
+    await screen.findByText("미해결 Issue가 없습니다."),
+  ).toBeInTheDocument();
+});
+
+it("resets cursors on project changes and first-page navigation", async () => {
+  const user = userEvent.setup();
+  const list = vi.spyOn(endpoints, "issues").mockResolvedValue({
+    items: [makeIssue()],
+    next_cursor: { last_seen_us: "100", id: "next" },
+  });
+  renderPage(
+    `/issues?project=${projects[0].id}&cursor_last_seen_us=101&cursor_id=before`,
+  );
+  await user.click(await screen.findByRole("button", { name: "처음으로" }));
+  expect(screen.getByTestId("location")).not.toHaveTextContent("cursor_");
+  await user.click(screen.getByRole("button", { name: "다음 페이지" }));
+  await user.selectOptions(screen.getByLabelText("프로젝트"), projects[1].id);
+  await waitFor(() =>
+    expect(list).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        projectId: projects[1].id,
+        cursorId: undefined,
+      }),
+      expect.anything(),
+    ),
+  );
+  expect(screen.getByTestId("location")).not.toHaveTextContent("cursor_");
+  expect(screen.getByRole("button", { name: "처음으로" })).toBeDisabled();
+});
+
+it("distinguishes unavailable, empty and unauthenticated project scopes", () => {
+  const list = vi.spyOn(endpoints, "issues");
+  const view = renderPage("/issues?project=removed");
+  expect(
+    screen.getByText("선택한 프로젝트가 없거나 중지되었습니다."),
+  ).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "프로젝트 선택" })).toBeDisabled();
+  view.unmount();
+  const empty = renderPage("/issues", [{ ...projects[0], is_active: false }]);
+  expect(screen.getByText("활성 프로젝트가 없습니다.")).toBeInTheDocument();
+  expect(screen.getByLabelText("프로젝트")).toBeDisabled();
+  empty.unmount();
+  renderPage("/issues", null, false);
+  expect(list).not.toHaveBeenCalled();
 });
