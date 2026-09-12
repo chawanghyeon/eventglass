@@ -1,10 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { sessionQueryKey } from "../features/auth";
 import { AppShell } from "./AppShell";
+import { endpoints } from "../api/endpoints";
+import { setCsrfToken } from "../api/client";
+afterEach(() => {
+  vi.restoreAllMocks();
+  setCsrfToken(undefined);
+});
 
 vi.mock("../features/system", () => ({ SystemReadiness: () => null }));
 
@@ -16,20 +22,26 @@ function Location() {
     </output>
   );
 }
-function show(path: string, role = "admin") {
+function show(path: string, role: string | null = "admin") {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, staleTime: Infinity } },
   });
-  client.setQueryData(sessionQueryKey, {
-    id: "1",
-    email: "qa@example.invalid",
-    role,
-    csrf_token: "qa",
-  });
+  client.setQueryData(
+    sessionQueryKey,
+    role
+      ? {
+          id: "1",
+          email: "qa@example.invalid",
+          role,
+          csrf_token: "qa",
+        }
+      : null,
+  );
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
+          <Route path="/login" element={<Location />} />
           <Route element={<AppShell />}>
             <Route path="*" element={<Location />} />
           </Route>
@@ -37,6 +49,7 @@ function show(path: string, role = "admin") {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return client;
 }
 it("groups settings under one of five primary destinations and preserves direct URLs", async () => {
   show("/users");
@@ -100,3 +113,46 @@ it("only exposes project settings navigation to members", () => {
     screen.queryByRole("link", { name: "사용자" }),
   ).not.toBeInTheDocument();
 });
+
+it("does not render private navigation after the session expires", () => {
+  show("/projects", null);
+  expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
+});
+it("toggles the mobile menu and closes it only when following a navigation link", async () => {
+  const user = userEvent.setup();
+  show("/");
+  await user.click(screen.getByRole("button", { name: "메뉴 열기" }));
+  const close = screen.getByRole("button", { name: "메뉴 닫기" });
+  expect(close).toHaveAttribute("aria-expanded", "true");
+  await user.click(screen.getByRole("navigation", { name: "주요 메뉴" }));
+  expect(close).toHaveAttribute("aria-expanded", "true");
+  await user.click(screen.getByRole("link", { name: "방문 분석" }));
+  expect(screen.getByRole("button", { name: "메뉴 열기" })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+});
+it.each([false, true])(
+  "clears private state and navigates away even if logout fails (%s)",
+  async (failed) => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    vi.spyOn(endpoints, "logout").mockImplementationOnce(
+      () =>
+        new Promise((resolve, reject) => {
+          finish = () =>
+            failed ? reject(new Error("offline")) : resolve(undefined);
+        }),
+    );
+    vi.spyOn(endpoints, "session").mockRejectedValue(new Error("signed out"));
+    const client = show("/projects");
+    client.setQueryData(["private-data"], "private");
+    await user.click(screen.getByRole("button", { name: "로그아웃" }));
+    expect(
+      await screen.findByRole("button", { name: "로그아웃 중…" }),
+    ).toBeDisabled();
+    await act(async () => finish());
+    expect(await screen.findByTestId("location")).toHaveTextContent("/login");
+    expect(client.getQueryData(["private-data"])).toBeUndefined();
+  },
+);

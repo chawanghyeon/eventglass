@@ -47,31 +47,33 @@ export function EfficiencyPanel() {
           {query.data.incomplete ? (
             <Notice tone="error">일부 관측값이 상한에 도달했습니다.</Notice>
           ) : null}
-          <table>
-            <caption>원격 저장소 호출</caption>
-            <thead>
-              <tr>
-                <th>작업</th>
-                <th>시작</th>
-                <th>성공</th>
-                <th>실패</th>
-                <th>취소</th>
-                <th>완료된 읽기 bytes</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Object.entries(query.data.remote).map(([name, counts]) => (
-                <tr key={name}>
-                  <td>{operationLabels[name] ?? name}</td>
-                  <td>{counts.started}</td>
-                  <td>{counts.succeeded}</td>
-                  <td>{counts.failed}</td>
-                  <td>{counts.cancelled}</td>
-                  <td>{counts.completed_read_bytes}</td>
+          <div className="aggregate-table-wrap">
+            <table className="aggregate-table efficiency-table">
+              <caption>원격 저장소 호출</caption>
+              <thead>
+                <tr>
+                  <th>작업</th>
+                  <th>시작</th>
+                  <th>성공</th>
+                  <th>실패</th>
+                  <th>취소</th>
+                  <th>완료된 읽기 bytes</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {Object.entries(query.data.remote).map(([name, counts]) => (
+                  <tr key={name}>
+                    <td>{operationLabels[name] ?? name}</td>
+                    <td>{counts.started}</td>
+                    <td>{counts.succeeded}</td>
+                    <td>{counts.failed}</td>
+                    <td>{counts.cancelled}</td>
+                    <td>{counts.completed_read_bytes}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           <small>
             재시작 시 초기화됩니다. 시작 시 복구, SDK 재시도 횟수, 실패·취소된
             부분 전송량은 포함하지 않습니다. 청구 금액이나 절감액이 아닙니다.

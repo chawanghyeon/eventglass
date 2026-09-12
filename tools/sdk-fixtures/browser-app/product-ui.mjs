@@ -51,6 +51,7 @@ try {
   const page = await browser.newPage();
   const browserErrors = [];
   const issueResponses = [];
+  let checkingMemberPermissions = false;
   page.on("pageerror", (error) => browserErrors.push(String(error)));
   page.on("console", (message) => {
     if (
@@ -71,7 +72,8 @@ try {
     const expectedAnonymousSession =
       response.status() === 401 && url.pathname === "/api/auth/me";
     const expectedMemberForbidden =
-      response.status() === 403 && url.pathname === "/api/users";
+      checkingMemberPermissions && response.status() === 403 &&
+      ["/api/users", "/api/system/efficiency"].includes(url.pathname);
     if (
       response.status() >= 400 &&
       !expectedAnonymousSession &&
@@ -166,6 +168,7 @@ try {
   await page.waitForURL((url) => url.pathname === "/logs", { timeout: 15_000 });
   const logTable = page.getByRole("table");
   await logTable.getByText(issueTitle, { exact: true }).first().waitFor();
+  await page.getByText("시간별 분포", { exact: true }).click();
   await page.getByLabel("시간별 로그 건수").waitFor();
   await logTable.getByRole("button", { name: "상세 보기" }).first().click();
   await page.getByRole("heading", { name: "로그 상세" }).waitFor();
@@ -182,6 +185,28 @@ try {
   await page.getByRole("button", { name: "닫기" }).click();
 
   await checkReplayUi(page,baseUrl,dsn);
+
+  await page.getByRole("link", { name: "설정", exact: true }).click();
+  const [observedResponse] = await Promise.all([
+    page.waitForResponse(response => new URL(response.url()).pathname === "/api/system/efficiency"),
+    page.getByRole("link", { name: "시스템 상태", exact: true }).click(),
+  ]);
+  const observed = await observedResponse.json();
+  if (observedResponse.status() !== 200 || BigInt(observed.observed_body_bytes) <= 0n) {
+    throw new Error("efficiency did not observe actual SDK ingestion");
+  }
+  const efficiencyPanel = page.getByRole("region", { name: "자동 읽기 효율" });
+  await efficiencyPanel.getByRole("table", { name: "원격 저장소 호출" }).waitFor();
+  if (await efficiencyPanel.locator("input, select, button").count() !== 0) {
+    throw new Error("efficiency requires unexpected user configuration");
+  }
+  await page.screenshot({ path: new URL("../../../.tools/screenshots/efficiency.png", import.meta.url).pathname, fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) {
+    throw new Error("efficiency panel overflows the mobile viewport");
+  }
+  await page.screenshot({ path: new URL("../../../.tools/screenshots/efficiency-mobile.png", import.meta.url).pathname, fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   await page.getByRole("link", { name: "사용자", exact: true }).click();
   await page.getByLabel("이메일").fill(memberEmail);
@@ -200,6 +225,7 @@ try {
   await page
     .getByText("사용자 관리는 관리자 계정에서만 열 수 있습니다.")
     .waitFor();
+  checkingMemberPermissions = true;
   const usersResponse = await page.evaluate(async () => {
     const response = await fetch("/api/users");
     return { status: response.status, body: await response.text() };
@@ -207,6 +233,9 @@ try {
   if (usersResponse.status !== 403) {
     throw new Error(`member user list was not forbidden: ${JSON.stringify(usersResponse)}`);
   }
+
+  const memberEfficiencyStatus = await page.evaluate(async () => (await fetch("/api/system/efficiency")).status);
+  if (memberEfficiencyStatus !== 403) throw new Error("member accessed installation-wide efficiency");
 
   if (browserErrors.length > 0) {
     throw new Error(`browser errors: ${JSON.stringify(browserErrors)}`);
@@ -220,6 +249,7 @@ try {
       issue_detail_raw_resolve_regression: true,
       logs_detail_raw: true,
       member_permission: true,
+      automatic_efficiency_readonly: true,
       project_id: projectId,
     }),
   );

@@ -648,6 +648,14 @@ textarea {
   padding: 0.75rem;
   text-align: left;
 }
+.efficiency-table {
+  min-width: 36rem;
+  font-variant-numeric: tabular-nums;
+}
+.efficiency-table th,
+.efficiency-table td {
+  white-space: nowrap;
+}
 .dashboard-project {
   min-width: 13rem;
 }

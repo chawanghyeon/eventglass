@@ -13,7 +13,8 @@ export async function checkReplayUi(page,baseUrl,dsn) {
   await page.goto(`${baseUrl}/replays?project=${project}`);
   await page.getByRole('button',{name:'사용자 피드백',exact:true}).click();
   await page.getByText('Replay fixture feedback',{exact:true}).waitFor();
-  await page.locator(`a[href="/replays/${project}/${id}"]`).first().waitFor();
+  const feedback = JSON.parse((await readFile(new URL('feedback.envelope', root), 'utf8')).split('\n')[2]);
+  await page.locator(`a[href="/replays/${project}/${feedback.contexts.feedback.replay_id}"]`).waitFor();
   await page.getByRole('button',{name:'페이지 분석'}).click();
   await page.getByRole('heading',{name:'페이지 분석',exact:true}).waitFor();
   await page.getByRole('img',{name:/Click heatmap/}).waitFor();
