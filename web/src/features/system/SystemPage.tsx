@@ -1,3 +1,4 @@
+import { EfficiencyPanel } from "./EfficiencyPanel";
 import { useQuery } from "@tanstack/react-query";
 import { describeApiError } from "../../api/client";
 import { endpoints } from "../../api/endpoints";
@@ -49,6 +50,7 @@ export function SystemPage() {
           새로고침
         </Button>
       </header>
+      <EfficiencyPanel />
       {status.isPending ? <Spinner label="시스템 상태 확인 중" /> : null}
       {status.isError ? (
         <Notice tone="error">{describeApiError(status.error)}</Notice>

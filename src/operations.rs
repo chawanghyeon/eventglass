@@ -413,13 +413,10 @@ mod tests {
         assert!(file_size(&root.path().join("missing")).is_err());
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let closed = root.path().join("closed");
-            std::fs::create_dir(&closed)?;
-            std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000))?;
-            let result = optional_file_size(&closed.join("child"));
-            std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o700))?;
-            assert!(result.is_err());
+            // A symlink traversal loop fails for root too; mode 000 does not.
+            let cycle = root.path().join("cycle");
+            std::os::unix::fs::symlink(&cycle, &cycle)?;
+            assert!(optional_file_size(&cycle.join("child")).is_err());
         }
         Ok(())
     }

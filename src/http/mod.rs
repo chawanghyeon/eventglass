@@ -276,6 +276,7 @@ pub fn router(app: AppState) -> Router {
         )
         .route("/api/projects/{id}/keys/{key_id}", delete(revoke_key))
         .route("/api/system/status", get(system::status))
+        .route("/api/system/efficiency", get(system::efficiency))
         .route("/api/system/doctor", get(system::doctor))
         .layer(axum::extract::DefaultBodyLimit::max(64 * 1024))
         .layer(axum::middleware::map_response(no_store))

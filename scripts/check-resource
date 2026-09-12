@@ -36,6 +36,7 @@ def main():
     subprocess.run(['docker', 'info', '--format', '{{.OSType}}/{{.Architecture}}'], check=True)
     with tempfile.TemporaryDirectory(prefix='eventglass-linux-tests-') as temporary:
         stage = pathlib.Path(temporary)
+        stage.chmod(0o755)  # Test children run as the production-style unprivileged UID.
         for name in ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'build.rs']:
             shutil.copy2(ROOT/name, stage/name)
         for name in ['src', 'migrations', 'tests']:

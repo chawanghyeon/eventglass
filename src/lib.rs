@@ -5,6 +5,7 @@ pub mod app;
 pub mod auth;
 pub mod config;
 pub mod db;
+pub mod efficiency;
 pub mod http;
 pub mod indexer;
 pub mod model;

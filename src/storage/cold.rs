@@ -27,6 +27,7 @@ pub struct ColdStorage {
     registry: super::registry::Registry,
     disk: super::budget::DiskBudget,
     gate: Arc<Semaphore>,
+    efficiency: Arc<crate::efficiency::Efficiency>,
 }
 
 struct RemoteShard {
@@ -70,7 +71,13 @@ impl ColdStorage {
             registry,
             disk,
             gate: Arc::new(Semaphore::new(1)),
+            efficiency: Arc::new(crate::efficiency::Efficiency::default()),
         }
+    }
+
+    pub fn with_efficiency(mut self, efficiency: Arc<crate::efficiency::Efficiency>) -> Self {
+        self.efficiency = efficiency;
+        self
     }
 
     pub async fn evict_remote_verified(&self, shard_id: &str) -> Result<bool> {
@@ -118,7 +125,8 @@ impl ColdStorage {
         uuid::Uuid::parse_str(shard_id).context("invalid eviction shard ID")?;
         let id = shard_id.to_owned();
         let registry = self.registry.clone();
-        self.db
+        let evicted = self
+            .db
             .call(move |db| {
                 registry.evict_local(
                     &id,
@@ -135,7 +143,11 @@ impl ColdStorage {
                     || rollback_eviction(db, &id),
                 )
             })
-            .await
+            .await?;
+        if evicted {
+            self.efficiency.evicted();
+        }
+        Ok(evicted)
     }
 
     pub async fn ensure_local(&self, shard_ids: &[String]) -> Result<usize> {
@@ -180,6 +192,7 @@ impl ColdStorage {
             })
             .await?;
         let Some(remote) = remote else {
+            self.efficiency.reuse_local();
             return Ok(false);
         };
         let expanded_limit = remote.expanded_bytes.max(1024 * 1024);
@@ -265,6 +278,7 @@ impl ColdStorage {
         self.promote(shard_id, &remote, size).await?;
         File::open(&root)?.sync_all()?;
         drop(cleanup);
+        self.efficiency.hydrated();
         Ok(true)
     }
 

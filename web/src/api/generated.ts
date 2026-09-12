@@ -423,6 +423,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/system/efficiency": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read bounded observations since this process started (excluding startup restore) */
+        get: operations["getSystemEfficiency"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/system/doctor": {
         parameters: {
             query?: never;
@@ -824,6 +841,27 @@ export interface components {
         };
         AlertDeliveryList: {
             items: components["schemas"]["AlertDelivery"][];
+        };
+        EfficiencySnapshot: {
+            process_epoch: string;
+            uptime_ms: string;
+            incomplete: boolean;
+            observed_body_bytes: string;
+            observed_decoded_bytes: string;
+            /** @description Catalog-local path selections, not a count of successful search results */
+            local_reuses: string;
+            hydrated_shards: string;
+            evicted_shards: string;
+            remote: {
+                [key: string]: components["schemas"]["EfficiencyRemote"];
+            };
+        };
+        EfficiencyRemote: {
+            started: string;
+            succeeded: string;
+            failed: string;
+            cancelled: string;
+            completed_read_bytes: string;
         };
         SystemStatus: {
             sentry_ingest_since_start: {
@@ -2009,6 +2047,29 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SystemStatus"];
+                };
+            };
+            401: components["responses"]["Error"];
+            403: components["responses"]["Error"];
+            503: components["responses"]["Error"];
+        };
+    };
+    getSystemEfficiency: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Logical operations and completed read bytes; SDK retries and partial bodies are not measured */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EfficiencySnapshot"];
                 };
             };
             401: components["responses"]["Error"];

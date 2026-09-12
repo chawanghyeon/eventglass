@@ -209,7 +209,11 @@ async fn setup_session_dsn_csrf_revoke_logout() -> anyhow::Result<()> {
 
     let core = state.clone().start_core().await?;
     let operational = eventglass::http::router(core.clone());
-    for path in ["/api/system/status", "/api/system/doctor"] {
+    for path in [
+        "/api/system/status",
+        "/api/system/doctor",
+        "/api/system/efficiency",
+    ] {
         let response = operational
             .clone()
             .oneshot(request("GET", path, Value::Null, Some(&cookie), None))
@@ -218,7 +222,47 @@ async fn setup_session_dsn_csrf_revoke_logout() -> anyhow::Result<()> {
         let body: Value =
             serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await?)?;
         assert!(body.is_object(), "{path}");
+        if path == "/api/system/efficiency" {
+            assert!(body["process_epoch"].is_string());
+            assert_eq!(body["remote"].as_object().unwrap().len(), 6);
+            assert_eq!(body["remote"]["download"]["started"], "0");
+            assert_eq!(body["incomplete"], false);
+        }
     }
+    let anonymous = operational
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/system/efficiency",
+            Value::Null,
+            None,
+            None,
+        ))
+        .await?;
+    assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+    core.db
+        .call(|db| {
+            db.execute("UPDATE users SET role='member'", [])?;
+            Ok(())
+        })
+        .await?;
+    let member = operational
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/system/efficiency",
+            Value::Null,
+            Some(&cookie),
+            None,
+        ))
+        .await?;
+    assert_eq!(member.status(), StatusCode::FORBIDDEN);
+    core.db
+        .call(|db| {
+            db.execute("UPDATE users SET role='admin'", [])?;
+            Ok(())
+        })
+        .await?;
     core.replay_maintenance.as_ref().unwrap().shutdown().await?;
     core.alerts.as_ref().unwrap().shutdown().await?;
     core.indexer.as_ref().unwrap().shutdown().await?;

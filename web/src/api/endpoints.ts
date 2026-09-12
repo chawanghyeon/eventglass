@@ -1,5 +1,6 @@
 import { apiRequest } from "./client";
 import type {
+  EfficiencySnapshot,
   ReplayPage,
   FeedbackPage,
   ReplayMaps,
@@ -199,6 +200,8 @@ export const endpoints = {
       `/api/projects/${encodeURIComponent(projectId)}/keys/${encodeURIComponent(keyId)}`,
       { method: "DELETE", signal },
     ),
+  systemEfficiency: (signal?: AbortSignal) =>
+    apiRequest<EfficiencySnapshot>("/api/system/efficiency", { signal }),
   systemStatus: (signal?: AbortSignal) =>
     apiRequest<SystemStatus>("/api/system/status", { signal }),
   systemDoctor: (signal?: AbortSignal) =>

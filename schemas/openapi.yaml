@@ -929,6 +929,25 @@ paths:
           $ref: "#/components/responses/Error"
         "503":
           $ref: "#/components/responses/Error"
+  /api/system/efficiency:
+    get:
+      operationId: getSystemEfficiency
+      summary: Read bounded observations since this process started (excluding startup restore)
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Logical operations and completed read bytes; SDK retries and partial bodies are not measured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EfficiencySnapshot"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "503":
+          $ref: "#/components/responses/Error"
   /api/system/doctor:
     get:
       operationId: getSystemDoctor
@@ -2074,6 +2093,48 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AlertDelivery"
+    EfficiencySnapshot:
+      type: object
+      additionalProperties: false
+      required: [process_epoch, uptime_ms, incomplete, observed_body_bytes, observed_decoded_bytes, local_reuses, hydrated_shards, evicted_shards, remote]
+      properties:
+        process_epoch:
+          type: string
+        uptime_ms:
+          type: string
+          pattern: "^[0-9]+$"
+        incomplete:
+          type: boolean
+        observed_body_bytes:
+          type: string
+        observed_decoded_bytes:
+          type: string
+        local_reuses:
+          type: string
+          description: Catalog-local path selections, not a count of successful search results
+        hydrated_shards:
+          type: string
+        evicted_shards:
+          type: string
+        remote:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/EfficiencyRemote"
+    EfficiencyRemote:
+      type: object
+      additionalProperties: false
+      required: [started, succeeded, failed, cancelled, completed_read_bytes]
+      properties:
+        started:
+          type: string
+        succeeded:
+          type: string
+        failed:
+          type: string
+        cancelled:
+          type: string
+        completed_read_bytes:
+          type: string
     SystemStatus:
       type: object
       additionalProperties: false

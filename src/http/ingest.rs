@@ -193,6 +193,8 @@ async fn receive_inner(
     .await
     .map_err(|_| ApiError(StatusCode::REQUEST_TIMEOUT, "ingest_body_timeout"))?
     .map_err(|_| ApiError(StatusCode::PAYLOAD_TOO_LARGE, "ingest_body_unreadable"))?;
+    app.efficiency.observe_body(wire.len());
+    let efficiency = app.efficiency.clone();
     let disk_budget = app.disk_budget.clone();
     let (decoded, auth, permit, disk_reservation) =
         tokio::task::spawn_blocking(move || -> ApiResult<_> {
@@ -201,6 +203,7 @@ async fn receive_inner(
                 .reserve(2 * limits.decoded_bytes as u64)
                 .map_err(reserve_error)?;
             let decoded = sentry::decode_body(&wire, encoding, &limits).map_err(wire_error)?;
+            efficiency.observe_decoded(decoded.len());
             let auth = if is_envelope {
                 sentry::envelope_auth(&decoded).map_err(wire_error)?
             } else {

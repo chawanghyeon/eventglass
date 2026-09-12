@@ -75,6 +75,9 @@ afterEach(() => vi.restoreAllMocks());
 
 it("distinguishes local archives from recoverable shards and runs doctor", async () => {
   const user = userEvent.setup();
+  vi.spyOn(endpoints, "systemEfficiency").mockRejectedValue(
+    new Error("optional observation unavailable"),
+  );
   vi.spyOn(endpoints, "systemStatus").mockResolvedValue(status);
   const doctor = vi.spyOn(endpoints, "systemDoctor").mockResolvedValue({
     ok: true,

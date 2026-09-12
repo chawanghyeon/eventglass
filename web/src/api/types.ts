@@ -42,3 +42,5 @@ export type ReplayAnalysis = components["schemas"]["ReplayAnalysis"];
 export type ReplayPageActivity = components["schemas"]["ReplayPageActivity"];
 export type ReplayMaps = components["schemas"]["ReplayMaps"];
 export type FeedbackPage = components["schemas"]["FeedbackPage"];
+
+export type EfficiencySnapshot = components["schemas"]["EfficiencySnapshot"];

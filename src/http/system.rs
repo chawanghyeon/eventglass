@@ -35,6 +35,14 @@ pub(super) async fn status(
     Ok(Json(status))
 }
 
+pub(super) async fn efficiency(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+) -> ApiResult<Json<crate::efficiency::Snapshot>> {
+    authenticate(&state, &headers, false, true).await?;
+    Ok(Json(state.app.efficiency.snapshot()))
+}
+
 pub(super) async fn doctor(
     State(state): State<HttpState>,
     headers: HeaderMap,

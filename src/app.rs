@@ -22,6 +22,7 @@ pub struct AppState {
     pub live_permit: Arc<Semaphore>,
     pub alerts: Option<crate::alerts::AlertCoordinator>,
     pub replay_maintenance: Option<crate::storage::replay_maintenance::ReplayMaintenance>,
+    pub efficiency: Arc<crate::efficiency::Efficiency>,
     pub ingest_stats: Arc<crate::operations::IngestStats>,
     pub cold: Option<crate::storage::cold::ColdStorage>,
     pub tokens: Arc<crate::search::tokens::TokenCodec>,
@@ -94,6 +95,7 @@ impl AppState {
             alerts: None,
             cold: None,
             replay_maintenance: None,
+            efficiency: Arc::new(crate::efficiency::Efficiency::default()),
             ingest_stats: Arc::new(crate::operations::IngestStats::default()),
             tokens: Arc::new(crate::search::tokens::TokenCodec::new(token_key)),
             disk_budget,
@@ -108,7 +110,12 @@ impl AppState {
     pub async fn start_core(mut self) -> Result<Self> {
         anyhow::ensure!(self.indexer.is_none(), "core is already running");
         #[cfg(feature = "s3")]
-        let remote = build_remote_store(&self.config).await;
+        let remote = build_remote_store(&self.config).await.map(|store| {
+            Arc::new(crate::storage::observed::ObservedStore::new(
+                store,
+                self.efficiency.clone(),
+            )) as Arc<dyn crate::storage::s3::ObjectStore>
+        });
         #[cfg(feature = "s3")]
         let backup = remote.as_ref().map(|store| {
             crate::storage::backup::BackupCoordinator::new(
@@ -139,14 +146,17 @@ impl AppState {
                     .map_err(Into::into)
                 })
                 .await?;
-            self.cold = Some(crate::storage::cold::ColdStorage::new(
-                self.db.clone(),
-                &self.config.data_dir,
-                installation,
-                store,
-                indexer.registry(),
-                self.disk_budget.clone(),
-            ));
+            self.cold = Some(
+                crate::storage::cold::ColdStorage::new(
+                    self.db.clone(),
+                    &self.config.data_dir,
+                    installation,
+                    store,
+                    indexer.registry(),
+                    self.disk_budget.clone(),
+                )
+                .with_efficiency(self.efficiency.clone()),
+            );
         }
         #[cfg(test)]
         let alerts = if self.reject_alert_start {

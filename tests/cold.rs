@@ -140,10 +140,13 @@ async fn cold_hydration_is_single_flight_verified_and_atomic() -> Result<()> {
         store.clone(),
         registry.clone(),
         app.disk_budget.clone(),
-    );
+    )
+    .with_efficiency(app.efficiency.clone());
     let ids = vec![shard_id.clone()];
     let (left, right) = tokio::join!(cold.ensure_local(&ids), cold.ensure_local(&ids));
     assert_eq!(left? + right?, 1);
+    assert_eq!(app.efficiency.snapshot().hydrated_shards, "1");
+    assert_eq!(app.efficiency.snapshot().local_reuses, "1");
     assert_eq!(store.downloads.load(Ordering::SeqCst), 1);
     assert!(root.path().join("shards").join(&shard_id).is_dir());
     let state = app
@@ -160,6 +163,7 @@ async fn cold_hydration_is_single_flight_verified_and_atomic() -> Result<()> {
     assert!(!cold.evict_remote_verified(&ids[0]).await?);
     drop(pin);
     assert!(cold.evict_remote_verified(&ids[0]).await?);
+    assert_eq!(app.efficiency.snapshot().evicted_shards, "1");
     assert!(!root.path().join("shards").join(&ids[0]).exists());
     assert_eq!(cold.ensure_local(&ids).await?, 1);
     assert_eq!(store.downloads.load(Ordering::SeqCst), 2);
