@@ -76,6 +76,8 @@ prefetch는 기본으로 추가하지 않는다. 아직 요청되지 않은 객�
 
 첫 baseline은 기존 archive 형식과 compression 설정이다. 저장 bytes가 조금 줄더라도 ACK·검색 지연·checkpoint 진척을 악화시키면 더 나은 정책이 아니다.
 
+첫 후보 비교는 실제 SDK Log 정규화·native shard로 만든 반복/다양 로그 각 4,000건과 빈 shard를 사용한다. 동일 tar 입력의 gzip level 1/6을 각각 3회 측정하고 모든 후보를 기존 hydrate로 복구한다. Linux 1코어·1GiB에서 두 비어 있지 않은 workload 모두 저장 bytes 5% 이상 감소, 압축 시간 중앙값 증가 10% 이내일 때만 후속 ACK/query/checkpoint 경합 검증 대상으로 채택한다. 시간은 파일 flush/sync를 포함하며 가격·총 운영비로 환산하지 않는다. 빈 shard의 비율 개선만으로 후보를 채택하지 않는다. 이 사전 기준을 통과하지 못하면 빠른 기본 압축을 유지한다. test profile 측정은 후보 선별용이며 production 지연이나 요금 절감의 증거로 쓰지 않는다. 채택하려면 release artifact의 경합 검증까지 통과해야 한다.
+
 동일 tar.gz 형식을 읽을 수 있는 검증된 compression 후보만 비교한다. 후보는 raw 의미, native index, manifest/checksum 검증과 restore 호환성을 유지해야 한다. 실제 이득이 있는 후보가 확보되기 전에는 기존 설정을 사용한다. 새 archive에만 적용하며 과거 archive를 다시 내려받아 재압축하지 않는다.
 
 선택 신호는 기존 backlog, 요청 대기, compression 소요 시간·출력 크기, 메모리/디스크 reservation이다. 보수적인 기본값에서 시작하고 신호가 부족하면 그대로 유지한다. 최대 압축률을 목표로 하지 않는다.
