@@ -61,3 +61,11 @@ it("reports clipboard denial instead of claiming that copying succeeded", async 
   expect(screen.getByRole("alert")).toHaveTextContent("복사하지 못했습니다");
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
 });
+it("confirms DSN copy only after the clipboard write completes", async () => {
+  const user = userEvent.setup();
+  const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  show();
+  await user.click(await screen.findByRole("button", { name: "DSN 복사" }));
+  expect(write).toHaveBeenCalledWith("https://public@example.invalid/1");
+  expect(screen.getByRole("button", { name: "복사됨 ✓" })).toBeVisible();
+});

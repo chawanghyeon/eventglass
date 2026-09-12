@@ -21,3 +21,31 @@ it("bounds display work and makes omitted fields explicit", () => {
   expect(sample.rows).toHaveLength(200);
   expect(sample.truncated).toBe(true);
 });
+
+it("shows empty collections and truncates text without changing original values", () => {
+  const value = "x".repeat(241);
+  const sample = sampleFields({ empty: [], object: {}, text: value });
+  expect(sample.rows.map((row) => row.value)).toEqual([
+    "[]",
+    "{}",
+    "x".repeat(240) + "…",
+  ]);
+  expect(value).toHaveLength(241);
+  expect(sample.truncated).toBe(false);
+});
+it("marks depth exhaustion and row overflow while accepting an exact full sample", () => {
+  let deep: unknown = "value";
+  for (let i = 0; i < 14; i++) deep = { child: deep };
+  expect(sampleFields(deep)).toEqual({ rows: [], truncated: true });
+  const exact = Array.from({ length: 200 }, (_, i) => i);
+  expect(sampleFields(exact).truncated).toBe(false);
+  expect(
+    sampleFields(Object.fromEntries(exact.map((i) => [String(i), i])))
+      .truncated,
+  ).toBe(false);
+  const oversized = Object.fromEntries(
+    Array.from({ length: 201 }, (_, i) => [String(i), i]),
+  );
+  expect(sampleFields(oversized).rows).toHaveLength(200);
+  expect(sampleFields(oversized).truncated).toBe(true);
+});
