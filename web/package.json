@@ -14,7 +14,8 @@
     "lint": "eslint . --max-warnings=0",
     "format:check": "prettier --check .",
     "test": "vitest run",
-    "build": "vite build"
+    "build": "vite build",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@sentry/rrweb": "2.43.2",

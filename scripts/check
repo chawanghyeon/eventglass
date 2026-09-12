@@ -83,7 +83,7 @@ run_web() {
     npm --prefix "$REPO_ROOT/web" run generated:check
     npm --prefix "$REPO_ROOT/web" run typecheck
     npm --prefix "$REPO_ROOT/web" run lint
-    npm --prefix "$REPO_ROOT/web" test
+    npm --prefix "$REPO_ROOT/web" run test:coverage
     npm --prefix "$REPO_ROOT/web" run build
 }
 

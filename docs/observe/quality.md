@@ -73,6 +73,12 @@ Frontend npm scripts 계약:
 
 Vitest no-tests pass 옵션 금지. OpenAPI codegen은 임시 출력에 재생성해 tracked generated.ts와 비교한다. 검사 중 `npm install`/`cargo update`/format --write로 lock/source를 고치지 않는다. 검사 전후 tracked tree와 생성되어야 할 untracked 결과를 확인한다.
 
+### 커버리지 실행과 판정
+
+`npm --prefix web run test:coverage`는 전체 프론트엔드 제품 소스의 coverage를 수집하고 파일별 라인·함수 100%를 강제한다. `./scripts/check web`과 pre-push의 web 검사도 같은 gate를 실행한다. 생성된 API 타입, 테스트 파일, 테스트 setup만 측정 대상에서 제외한다. HTML과 JSON 요약은 git에서 제외된 `web/coverage/`에 생성한다. 문장·분기 지표도 보고서에 그대로 남기며 라인·함수 gate 통과를 모든 분기 100%로 표현하지 않는다. 실행 불가능한 방어 분기를 숨기기 위한 ignore 지시나 제품 코드 삭제는 허용하지 않는다.
+
+Rust는 고정 toolchain의 `llvm-tools-preview`와 `cargo-llvm-cov 0.9.1`로 별도 계측한다. 비용 효율 신규 모듈 `src/efficiency.rs`, `src/storage/observed.rs`, `src/storage/reuse.rs`의 라인·함수 100%와 기존 모듈을 포함한 전체 결과를 구분한다. SQLite·취소·checksum·checkpoint·권한·자원 제한 계약은 커버리지 수치와 별도로 실제 통합 테스트를 실행해야 한다. stable 계측에서 branch count가 0이면 분기 측정 불가이며 100%가 아니다. Rust 파일에 함께 있는 `#[cfg(test)]` 코드도 LLVM 보고서에 포함되므로 전체 결과를 제품 전용 커버리지로 바꾸어 표현하지 않는다.
+
 ## 3. pre-commit 구성
 
 P00 산출물은 `.pre-commit-config.yaml`, 버전 고정된 Python tool requirements, `scripts/hooks/`, contributor 설치 안내다. hook stage 이름은 `pre-commit`, `pre-push`를 사용하고 설치 시 양쪽 hook type을 명시한다.
