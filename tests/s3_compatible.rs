@@ -461,6 +461,94 @@ async fn minio_checkpoint_and_object_contract() -> Result<()> {
         "corrupt latest did not fall back to the newest complete checkpoint"
     );
 
+    // Exercise the serving startup path itself: no manual restore command or UI visit.
+    let auto_app = AppState::open(Config {
+        addr: "127.0.0.1:0".parse()?,
+        data_dir: root.path().join("automatic-restore"),
+        base_url: "http://localhost:8080".parse()?,
+        s3_url: Some(format!("s3://{bucket}/{prefix}")),
+        s3_endpoint: Some(endpoint.clone()),
+        s3_initialize: false,
+    })
+    .await?
+    .start_core()
+    .await?;
+    wait_for_boundary(&auto_app, 3).await?;
+    let recovered_installation: String = auto_app
+        .db
+        .call(|connection| {
+            Ok(connection.query_row(
+                "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await?;
+    ensure!(recovered_installation == installation_id);
+    let auto_router = eventglass::http::router(auto_app.clone());
+    let auto_session = login(&auto_router).await?;
+    let efficiency = auto_router
+        .oneshot(
+            Request::builder()
+                .uri("/api/system/efficiency")
+                .header(header::COOKIE, &auto_session.cookie)
+                .body(Body::empty())?,
+        )
+        .await?;
+    ensure!(efficiency.status() == StatusCode::OK);
+    auto_app
+        .replay_maintenance
+        .as_ref()
+        .context("maintenance")?
+        .shutdown()
+        .await?;
+    auto_app
+        .alerts
+        .as_ref()
+        .context("alerts")?
+        .shutdown()
+        .await?;
+    auto_app
+        .indexer
+        .as_ref()
+        .context("indexer")?
+        .shutdown()
+        .await?;
+
+    // Empty remote prefixes still require the existing explicit installation intent;
+    // a failed startup must not create a local database or reinterpret data as empty.
+    let fresh_url = format!("s3://{bucket}/{prefix}-fresh");
+    let fresh_config = Config {
+        addr: "127.0.0.1:0".parse()?,
+        data_dir: root.path().join("fresh-installation"),
+        base_url: "http://localhost:8080".parse()?,
+        s3_url: Some(fresh_url.clone()),
+        s3_endpoint: Some(endpoint.clone()),
+        s3_initialize: false,
+    };
+    assert!(AppState::open(fresh_config.clone()).await.is_err());
+    ensure!(!fresh_config.data_dir.join("meta.db").exists());
+    let fresh_app = AppState::open(Config {
+        s3_initialize: true,
+        ..fresh_config
+    })
+    .await?;
+    let fresh_store = AwsObjectStore::load(S3Location::parse(&fresh_url)?, Some(&endpoint)).await?;
+    let remote_installation = eventglass::storage::remote::read_installation(&fresh_store)
+        .await?
+        .context("new installation")?;
+    let local_installation: String = fresh_app
+        .db
+        .call(|connection| {
+            Ok(connection.query_row(
+                "SELECT installation_id FROM runtime_state WHERE singleton=1",
+                [],
+                |row| row.get(0),
+            )?)
+        })
+        .await?;
+    ensure!(local_installation == remote_installation.installation_id);
+
     let wrong = AwsObjectStore::load(
         S3Location::parse(&format!("s3://{bucket}/{prefix}-wrong"))?,
         Some(&endpoint),
@@ -486,6 +574,8 @@ async fn minio_checkpoint_and_object_contract() -> Result<()> {
             "fallback_from_missing_sequence": missing.sequence,
             "fallback_past_corrupt_sequence": newer.sequence,
             "full_loss_restore": true,
+            "automatic_startup_restore": true,
+            "new_installation_identity_verified": true,
             "sessions_invalidated": true,
             "projects_and_keys_restored": true,
             "issue_state_and_pending_inbox_reconciled": true,

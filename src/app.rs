@@ -310,6 +310,37 @@ mod tests {
         assert!(app.start_core().await.is_err());
     }
 
+    #[cfg(feature = "s3")]
+    #[tokio::test]
+    async fn unavailable_remote_client_does_not_disable_local_startup_policy() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut value = config(directory.path().to_owned());
+        value.s3_url = Some("invalid-location".into());
+        assert!(build_remote_store(&value).await.is_none());
+    }
+
+    #[cfg(all(feature = "s3", unix))]
+    #[tokio::test]
+    async fn remote_preparation_preserves_local_files_and_rejects_ambiguous_io() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut value = config(directory.path().to_owned());
+        value.s3_url = Some("s3://bucket/prefix".into());
+        let database = directory.path().join("meta.db");
+        std::fs::write(&database, b"existing database")?;
+        assert!(prepare_remote_storage(&value).await?.is_none());
+        assert_eq!(std::fs::read(&database)?, b"existing database");
+        std::fs::remove_file(&database)?;
+        std::os::unix::fs::symlink("missing", &database)?;
+        assert!(prepare_remote_storage(&value).await.is_err());
+        std::fs::remove_file(&database)?;
+        let cycle = directory.path().join("cycle");
+        std::os::unix::fs::symlink("cycle", &cycle)?;
+        value.data_dir = cycle;
+        let error = prepare_remote_storage(&value).await.unwrap_err();
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        Ok(())
+    }
+
     #[cfg(not(feature = "s3"))]
     #[tokio::test]
     async fn non_s3_binary_rejects_remote_storage_configuration() {
