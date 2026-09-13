@@ -34,7 +34,7 @@ Webhook은 HTTPS와 공개 DNS 주소만 허용하고 redirect와 system proxy�
 
 ## 운영과 복구
 
-기준 운영 자원은 1 CPU와 1 GiB RAM이며 swap 없이 실행하는 로컬 Linux 검증 명령 `./scripts/check-resource`가 있습니다. GitHub CI는 로컬에서 검증한 바이너리의 배포 활성화만 수행합니다. 100K Record PR benchmark는 더 작은 512 MiB 한도에서 실행합니다. 용량과 지연은 데이터 분포·샤드 수·검색 범위에 따라 달라지므로 배포 전 실제 트래픽과 보존 기간으로 측정해야 합니다.
+로컬 Linux 자원 검증 기준은 1 CPU와 1 GiB RAM, swap 없음이며 `./scripts/check-resource`로 실행합니다. 현재 운영 서버는 단독 사용을 전제로 CPU 0.25코어, RAM 1 GiB, swap 없음으로 제한합니다. GitHub CI는 로컬에서 검증한 바이너리의 배포 활성화만 수행합니다. 100K Record PR benchmark는 1 CPU와 더 작은 512 MiB 한도에서 실행합니다. 용량과 지연은 데이터 분포·샤드 수·검색 범위에 따라 달라지므로 배포 전 실제 트래픽과 보존 기간으로 측정해야 합니다.
 
 `EVENTGLASS_S3_URL`의 bucket/prefix는 설치 하나가 단독으로 사용해야 합니다. 현재 명시적으로 검증한 호환 대상은 loopback endpoint의 MinIO RELEASE.2025-09-07T16-13-09Z입니다. 같은 prefix에 두 Eventglass 프로세스를 동시에 연결하면 안 됩니다. checkpoint는 샤드 봉인 경계에서 만들어지므로 고정된 시간 RPO를 보장하지 않습니다. `/api/system/status`의 복구 가능 경계와 backup lag를 감시해야 합니다.
 
