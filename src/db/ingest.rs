@@ -196,6 +196,17 @@ pub fn accept_with_replay(
         "UPDATE runtime_state SET next_ingest_seq=?1,inbox_bytes=inbox_bytes+?2,inbox_records=inbox_records+?3 WHERE singleton=1",
         params![next,total_bytes as i64,accepted as i64],
     )?;
+    if accepted > 0 {
+        tx.execute(
+            "INSERT INTO project_ingest_state(project_id,last_accepted_at_us,last_accepted_ingest_seq,accepted_records)
+             VALUES(?1,?2,?3,?4)
+             ON CONFLICT(project_id) DO UPDATE SET
+               last_accepted_at_us=excluded.last_accepted_at_us,
+               last_accepted_ingest_seq=excluded.last_accepted_ingest_seq,
+               accepted_records=accepted_records+excluded.accepted_records",
+            params![project.id, received_at_us, next - 1, accepted as i64],
+        )?;
+    }
     if let Some(prepared) = &replay {
         super::replays::accept(&tx, project.id, prepared, received_at_us)?;
     }
@@ -342,6 +353,61 @@ mod tests {
             normalizer_version: 1,
             indexing_warnings: Vec::new(),
         }
+    }
+
+    #[test]
+    fn project_receipt_counts_only_durable_records_per_project() -> Result<()> {
+        let (_directory, mut database, first) = database();
+        database.execute_batch(
+            "INSERT INTO projects(id,slug,name,created_at_us,updated_at_us)
+             VALUES(2,'other','Other',0,0);
+             INSERT INTO project_keys(project_id,public_key,created_at_us)
+             VALUES(2,'other-key',0)",
+        )?;
+        let second = IngestProject {
+            id: 2,
+            slug: "other".into(),
+            public_key: "other-key".into(),
+        };
+        accept(
+            &mut database,
+            first.clone(),
+            "empty",
+            Vec::new(),
+            &Limits::default(),
+        )?;
+        assert_eq!(
+            database.query_row("SELECT count(*) FROM project_ingest_state", [], |r| r
+                .get::<_, i64>(0))?,
+            0
+        );
+        accept_with_replay(
+            &mut database,
+            first,
+            "first",
+            vec![record()],
+            &Limits::default(),
+            None,
+            Vec::new(),
+            42,
+        )?;
+        let mut other_record = record();
+        other_record.project_id = 2;
+        accept_with_replay(
+            &mut database,
+            second,
+            "second",
+            vec![other_record],
+            &Limits::default(),
+            None,
+            Vec::new(),
+            43,
+        )?;
+        let states = database.prepare("SELECT project_id,last_accepted_at_us,last_accepted_ingest_seq,accepted_records,searchable_records FROM project_ingest_state ORDER BY project_id")?
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?,r.get::<_, i64>(1)?,r.get::<_, i64>(2)?,r.get::<_, i64>(3)?,r.get::<_, i64>(4)?)))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        assert_eq!(states, [(1, 42, 1, 1, 0), (2, 43, 2, 1, 0)]);
+        Ok(())
     }
 
     #[test]

@@ -22,8 +22,14 @@ use sha2::{Digest, Sha256};
 const INITIAL_SCHEMA: &str = include_str!("../../migrations/0001_initial.sql");
 const REPLAY_SCHEMA: &str = include_str!("../../migrations/0002_replays.sql");
 const EVICTION_SCHEMA: &str = include_str!("../../migrations/0003_eviction_candidates.sql");
-const MIGRATIONS: &[&str] = &[INITIAL_SCHEMA, REPLAY_SCHEMA, EVICTION_SCHEMA];
-pub const SCHEMA_VERSION: i64 = 3;
+const PROJECT_INGEST_SCHEMA: &str = include_str!("../../migrations/0004_project_ingest_state.sql");
+const MIGRATIONS: &[&str] = &[
+    INITIAL_SCHEMA,
+    REPLAY_SCHEMA,
+    EVICTION_SCHEMA,
+    PROJECT_INGEST_SCHEMA,
+];
+pub const SCHEMA_VERSION: i64 = 4;
 
 /// Open a database after the caller has acquired the exclusive data-directory lock.
 /// A corrupt or newer database is returned as an error, never replaced.
@@ -401,7 +407,7 @@ mod tests {
         assert!(migrate(&mut connection).is_err());
     }
     #[test]
-    fn version_two_upgrade_preserves_data_and_adds_only_the_eviction_index() -> Result<()> {
+    fn version_two_upgrade_preserves_data_and_adds_new_metadata() -> Result<()> {
         let root = tempfile::tempdir()?;
         let path = root.path().join("upgrade.db");
         let db = Connection::open(&path)?;
@@ -428,7 +434,7 @@ mod tests {
                 .get::<_, i64>(
                 0
             ))?,
-            3
+            SCHEMA_VERSION
         );
         let index_sql: String = db.query_row(
             "SELECT sql FROM sqlite_master WHERE name='shards_eviction_candidates'",
@@ -436,9 +442,51 @@ mod tests {
             |row| row.get(0),
         )?;
         assert!(index_sql.contains("recovery_checkpoint_id IS NOT NULL"));
+        let state_table: String = db.query_row(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='project_ingest_state'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(state_table, "project_ingest_state");
         drop(db);
         inspect(&path)?;
         open(&path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn version_three_upgrade_backfills_pending_project_records() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("pending.db");
+        let db = Connection::open(&path)?;
+        for (index, sql) in [INITIAL_SCHEMA, REPLAY_SCHEMA, EVICTION_SCHEMA]
+            .into_iter()
+            .enumerate()
+        {
+            db.execute_batch(sql)?;
+            db.execute(
+                "INSERT INTO schema_migrations(version,checksum,applied_at_us) VALUES(?1,?2,0)",
+                rusqlite::params![
+                    index as i64 + 1,
+                    format!("{:x}", Sha256::digest(sql.as_bytes()))
+                ],
+            )?;
+        }
+        db.execute_batch(
+            "INSERT INTO projects(id,slug,name,created_at_us,updated_at_us) VALUES(1,'keep','Keep',0,0);
+             INSERT INTO inbox(project_id,acceptance_id,chunk_no,first_ingest_seq,last_ingest_seq,
+                               record_count,received_at_us,normalizer_version,payload)
+             VALUES(1,'a',0,3,4,2,10,1,x'7b7d'),(1,'b',0,5,5,1,20,1,x'7b7d');",
+        )?;
+        drop(db);
+        let db = open(&path)?;
+        let state: (i64,i64,i64,i64) = db.query_row(
+            "SELECT last_accepted_at_us,last_accepted_ingest_seq,accepted_records,searchable_records
+             FROM project_ingest_state WHERE project_id=1",
+            [],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+        )?;
+        assert_eq!(state, (20, 5, 3, 0));
         Ok(())
     }
 }

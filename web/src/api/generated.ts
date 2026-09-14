@@ -621,6 +621,11 @@ export interface components {
             slug: string;
             name: string;
             is_active: boolean;
+            /** @description Last durable record ACK receipt time in microseconds, or null before the first tracked accept. */
+            last_accepted_at_us: string | null;
+            /** @description Last record finalized as searchable in microseconds, or null before first tracked finalize. */
+            last_searchable_at_us: string | null;
+            pending_records: components["schemas"]["NonNegativeDecimalString"];
         };
         ProjectList: {
             items: components["schemas"]["Project"][];

@@ -17,8 +17,24 @@ const session: Session = {
   csrf_token: "csrf",
 };
 const projects: Project[] = [
-  { id: "9007199254740993", slug: "primary", name: "Primary", is_active: true },
-  { id: "9007199254740995", slug: "other", name: "Other", is_active: true },
+  {
+    id: "9007199254740993",
+    slug: "primary",
+    name: "Primary",
+    is_active: true,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
+  {
+    id: "9007199254740995",
+    slug: "other",
+    name: "Other",
+    is_active: true,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
 ];
 
 function makeIssue(overrides: Partial<Issue> = {}): Issue {

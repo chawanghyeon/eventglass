@@ -13,6 +13,9 @@ const project: Project = {
   slug: "shop",
   name: "Shop",
   is_active: true,
+  last_accepted_at_us: null,
+  last_searchable_at_us: null,
+  pending_records: "0",
 };
 const key: ProjectKey = {
   id: "key1",

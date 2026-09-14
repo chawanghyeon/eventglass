@@ -228,6 +228,16 @@ async fn next_event(stream: &mut BodyDataStream, pending: &mut String) -> anyhow
 async fn disconnected_idle_live_stream_releases_its_connection_slot() -> anyhow::Result<()> {
     let (_directory, app, router, cookie) = fixture().await?;
     ingest(&app, 1, "idle stream").await?;
+    let state = app.db.call(|db| {
+        Ok(db.query_row(
+            "SELECT accepted_records,searchable_records,last_accepted_at_us,last_searchable_at_us
+             FROM project_ingest_state WHERE project_id=1",
+            [],
+            |r| Ok((r.get::<_, i64>(0)?,r.get::<_, i64>(1)?,r.get::<_, i64>(2)?,r.get::<_, i64>(3)?)),
+        )?)
+    }).await?;
+    assert_eq!((state.0, state.1), (1, 1));
+    assert!(state.2 > 0 && state.3 > 0);
     let mut stream = subscribe(&router, &cookie, None).await?;
     let mut pending = String::new();
     assert_eq!(next_event(&mut stream, &mut pending).await?.event, "record");

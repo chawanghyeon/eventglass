@@ -1469,7 +1469,7 @@ components:
     Project:
       type: object
       additionalProperties: false
-      required: [id, slug, name, is_active]
+      required: [id, slug, name, is_active, last_accepted_at_us, last_searchable_at_us, pending_records]
       properties:
         id:
           type: string
@@ -1479,6 +1479,14 @@ components:
           type: string
         is_active:
           type: boolean
+        last_accepted_at_us:
+          type: [string, "null"]
+          description: Last durable record ACK receipt time in microseconds, or null before the first tracked accept.
+        last_searchable_at_us:
+          type: [string, "null"]
+          description: Last record finalized as searchable in microseconds, or null before first tracked finalize.
+        pending_records:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
     ProjectList:
       type: object
       additionalProperties: false

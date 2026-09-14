@@ -105,6 +105,8 @@ Indexer batch는 완전한 chunk들을 앞에서부터 선택하여 1,000 Record
 
 전체 요청의 chunks, next sequence 갱신은 하나의 SQLite transaction이다. group commit의 4 MiB는 flush 목표이며 hard request limit가 아니다. 4 MiB보다 큰 정상 요청은 단독 transaction으로 처리한다. P02는 요청별 transaction부터 구현해도 되며 group commit은 P12 측정 후 추가할 수 있다. ACK 의미는 동일해야 한다.
 
+프로젝트 목록의 수신 진단은 Record가 하나 이상 있는 ACK에서만 프로젝트별 마지막 수신 시각·sequence와 수신 건수를 같은 transaction으로 갱신한다. 빈 envelope나 Replay/Feedback 전용 수신은 검색 가능 Record로 집계하지 않는다. 업그레이드 시 남은 Inbox chunk는 프로젝트별 대기 건수로 이관하고, 이미 확정된 과거 데이터의 프로젝트별 수신 시각은 추정하지 않는다.
+
 원안 body 20 MiB/정규화 합계 20 MiB/node 20,000/depth 64/Record 수 10,000을 그대로 적용한다. 노드 카운터는 배열·객체·scalar 모두 센다. 유효 지원 item 하나라도 실패하면 400/413이고 이번 요청의 Inbox/sequence 변경은 0이다. 미지원 item만 있는 envelope는 202이고 sequence를 할당하지 않는다.
 
 64 MiB ingress 예산에서 wire+decompressed+DOM+normalized 전체 복사본을 동시에 유지하지 않는다. decoder는 Record 단위 traversal, bounded buffer, 이동 가능한 serialized payload를 사용한다. 원안 한도까지 정상 입력을 처리할 수 없으면 G08 실패로 기록하고 구현/예산을 조정한다. 임의로 20 MiB 지원을 4 MiB 지원으로 줄여 통과시키지 않는다.
@@ -132,6 +134,7 @@ FinalizeBatch는 다음을 한 transaction에서 수행한다.
 - 새 issue는 동일 transaction 안에서 먼저 초기 row를 생성하여 occurrence의 FK를 만족시킨다. occurrence를 순서대로 insert하고 처음 삽입된 Error만 issue count/first/last/release를 갱신한다. 초기 row 생성 여부를 new-issue trigger로 사용하며 rollback 시 둘 다 사라진다.
 - **transaction 시점의** status/resolved_through_ingest_seq/alert configuration을 읽어 regression과 delivery를 결정.
 - issue 상태 변경, deterministic outbox insert, shard 통계, runtime boundary 갱신, 적용 Inbox delete.
+- 프로젝트별 마지막 검색 반영 시각·sequence와 반영 건수 갱신. 대기 건수는 수신 건수에서 반영 건수를 뺀 값이며, project 간 전역 ingest sequence 차이로 계산하지 않는다. 중복 Error도 boundary가 확정되면 반영 건수에 포함한다.
 
 Tantivy commit 전에 산출한 stale issue row를 통째로 UPDATE하지 않는다. Resolve도 같은 DbWorker에서 직렬화하며 `next_ingest_seq - 1`을 수신 경계로 저장한다. Indexer finalize 전에 resolve된 backlog는 regression이 아니다. 최초 신규 occurrence가 resolve 경계보다 클 때만 unresolved 전이·regression delivery를 만든다. ignored는 유지한다.
 

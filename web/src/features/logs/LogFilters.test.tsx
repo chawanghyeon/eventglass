@@ -11,9 +11,33 @@ const committed: LogSearchState = {
   filters: { levels: ["error", "warn"] },
 };
 const projects = [
-  { id: "1", slug: "shop", name: "Shop", is_active: true },
-  { id: "2", slug: "api", name: "API", is_active: true },
-  { id: "3", slug: "old", name: "Inactive", is_active: false },
+  {
+    id: "1",
+    slug: "shop",
+    name: "Shop",
+    is_active: true,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
+  {
+    id: "2",
+    slug: "api",
+    name: "API",
+    is_active: true,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
+  {
+    id: "3",
+    slug: "old",
+    name: "Inactive",
+    is_active: false,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
 ];
 afterEach(() => vi.useRealTimers());
 it("submits a draft once with trimmed filters and the selected active projects", async () => {

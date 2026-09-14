@@ -12,6 +12,9 @@ pub struct Project {
     pub slug: String,
     pub name: String,
     pub is_active: bool,
+    pub last_accepted_at_us: Option<String>,
+    pub last_searchable_at_us: Option<String>,
+    pub pending_records: String,
 }
 
 #[derive(Debug)]
@@ -47,7 +50,11 @@ pub fn list(db: &Connection, actor: i64) -> Result<Vec<Project>> {
         |r| r.get(0),
     )?;
     let mut statement = db.prepare(
-        "SELECT id,slug,name,is_active FROM projects WHERE is_active=1 OR ?1='admin' ORDER BY id",
+        "SELECT p.id,p.slug,p.name,p.is_active,
+                s.last_accepted_at_us,s.last_searchable_at_us,
+                coalesce(s.accepted_records-s.searchable_records,0)
+         FROM projects p LEFT JOIN project_ingest_state s ON s.project_id=p.id
+         WHERE p.is_active=1 OR ?1='admin' ORDER BY p.id",
     )?;
     Ok(statement
         .query_map([role], |r| {
@@ -56,6 +63,9 @@ pub fn list(db: &Connection, actor: i64) -> Result<Vec<Project>> {
                 slug: r.get(1)?,
                 name: r.get(2)?,
                 is_active: r.get(3)?,
+                last_accepted_at_us: r.get::<_, Option<i64>>(4)?.map(|v| v.to_string()),
+                last_searchable_at_us: r.get::<_, Option<i64>>(5)?.map(|v| v.to_string()),
+                pending_records: r.get::<_, i64>(6)?.to_string(),
             })
         })?
         .collect::<Result<Vec<_>, _>>()?)
@@ -179,6 +189,17 @@ mod tests {
         let id = create(&mut db, 1, "new", "New")?;
         assert_eq!(list(&db, 2)?.len(), 2);
         assert_eq!(list(&db, 1)?.len(), 3);
+        assert_eq!(list(&db, 2)?[0].pending_records, "0");
+        db.execute(
+            "INSERT INTO project_ingest_state(project_id,last_accepted_at_us,last_accepted_ingest_seq,
+             accepted_records,last_searchable_at_us,last_searchable_ingest_seq,searchable_records)
+             VALUES(1,40,7,3,30,5,2)",
+            [],
+        )?;
+        let tracked = list(&db, 2)?;
+        assert_eq!(tracked[0].last_accepted_at_us.as_deref(), Some("40"));
+        assert_eq!(tracked[0].last_searchable_at_us.as_deref(), Some("30"));
+        assert_eq!(tracked[0].pending_records, "1");
         assert_eq!(
             kind(set_active(&mut db, 1, 999, false).unwrap_err()),
             "NotFound"

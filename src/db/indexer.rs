@@ -118,6 +118,30 @@ pub fn finalize(db: &mut Connection, shard_id: &str, batch: PreparedBatch) -> Re
         }
     }
 
+    // Update the project boundary in the same SQLite transaction as finalize.
+    // Chunks include duplicate Errors that were omitted from native indexing,
+    // so the visible boundary still advances over every committed ingest seq.
+    for chunk in &batch.chunks {
+        let first = chunk
+            .payload
+            .records
+            .first()
+            .expect("validated nonempty chunk");
+        tx.execute(
+            "UPDATE project_ingest_state
+             SET last_searchable_at_us=?2,last_searchable_ingest_seq=?3,
+                 searchable_records=searchable_records+?4
+             WHERE project_id=?1 AND
+               (last_searchable_ingest_seq IS NULL OR last_searchable_ingest_seq<?3)",
+            params![
+                first.project_id,
+                first.received_at_us,
+                chunk.last_seq,
+                chunk.payload.records.len() as i64
+            ],
+        )?;
+    }
+
     update_shard(&tx, shard_id, expected, &batch)?;
     ensure!(
         tx.execute(

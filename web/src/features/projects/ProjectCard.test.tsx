@@ -4,11 +4,22 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, it, vi } from "vitest";
 import { endpoints } from "../../api/endpoints";
+import type { Project } from "../../api/types";
 import { ProjectCard } from "./ProjectCard";
 
 afterEach(() => vi.restoreAllMocks());
 
-function show() {
+function show(
+  project: Project = {
+    id: "1",
+    name: "Shop",
+    slug: "shop",
+    is_active: true,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
+) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -26,7 +37,7 @@ function show() {
           admin
           busy={false}
           userId="1"
-          project={{ id: "1", name: "Shop", slug: "shop", is_active: true }}
+          project={project}
           onCreateKey={vi.fn()}
           onToggle={vi.fn()}
           onRevokeKey={vi.fn()}
@@ -35,6 +46,20 @@ function show() {
     </QueryClientProvider>,
   );
 }
+it("shows durable receipt, searchable boundary, and pending record count", () => {
+  show({
+    id: "1",
+    name: "Shop",
+    slug: "shop",
+    is_active: true,
+    last_accepted_at_us: "1788800001000000",
+    last_searchable_at_us: "1788800000000000",
+    pending_records: "2",
+  });
+  expect(screen.getByText("마지막 수신 확정")).toBeVisible();
+  expect(screen.getByText("마지막 검색 반영")).toBeVisible();
+  expect(screen.getByText("2건")).toBeVisible();
+});
 it("copies the actual Sentry configuration with masking and reports success", async () => {
   const user = userEvent.setup();
   const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();

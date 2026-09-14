@@ -144,7 +144,15 @@ function loadAlerts(items: Alert[] = []) {
   const alerts = vi.spyOn(endpoints, "alerts").mockResolvedValue(items);
   vi.spyOn(endpoints, "alertDeliveries").mockResolvedValue([]);
   vi.spyOn(endpoints, "projects").mockResolvedValue([
-    { id: "2", slug: "api", name: "API", is_active: true },
+    {
+      id: "2",
+      slug: "api",
+      name: "API",
+      is_active: true,
+      last_accepted_at_us: null,
+      last_searchable_at_us: null,
+      pending_records: "0",
+    },
   ]);
   return alerts;
 }

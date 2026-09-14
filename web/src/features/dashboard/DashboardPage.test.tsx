@@ -23,7 +23,15 @@ const session: Session = {
   csrf_token: "csrf",
 };
 const projects: Project[] = [
-  { id: "7", slug: "api", name: "API", is_active: true },
+  {
+    id: "7",
+    slug: "api",
+    name: "API",
+    is_active: true,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
 ];
 const searchPage: SearchPage = {
   rows: [
@@ -220,8 +228,24 @@ it("automatically chooses the first active project and keeps absolute bounds whe
   const system = vi.spyOn(endpoints, "systemStatus");
   renderPage("/", { ...session, role: "member" }, [
     ...projects,
-    { id: "8", slug: "shop", name: "Shop", is_active: true },
-    { id: "9", slug: "old", name: "Old", is_active: false },
+    {
+      id: "8",
+      slug: "shop",
+      name: "Shop",
+      is_active: true,
+      last_accepted_at_us: null,
+      last_searchable_at_us: null,
+      pending_records: "0",
+    },
+    {
+      id: "9",
+      slug: "old",
+      name: "Old",
+      is_active: false,
+      last_accepted_at_us: null,
+      last_searchable_at_us: null,
+      pending_records: "0",
+    },
   ]);
   await waitFor(() => expect(rows).toHaveBeenCalledTimes(1));
   const first = rows.mock.calls[0][0];

@@ -6,6 +6,7 @@ import { describeApiError } from "../../api/client";
 import type { Project, ProjectKey } from "../../api/types";
 import { Button } from "../../components/Button";
 import { Notice } from "../../components/Notice";
+import { formatDecimal, formatTimestampUs } from "../../lib/decimal";
 
 interface ProjectCardProps {
   admin: boolean;
@@ -63,6 +64,29 @@ export function ProjectCard({
         </div>
         <span className="project-id">ID {project.id}</span>
       </header>
+
+      <dl className="metadata-grid">
+        <div>
+          <dt>마지막 수신 확정</dt>
+          <dd>
+            {project.last_accepted_at_us
+              ? formatTimestampUs(project.last_accepted_at_us)
+              : "기록 없음"}
+          </dd>
+        </div>
+        <div>
+          <dt>마지막 검색 반영</dt>
+          <dd>
+            {project.last_searchable_at_us
+              ? formatTimestampUs(project.last_searchable_at_us)
+              : "기록 없음"}
+          </dd>
+        </div>
+        <div>
+          <dt>검색 반영 대기</dt>
+          <dd>{formatDecimal(project.pending_records)}건</dd>
+        </div>
+      </dl>
 
       {keys.isError ? (
         <Notice tone="error">{describeApiError(keys.error)}</Notice>

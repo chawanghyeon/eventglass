@@ -21,7 +21,17 @@ it("switches views without mixing results or sending view state to the API", asy
   });
   client.setQueryData(
     ["projects", "1"],
-    [{ id: "1", name: "Shop", slug: "shop", is_active: true }],
+    [
+      {
+        id: "1",
+        name: "Shop",
+        slug: "shop",
+        is_active: true,
+        last_accepted_at_us: null,
+        last_searchable_at_us: null,
+        pending_records: "0",
+      },
+    ],
   );
   const list = vi
     .spyOn(endpoints, "replays")
@@ -97,8 +107,24 @@ it("guides a first-time admin to setup instead of showing unusable replay filter
 });
 
 const projects: Project[] = [
-  { id: "1", slug: "shop", name: "Shop", is_active: true },
-  { id: "2", slug: "api", name: "API", is_active: true },
+  {
+    id: "1",
+    slug: "shop",
+    name: "Shop",
+    is_active: true,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
+  {
+    id: "2",
+    slug: "api",
+    name: "API",
+    is_active: true,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
 ];
 function showList(
   path = "/replays?project=1",

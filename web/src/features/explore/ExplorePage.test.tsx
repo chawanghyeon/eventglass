@@ -17,7 +17,15 @@ const session: Session = {
   csrf_token: "csrf",
 };
 const projects: Project[] = [
-  { id: "7", slug: "api", name: "API", is_active: true },
+  {
+    id: "7",
+    slug: "api",
+    name: "API",
+    is_active: true,
+    last_accepted_at_us: null,
+    last_searchable_at_us: null,
+    pending_records: "0",
+  },
 ];
 const path =
   "/explore?start=2026-09-08T00%3A00%3A00Z&end=2026-09-09T00%3A00%3A00Z&project=7";
