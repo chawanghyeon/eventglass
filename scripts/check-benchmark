@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run deterministic capacity and sustained profiles under one CPU and 512 MiB."""
+"""Run deterministic capacity and sustained profiles with verified Linux limits."""
 
 import argparse
 import hashlib
@@ -11,6 +11,8 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 IMAGE = "rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97"
 MEMORY_BYTES = 536_870_912
+OPERATIONAL_MEMORY_BYTES = 1_073_741_824
+OPERATIONAL_DISK_BUDGET_BYTES = 50_000_000_000
 PROFILES = {"100k": 100_000, "1m": 1_000_000, "10m": 10_000_000, "sustained": 100_000}
 SUSTAINED = {
     "warmup_seconds": 300,
@@ -62,10 +64,18 @@ def source_hash():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profile", choices=PROFILES, nargs="?", default="100k")
+    parser.add_argument(
+        "--operational",
+        action="store_true",
+        help="measure under the production 0.25 CPU / 1 GiB / 50 GB data budget",
+    )
     parser.add_argument("--report", type=pathlib.Path)
     args = parser.parse_args()
     records = PROFILES[args.profile]
-    report = (args.report or ROOT / f".tools/benchmark/{args.profile}.json").resolve()
+    cpus = 0.25 if args.operational else 1
+    memory_bytes = OPERATIONAL_MEMORY_BYTES if args.operational else MEMORY_BYTES
+    suffix = "-operational" if args.operational else ""
+    report = (args.report or ROOT / f".tools/benchmark/{args.profile}{suffix}.json").resolve()
     report.parent.mkdir(parents=True, exist_ok=True)
     report.unlink(missing_ok=True)
     subprocess.run(
@@ -89,7 +99,7 @@ def main():
     try:
         print(
             "Build phase: 2 CPUs / 4 GiB. Benchmark phase: "
-            f"1 CPU / {MEMORY_BYTES} bytes / no swap / {records} records.",
+            f"{cpus} CPU / {memory_bytes} bytes / no swap / {records} records.",
             flush=True,
         )
         artifact_log = report.parent / f".{args.profile}-artifacts.jsonl"
@@ -131,9 +141,9 @@ def main():
             raise RuntimeError("benchmark test executable was not produced")
 
         limited = [
-            "--cpus=1",
-            f"--memory={MEMORY_BYTES}",
-            f"--memory-swap={MEMORY_BYTES}",
+            f"--cpus={cpus}",
+            f"--memory={memory_bytes}",
+            f"--memory-swap={memory_bytes}",
             "--network=none",
             *mounts,
         ]
@@ -169,6 +179,10 @@ def main():
             "-e",
             "EVENTGLASS_BENCH_RUST_VERSION=1.97.1",
         ]
+        if args.operational:
+            environment.extend(
+                ["-e", f"EVENTGLASS_BENCH_DISK_BUDGET_BYTES={OPERATIONAL_DISK_BUDGET_BYTES}"]
+            )
         if args.profile == "sustained":
             environment.extend(
                 [
@@ -198,18 +212,23 @@ def main():
         )
         evidence = json.loads(report.read_text())
         cgroup = evidence["cgroup"]
-        if cgroup["memory.max"] != str(MEMORY_BYTES):
-            raise RuntimeError("memory.max does not prove the 512 MiB limit")
+        if cgroup["memory.max"] != str(memory_bytes):
+            raise RuntimeError("memory.max does not prove the configured memory limit")
         if cgroup["memory.swap.max"] != "0":
             raise RuntimeError("memory.swap.max does not prove swap is disabled")
         quota, period = map(int, cgroup["cpu.max"].split())
-        if quota != period:
-            raise RuntimeError("cpu.max does not prove one CPU")
+        if quota != int(period * cpus):
+            raise RuntimeError("cpu.max does not prove the configured CPU quota")
         memory_events = dict(
             line.split() for line in cgroup["memory.events"].splitlines()
         )
         if int(memory_events.get("oom", "0")) != 0:
             raise RuntimeError("benchmark cgroup recorded an OOM")
+        if args.operational:
+            if evidence["disk_budget_bytes"] != OPERATIONAL_DISK_BUDGET_BYTES:
+                raise RuntimeError("operational data budget missing from evidence")
+            if evidence["data_dir_bytes"] > OPERATIONAL_DISK_BUDGET_BYTES:
+                raise RuntimeError("benchmark data exceeded the 50 GB operational budget")
         if args.profile == "sustained":
             expected_records = (
                 SUSTAINED["sustained_seconds"] * SUSTAINED["records_per_second"]
@@ -230,9 +249,10 @@ def main():
                 "image": IMAGE,
                 "source_sha256": source_hash(),
                 "runtime_limits": {
-                    "cpus": 1,
-                    "memory_bytes": MEMORY_BYTES,
+                    "cpus": cpus,
+                    "memory_bytes": memory_bytes,
                     "swap_bytes": 0,
+                    "data_budget_bytes": OPERATIONAL_DISK_BUDGET_BYTES if args.operational else None,
                 },
                 "container_oom_killed": state["OOMKilled"],
                 "selected_tests": selected,

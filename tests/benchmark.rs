@@ -114,6 +114,8 @@ struct Report {
     sqlite_bytes: u64,
     wal_bytes: u64,
     index_bytes: u64,
+    data_dir_bytes: u64,
+    disk_budget_bytes: Option<u64>,
     inbox_records_after_drain: i64,
     inbox_bytes_after_drain: i64,
     issue_count: i64,
@@ -385,7 +387,7 @@ async fn seeded_dataset_capacity() -> Result<()> {
     })?;
 
     acceptance_us.extend_from_slice(&sustained_acceptance_us);
-    let limitations = if phases.enabled() {
+    let mut limitations = if phases.enabled() {
         vec![
             "acceptance calls the production durable operation directly; HTTP wire ACK latency is covered separately",
             "S3 transfer and checkpoint lag are measured by the separate compatible storage gate",
@@ -397,8 +399,22 @@ async fn seeded_dataset_capacity() -> Result<()> {
             "S3 transfer and checkpoint lag are measured by the separate compatible storage gate",
         ]
     };
+    if env::var_os("EVENTGLASS_BENCH_DISK_BUDGET_BYTES").is_some() {
+        limitations.push("50 GB is a measured data-directory budget, not an enforced filesystem quota; ENOSPC is tested separately");
+    }
+    let disk_budget_bytes = env::var("EVENTGLASS_BENCH_DISK_BUDGET_BYTES")
+        .ok()
+        .map(|value| value.parse::<u64>())
+        .transpose()?;
+    let data_dir_bytes = tree_size(&data_dir)?;
+    if let Some(budget) = disk_budget_bytes {
+        ensure!(
+            data_dir_bytes <= budget,
+            "benchmark data exceeded the disk budget"
+        );
+    }
     let report = Report {
-        format_version: 2,
+        format_version: 3,
         duration_unit: "microseconds",
         size_unit: "bytes",
         profile,
@@ -433,6 +449,8 @@ async fn seeded_dataset_capacity() -> Result<()> {
         sqlite_bytes: size(&data_dir.join("meta.db"))?,
         wal_bytes: size(&data_dir.join("meta.db-wal"))?,
         index_bytes: tree_size(&data_dir.join("shards"))?,
+        data_dir_bytes,
+        disk_budget_bytes,
         inbox_records_after_drain: inbox_records,
         inbox_bytes_after_drain: inbox_bytes,
         issue_count,

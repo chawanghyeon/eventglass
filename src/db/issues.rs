@@ -59,7 +59,7 @@ pub struct Issue {
     pub created_at_us: String,
     pub updated_at_us: String,
     pub last_regressed_at_us: Option<String>,
-    /// Event-time activity; capped to bound reads on large Issues.
+    /// Receive-time activity; capped to bound reads on large Issues.
     pub recent_24h_count: String,
     pub previous_24h_count: String,
     pub activity_as_of_us: String,
@@ -69,14 +69,14 @@ const ACTIVITY_WINDOW_US: i64 = 24 * 60 * 60 * 1_000_000;
 const ACTIVITY_COUNT_CAP: i64 = 100;
 
 fn activity_count(db: &Connection, issue_id: &str, start: i64, end: i64) -> Result<i64> {
-    // The occurrence_listing index serves this bounded range. LIMIT is inside
+    // The receive-time index serves this bounded range. LIMIT is inside
     // the subquery so an Issue with millions of occurrences costs at most 100
     // index rows per window, even on a quarter-core installation.
     let mut statement = db.prepare_cached(
         "SELECT count(*) FROM (
            SELECT 1 FROM issue_occurrences
-           WHERE issue_id=?1 AND occurred_at_us>=?2 AND occurred_at_us<?3
-           ORDER BY occurred_at_us DESC LIMIT 100
+           WHERE issue_id=?1 AND received_at_us>=?2 AND received_at_us<?3
+           ORDER BY received_at_us DESC LIMIT 100
          )",
     )?;
     Ok(statement.query_row(params![issue_id, start, end], |row| row.get(0))?)
@@ -384,8 +384,8 @@ mod tests {
                      last_applied_inbox_id,created_at_us)
                  VALUES('shard',1,'format',1,'local',1,1);
                  INSERT INTO issue_occurrences(event_key,project_id,issue_id,record_id,shard_id,
-                     ingest_seq,occurred_at_us)
-                 VALUES('event',1,'{issue_id}','record','shard',1,1);"
+                     ingest_seq,occurred_at_us,received_at_us)
+                 VALUES('event',1,'{issue_id}','record','shard',1,1,1);"
             ))
             .expect("seed Issue database");
         (directory, database, issue_id)
@@ -399,19 +399,21 @@ mod tests {
     }
 
     #[test]
-    fn issue_activity_uses_bounded_event_time_windows() -> Result<()> {
+    fn issue_activity_uses_bounded_receive_time_windows() -> Result<()> {
         let (_directory, database, issue_id) = fixture();
         let now = now_us()?;
         let mut insert = database.prepare(
             "INSERT INTO issue_occurrences(event_key,project_id,issue_id,record_id,shard_id,
-             ingest_seq,occurred_at_us) VALUES(?1,1,?2,?1,'shard',?3,?4)",
+             ingest_seq,occurred_at_us,received_at_us)
+             VALUES(?1,1,?2,?1,'shard',?3,?4,?5)",
         )?;
         for ordinal in 0..102_i64 {
             insert.execute(params![
                 format!("recent-{ordinal}"),
                 issue_id,
                 ordinal + 2,
-                now - 10
+                now - ACTIVITY_WINDOW_US * 10,
+                now - 10,
             ])?;
         }
         for ordinal in 0..4_i64 {
@@ -419,7 +421,8 @@ mod tests {
                 format!("previous-{ordinal}"),
                 issue_id,
                 ordinal + 104,
-                now - ACTIVITY_WINDOW_US - 10
+                now + ACTIVITY_WINDOW_US * 10,
+                now - ACTIVITY_WINDOW_US - 10,
             ])?;
         }
         drop(insert);
@@ -430,6 +433,38 @@ mod tests {
         let page = list(&database, 1, 1, None, None, 1, None)?;
         assert_eq!(page.items[0].recent_24h_count, "100");
         assert_eq!(page.items[0].previous_24h_count, "4");
+        Ok(())
+    }
+
+    #[test]
+    fn skewed_event_clocks_do_not_change_receive_time_activity() -> Result<()> {
+        let (_directory, database, issue_id) = fixture();
+        let now = now_us()?;
+        database.execute(
+            "INSERT INTO issue_occurrences(event_key,project_id,issue_id,record_id,shard_id,
+             ingest_seq,occurred_at_us,received_at_us)
+             VALUES('future',1,?1,'future','shard',2,?2,?3)",
+            params![issue_id, now + ACTIVITY_WINDOW_US * 2, now - 10],
+        )?;
+        database.execute(
+            "INSERT INTO issue_occurrences(event_key,project_id,issue_id,record_id,shard_id,
+             ingest_seq,occurred_at_us,received_at_us)
+             VALUES('stale',1,?1,'stale','shard',3,?2,?3)",
+            params![issue_id, now - ACTIVITY_WINDOW_US * 10, now - 10],
+        )?;
+        database.execute(
+            "INSERT INTO issue_occurrences(event_key,project_id,issue_id,record_id,shard_id,
+             ingest_seq,occurred_at_us,received_at_us)
+             VALUES('old-arrival',1,?1,'old-arrival','shard',4,?2,?3)",
+            params![issue_id, now - 10, now - ACTIVITY_WINDOW_US * 3],
+        )?;
+        let item = get(&database, 1, &issue_id)?;
+        assert_eq!(item.recent_24h_count, "2");
+        assert_eq!(item.previous_24h_count, "0");
+        assert_eq!(
+            occurrences(&database, 1, &issue_id, 10, None)?.items.len(),
+            4
+        );
         Ok(())
     }
 

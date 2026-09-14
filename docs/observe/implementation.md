@@ -138,7 +138,7 @@ FinalizeBatch는 다음을 한 transaction에서 수행한다.
 
 Tantivy commit 전에 산출한 stale issue row를 통째로 UPDATE하지 않는다. Resolve도 같은 DbWorker에서 직렬화하며 `next_ingest_seq - 1`을 수신 경계로 저장한다. Indexer finalize 전에 resolve된 backlog는 regression이 아니다. 최초 신규 occurrence가 resolve 경계보다 클 때만 unresolved 전이·regression delivery를 만든다. ignored는 유지한다.
 
-Issue 목록·상세는 마지막 실제 regression 수신 시각을 보존하고, occurrence event time 기준 최근 24시간/직전 24시간 수를 각각 최대 100건까지만 읽는다. 이는 운영 우선순위 신호이며 정확한 전체 기간 통계로 사용하지 않는다. 기본 목록 순서와 cursor는 기존 `(last_seen_us,id)`를 유지한다. UI의 재발·급증·릴리스 변경 표시는 서버 오류를 포함한 모든 Error에 같은 기준을 적용한다.
+Issue 목록·상세는 마지막 실제 regression 수신 시각을 보존하고, occurrence의 서버 수신 시각 기준 최근 24시간/직전 24시간 수를 각각 최대 100건까지만 읽는다. SDK 시계 오차는 활동량에 영향을 주지 않으며, 발생 시각을 사용하는 상세·목록 정렬과 cursor는 기존 `(last_seen_us,id)`를 유지한다. 이전 schema에서 수신 시각이 저장되지 않은 occurrence는 업그레이드 때 발생 시각으로 이관하며, 이후 새로 수신한 건부터 정확한 수신 시각을 사용한다. 활동량은 운영 우선순위 신호이며 정확한 전체 기간 통계로 사용하지 않는다. UI의 재발·급증·릴리스 변경 표시는 서버 오류를 포함한 모든 Error에 같은 기준을 적용한다.
 
 관리 상태 linearization point는 SQLite commit이다. native commit과 finalize 사이의 관리 요청이 먼저 commit되면 그 최신 관리 상태를 반영한다. 복구 시 새로운 wall clock이나 alert 조회 때문에 존재했던 delivery를 다시 생성하지 않도록 delivery identity를 trigger sequence 또는 evaluation window로 결정한다. 성공하지 않은 finalize transaction의 결정을 보존할 별도 WAL은 만들지 않는다.
 

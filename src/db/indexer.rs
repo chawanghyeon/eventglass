@@ -642,8 +642,9 @@ fn finalize_error(
     // already derived both from the domain-separated project/source identity hash.
     let inserted = db.execute(
         "INSERT INTO issue_occurrences(
-             event_key,project_id,issue_id,record_id,shard_id,source_event_id,ingest_seq,occurred_at_us)
-         VALUES(?1,?2,?3,?1,?4,?5,?6,?7)
+             event_key,project_id,issue_id,record_id,shard_id,source_event_id,ingest_seq,
+             occurred_at_us,received_at_us)
+         VALUES(?1,?2,?3,?1,?4,?5,?6,?7,?8)
          ON CONFLICT(event_key) DO NOTHING",
         params![
             record.record_id,
@@ -652,7 +653,8 @@ fn finalize_error(
             shard_id,
             record.source_event_id,
             record.ingest_seq,
-            record.timestamp_us
+            record.timestamp_us,
+            record.received_at_us
         ],
     )? == 1;
     if !inserted {

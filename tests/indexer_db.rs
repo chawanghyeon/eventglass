@@ -198,6 +198,14 @@ fn prepare_deduplicates_errors_but_never_logs_and_finalize_replays_once() -> Res
         [],
         |row| { row.get::<_, bool>(0) }
     )?);
+    assert_eq!(
+        db.query_row(
+            "SELECT occurred_at_us,received_at_us FROM issue_occurrences",
+            [],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?,
+        (duplicate_error.timestamp_us, duplicate_error.received_at_us)
+    );
     let shard: (i64, i64, i64, i64) = db.query_row(
         "SELECT last_applied_inbox_id,record_count,min_ingest_seq,max_ingest_seq
          FROM shards WHERE id='active'",
