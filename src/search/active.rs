@@ -28,6 +28,7 @@ pub struct Published {
 
 pub struct ActiveShard {
     index: Index,
+    fields: super::schema::DocumentFields,
     writer: IndexWriter<TantivyDocument>,
     reader: IndexReader,
     committed: CommitPayload,
@@ -55,6 +56,7 @@ impl ActiveShard {
             .schema(super::schema::build())
             .settings(settings)
             .create_in_dir(path)?;
+        let fields = super::schema::DocumentFields::new(&index.schema())?;
         let mut writer = index.writer_with_num_threads(1, 32 * 1024 * 1024)?;
         let committed = CommitPayload {
             version: 1,
@@ -71,6 +73,7 @@ impl ActiveShard {
             .try_into()?;
         Ok(Self {
             index,
+            fields,
             writer,
             reader,
             committed,
@@ -89,6 +92,7 @@ impl ActiveShard {
             index.schema() == super::schema::build(),
             "active shard schema mismatch"
         );
+        let fields = super::schema::DocumentFields::new(&index.schema())?;
         let committed: CommitPayload = serde_json::from_str(
             &index
                 .load_metas()?
@@ -112,6 +116,7 @@ impl ActiveShard {
             .try_into()?;
         Ok(Self {
             index,
+            fields,
             writer,
             reader,
             committed,
@@ -158,7 +163,7 @@ impl ActiveShard {
         self.uncertain = true;
         for record in records {
             self.writer
-                .add_document(super::schema::document(&self.index.schema(), record)?)?;
+                .add_document(super::schema::document_with_fields(&self.fields, record)?)?;
         }
         let mut next = self.committed.clone();
         next.boundary = boundary;

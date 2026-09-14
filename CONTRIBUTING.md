@@ -16,6 +16,7 @@ Rust 1.97.1, Node 22.22.2/npm 10.9.7, Python 3.12를 사용합니다. `./scripts
 ./scripts/check sdk-live      # 실제 Python/Node/Browser/Go SDK 전송
 ./scripts/check resource      # Linux 실행: CPU 1 / 1GiB / swap 0
 ./scripts/check benchmark-100k # Linux 10만 건: CPU 1 / 512MiB / swap 0
+./scripts/check-benchmark smoke --operational # Linux 1만 건: 빠른 0.25 CPU 성능 비교
 ./scripts/check-benchmark 100k --operational # 운영 조건: CPU 0.25 / 1GiB / 50GB 데이터 예산
 ./scripts/check-resource --cpus 0.25 # 운영 CPU에서 격리된 Linux 기능 검사
 ./scripts/check release       # Linux amd64/arm64 + SPDX/notice/checksum

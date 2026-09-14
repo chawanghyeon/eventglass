@@ -13,7 +13,7 @@ IMAGE = "rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03
 MEMORY_BYTES = 536_870_912
 OPERATIONAL_MEMORY_BYTES = 1_073_741_824
 OPERATIONAL_DISK_BUDGET_BYTES = 50_000_000_000
-PROFILES = {"100k": 100_000, "1m": 1_000_000, "10m": 10_000_000, "sustained": 100_000}
+PROFILES = {"smoke": 10_000, "100k": 100_000, "1m": 1_000_000, "10m": 10_000_000, "sustained": 100_000}
 SUSTAINED = {
     "warmup_seconds": 300,
     "sustained_seconds": 1_800,

@@ -2,7 +2,7 @@ use anyhow::{Result, ensure};
 use tantivy::{
     DateTime, TantivyDocument,
     schema::{
-        DateOptions, DateTimePrecision, FAST, INDEXED, IndexRecordOption, JsonObjectOptions,
+        DateOptions, DateTimePrecision, FAST, Field, INDEXED, IndexRecordOption, JsonObjectOptions,
         STORED, STRING, Schema, TEXT, TextFieldIndexing, TextOptions,
     },
 };
@@ -11,6 +11,64 @@ use crate::model::{Record, RecordKind};
 
 pub const APPLICATION_SCHEMA_VERSION: u32 = 1;
 pub const TOKENIZER_VERSION: u32 = 1;
+
+pub struct DocumentFields {
+    record_id: Field,
+    kind: Field,
+    service: Field,
+    level: Field,
+    message: Field,
+    search_text: Field,
+    environment: Field,
+    release: Field,
+    logger: Field,
+    issue_id: Field,
+    fingerprint: Field,
+    trace_id: Field,
+    span_id: Field,
+    request_id: Field,
+    user_id: Field,
+    user_email: Field,
+    project_id: Field,
+    ingest_seq: Field,
+    timestamp: Field,
+    received_at: Field,
+    attributes: Field,
+    raw_json: Field,
+    normalizer_version: Field,
+    indexing_warnings: Field,
+}
+
+impl DocumentFields {
+    pub fn new(schema: &Schema) -> Result<Self> {
+        Ok(Self {
+            record_id: schema.get_field("record_id")?,
+            kind: schema.get_field("kind")?,
+            service: schema.get_field("service")?,
+            level: schema.get_field("level")?,
+            message: schema.get_field("message")?,
+            search_text: schema.get_field("search_text")?,
+            environment: schema.get_field("environment")?,
+            release: schema.get_field("release")?,
+            logger: schema.get_field("logger")?,
+            issue_id: schema.get_field("issue_id")?,
+            fingerprint: schema.get_field("fingerprint")?,
+            trace_id: schema.get_field("trace_id")?,
+            span_id: schema.get_field("span_id")?,
+            request_id: schema.get_field("request_id")?,
+            user_id: schema.get_field("user_id")?,
+            user_email: schema.get_field("user_email")?,
+            project_id: schema.get_field("project_id")?,
+            ingest_seq: schema.get_field("ingest_seq")?,
+            timestamp: schema.get_field("timestamp")?,
+            received_at: schema.get_field("received_at")?,
+            attributes: schema.get_field("attributes")?,
+            raw_json: schema.get_field("raw_json")?,
+            normalizer_version: schema.get_field("normalizer_version")?,
+            indexing_warnings: schema.get_field("indexing_warnings")?,
+        })
+    }
+}
 
 pub fn build() -> Schema {
     let mut schema = Schema::builder();
@@ -61,6 +119,10 @@ pub fn build() -> Schema {
 }
 
 pub fn document(schema: &Schema, record: &Record) -> Result<TantivyDocument> {
+    document_with_fields(&DocumentFields::new(schema)?, record)
+}
+
+pub fn document_with_fields(fields: &DocumentFields, record: &Record) -> Result<TantivyDocument> {
     ensure!(
         record.ingest_seq > 0 && record.project_id > 0,
         "unassigned record identity"
@@ -74,48 +136,42 @@ pub fn document(schema: &Schema, record: &Record) -> Result<TantivyDocument> {
         .checked_mul(1000)
         .ok_or_else(|| anyhow::anyhow!("received timestamp exceeds native DateTime range"))?;
     let mut doc = TantivyDocument::default();
-    for (name, value) in [
-        ("record_id", record.record_id.as_str()),
+    for (field, value) in [
+        (fields.record_id, record.record_id.as_str()),
         (
-            "kind",
+            fields.kind,
             match record.kind {
                 RecordKind::Log => "log",
                 RecordKind::Error => "error",
             },
         ),
-        ("service", record.service.as_str()),
-        ("level", record.level.as_str()),
-        ("message", record.message.as_str()),
-        ("search_text", record.search_text.as_str()),
+        (fields.service, record.service.as_str()),
+        (fields.level, record.level.as_str()),
+        (fields.message, record.message.as_str()),
+        (fields.search_text, record.search_text.as_str()),
     ] {
-        doc.add_text(schema.get_field(name)?, value);
+        doc.add_text(field, value);
     }
-    for (name, value) in [
-        ("environment", &record.environment),
-        ("release", &record.release),
-        ("logger", &record.logger),
-        ("issue_id", &record.issue_id),
-        ("fingerprint", &record.fingerprint),
-        ("trace_id", &record.trace_id),
-        ("span_id", &record.span_id),
-        ("request_id", &record.request_id),
-        ("user_id", &record.user_id),
-        ("user_email", &record.user_email),
+    for (field, value) in [
+        (fields.environment, &record.environment),
+        (fields.release, &record.release),
+        (fields.logger, &record.logger),
+        (fields.issue_id, &record.issue_id),
+        (fields.fingerprint, &record.fingerprint),
+        (fields.trace_id, &record.trace_id),
+        (fields.span_id, &record.span_id),
+        (fields.request_id, &record.request_id),
+        (fields.user_id, &record.user_id),
+        (fields.user_email, &record.user_email),
     ] {
         if let Some(value) = value {
-            doc.add_text(schema.get_field(name)?, value);
+            doc.add_text(field, value);
         }
     }
-    doc.add_i64(schema.get_field("project_id")?, record.project_id);
-    doc.add_i64(schema.get_field("ingest_seq")?, record.ingest_seq);
-    doc.add_date(
-        schema.get_field("timestamp")?,
-        DateTime::from_timestamp_nanos(timestamp),
-    );
-    doc.add_date(
-        schema.get_field("received_at")?,
-        DateTime::from_timestamp_nanos(received),
-    );
+    doc.add_i64(fields.project_id, record.project_id);
+    doc.add_i64(fields.ingest_seq, record.ingest_seq);
+    doc.add_date(fields.timestamp, DateTime::from_timestamp_nanos(timestamp));
+    doc.add_date(fields.received_at, DateTime::from_timestamp_nanos(received));
     // The native document conversion supports serde_json values without creating
     // per-attribute schema fields. Attributes must be an object by normalization.
     let attributes = record
@@ -123,22 +179,19 @@ pub fn document(schema: &Schema, record: &Record) -> Result<TantivyDocument> {
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("attributes must be an object"))?;
     doc.add_object(
-        schema.get_field("attributes")?,
+        fields.attributes,
         attributes
             .iter()
             .map(|(k, v)| (k.clone(), v.clone().into()))
             .collect(),
     );
-    doc.add_text(
-        schema.get_field("raw_json")?,
-        serde_json::to_string(&record.raw_json)?,
-    );
+    doc.add_text(fields.raw_json, serde_json::to_string(&record.raw_json)?);
     doc.add_u64(
-        schema.get_field("normalizer_version")?,
+        fields.normalizer_version,
         u64::from(record.normalizer_version),
     );
     doc.add_text(
-        schema.get_field("indexing_warnings")?,
+        fields.indexing_warnings,
         serde_json::to_string(&record.indexing_warnings)?,
     );
     Ok(doc)
@@ -147,6 +200,7 @@ pub fn document(schema: &Schema, record: &Record) -> Result<TantivyDocument> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tantivy::Document;
 
     fn record() -> Record {
         Record {
@@ -196,5 +250,32 @@ mod tests {
         let mut value = record();
         value.attributes = serde_json::json!([]);
         assert!(document(&schema, &value).is_err());
+    }
+
+    #[test]
+    fn cached_fields_preserve_every_document_value() -> Result<()> {
+        let schema = build();
+        let fields = DocumentFields::new(&schema)?;
+        let mut value = record();
+        value.environment = Some("production".into());
+        value.release = Some("v2".into());
+        value.logger = Some("api".into());
+        value.issue_id = Some("issue".into());
+        value.fingerprint = Some("fingerprint".into());
+        value.trace_id = Some("trace".into());
+        value.span_id = Some("span".into());
+        value.request_id = Some("request".into());
+        value.user_id = Some("user".into());
+        value.user_email = Some("user@example.test".into());
+        value.attributes = serde_json::json!({"region":"ap-northeast-2", "attempt":2});
+        value.raw_json = serde_json::json!({"message":"failed", "context":{"code":500}});
+        value.indexing_warnings = vec!["example".into()];
+        assert_eq!(
+            document(&schema, &value)?.to_named_doc(&schema).0,
+            document_with_fields(&fields, &value)?
+                .to_named_doc(&schema)
+                .0
+        );
+        Ok(())
     }
 }

@@ -479,7 +479,7 @@ async fn seeded_dataset_capacity() -> Result<()> {
 
 fn parse_record_count(value: &str) -> Result<usize> {
     let count: usize = value.parse()?;
-    ensure!(matches!(count, 100_000 | 1_000_000 | 10_000_000));
+    ensure!(matches!(count, 10_000 | 100_000 | 1_000_000 | 10_000_000));
     Ok(count)
 }
 
