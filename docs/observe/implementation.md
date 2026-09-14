@@ -272,6 +272,8 @@ Ingest 전용 CORS는 공개 DSN 수신에만 적용하고 credentials=false. ad
 
 키보드 검색/필터/상세 닫기, 폼 label, focus restore를 검증한다. row virtualization을 사용하더라도 복사·접근성 동작을 확인한다. UI snapshot만으로 제품 검증을 대신하지 않는다.
 
+JavaScript Source Map 지원은 [artifact identity·CI 업로드·복구 계약](source-maps.md)을 충족한 뒤 도입한다. 그 전에는 SDK가 보낸 scrubbed frame과 코드 문맥을 표시한다.
+
 ## 10. 자원·운영·빌드
 
 Limits concrete struct 하나에서 ingress 64 MiB, writer 32 MiB, aggregation 16 MiB, query 동시성 1, hydration 1, upload 1, hash 1로 시작한다. native library 최소 writer 예산과 실제 증폭은 G08에서 확인한다. 모든 task가 각각 최대를 가져도 된다는 뜻이 아니며 shared budget admission으로 조율한다.
