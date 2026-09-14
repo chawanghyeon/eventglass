@@ -141,6 +141,8 @@ G01–G06은 자동 Rust contracts target로 남긴다. G07의 캡처 결과는 
 
 ### P12 — 자원·성능·패키징과 RC
 
+0.25코어 운영 성능 개선의 단계별 측정·변경·회귀 기준은 [성능 개선 설계](performance-design.md)를 따른다.
+
 선행: P00–P11 + G08 실제 Linux 자원 검증.
 
 산출물: 100K/1M/10M seeded benchmark, 512 MiB stress, full crash, 실제 AWS 또는 명시 supported S3 검증, multiarch release artifact, SBOM/notice, 운영/백업/복구/upgrade 문서.

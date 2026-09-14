@@ -65,15 +65,29 @@ fn next_ingest_seq(db: &Connection) -> Result<i64> {
 }
 
 impl StagedChunk {
-    fn serialize(payload: &InboxPayload) -> Result<Self> {
-        let first = payload.records.first().expect("nonempty staged chunk");
-        let last = payload.records.last().expect("nonempty staged chunk");
+    fn serialize(
+        records: &[Vec<u8>],
+        first_seq: i64,
+        last_seq: i64,
+        received_at_us: i64,
+    ) -> Result<Self> {
+        const PREFIX: &[u8] = b"{\"version\":1,\"records\":[";
+        let record_bytes = records.iter().map(Vec::len).sum::<usize>();
+        let mut bytes = Vec::with_capacity(PREFIX.len() + record_bytes + records.len() + 1);
+        bytes.extend_from_slice(PREFIX);
+        for (index, record) in records.iter().enumerate() {
+            if index > 0 {
+                bytes.push(b',');
+            }
+            bytes.extend_from_slice(record);
+        }
+        bytes.extend_from_slice(b"]}");
         Ok(Self {
-            first_seq: first.ingest_seq,
-            last_seq: last.ingest_seq,
-            received_at_us: first.received_at_us,
-            count: payload.records.len(),
-            bytes: serde_json::to_vec(payload)?,
+            first_seq,
+            last_seq,
+            received_at_us,
+            count: records.len(),
+            bytes,
         })
     }
 }
@@ -143,10 +157,10 @@ pub fn accept_with_replay(
     let mut next = next_ingest_seq(&tx)?;
     let first = next;
     let accepted = records.len();
-    let mut current = InboxPayload {
-        version: 1,
-        records: Vec::new(),
-    };
+    let mut current = Vec::<Vec<u8>>::new();
+    let mut current_first_seq = 0;
+    let mut current_last_seq = 0;
+    let mut current_received_at_us = 0;
     let mut chunks = Vec::<StagedChunk>::new();
     let mut approximate_bytes = 0usize;
     let mut total_bytes = 0usize;
@@ -161,25 +175,41 @@ pub fn accept_with_replay(
         next = next
             .checked_add(1)
             .ok_or_else(|| anyhow::anyhow!("ingest sequence exhausted"))?;
-        let size = serde_json::to_vec(&record)?.len();
+        let encoded = serde_json::to_vec(&record)?;
+        let size = encoded.len();
         if size > limits.record_bytes {
             return Err(IngestError::TooLarge.into());
         }
-        if !current.records.is_empty()
-            && (current.records.len() >= limits.chunk_records
+        if !current.is_empty()
+            && (current.len() >= limits.chunk_records
                 || approximate_bytes + size + 32 > limits.chunk_bytes)
         {
-            let chunk = StagedChunk::serialize(&current)?;
+            let chunk = StagedChunk::serialize(
+                &current,
+                current_first_seq,
+                current_last_seq,
+                current_received_at_us,
+            )?;
             total_bytes += chunk.bytes.len();
             chunks.push(chunk);
-            current.records.clear();
+            current.clear();
             approximate_bytes = 0;
         }
+        if current.is_empty() {
+            current_first_seq = record.ingest_seq;
+            current_received_at_us = record.received_at_us;
+        }
+        current_last_seq = record.ingest_seq;
         approximate_bytes += size + 1;
-        current.records.push(record);
+        current.push(encoded);
     }
-    if !current.records.is_empty() {
-        let chunk = StagedChunk::serialize(&current)?;
+    if !current.is_empty() {
+        let chunk = StagedChunk::serialize(
+            &current,
+            current_first_seq,
+            current_last_seq,
+            current_received_at_us,
+        )?;
         total_bytes += chunk.bytes.len();
         chunks.push(chunk);
     }
@@ -353,6 +383,46 @@ mod tests {
             normalizer_version: 1,
             indexing_warnings: Vec::new(),
         }
+    }
+
+    #[test]
+    fn staged_chunk_reuses_record_bytes_without_changing_canonical_payload() -> Result<()> {
+        for records in [
+            vec![record()],
+            vec![
+                Record {
+                    ingest_seq: 7,
+                    message: "한글 \"quote\" \\ newline\n".into(),
+                    attributes: json!({"nested": [null, true, -0.0, 1.5]}),
+                    raw_json: json!({"emoji": "🔎", "empty": {}}),
+                    ..record()
+                },
+                Record {
+                    ingest_seq: 8,
+                    indexing_warnings: vec!["warning".into()],
+                    ..record()
+                },
+            ],
+        ] {
+            let encoded = records
+                .iter()
+                .map(serde_json::to_vec)
+                .collect::<serde_json::Result<Vec<_>>>()?;
+            let staged = StagedChunk::serialize(
+                &encoded,
+                records.first().unwrap().ingest_seq,
+                records.last().unwrap().ingest_seq,
+                records.first().unwrap().received_at_us,
+            )?;
+            assert_eq!(
+                staged.bytes,
+                serde_json::to_vec(&InboxPayload {
+                    version: 1,
+                    records,
+                })?
+            );
+        }
+        Ok(())
     }
 
     #[test]
