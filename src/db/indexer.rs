@@ -694,6 +694,7 @@ fn finalize_error(
                    WHEN ?2>last_seen_us OR (?2=last_seen_us AND ?1>last_seen_ingest_seq)
                    THEN ?5 ELSE level END,
                  status=CASE WHEN ?6 THEN 'unresolved' ELSE status END,
+                 last_regressed_at_us=CASE WHEN ?6 THEN ?7 ELSE last_regressed_at_us END,
                  revision=revision+CASE WHEN ?6 THEN 1 ELSE 0 END,
                  resolved_at_us=CASE WHEN ?6 THEN NULL ELSE resolved_at_us END,
                  resolved_through_ingest_seq=CASE

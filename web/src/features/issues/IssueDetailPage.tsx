@@ -192,6 +192,23 @@ export function IssueDetailPage() {
                 <dd>{formatDecimal(issue.data.occurrence_count)}회</dd>
               </div>
               <div>
+                <dt>최근 / 이전 24시간 발생</dt>
+                <dd>
+                  {formatDecimal(issue.data.recent_24h_count)}
+                  {issue.data.recent_24h_count === "100" ? "+" : ""} /{" "}
+                  {formatDecimal(issue.data.previous_24h_count)}
+                  {issue.data.previous_24h_count === "100" ? "+" : ""}회
+                </dd>
+              </div>
+              <div>
+                <dt>마지막 재발</dt>
+                <dd>
+                  {issue.data.last_regressed_at_us
+                    ? formatTimestampUs(issue.data.last_regressed_at_us)
+                    : "없음"}
+                </dd>
+              </div>
+              <div>
                 <dt>레벨</dt>
                 <dd>{issue.data.level}</dd>
               </div>

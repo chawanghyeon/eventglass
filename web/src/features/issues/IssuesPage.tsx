@@ -9,7 +9,7 @@ import { formatDecimal, formatTimestampUs } from "../../lib/decimal";
 import { useSession } from "../auth";
 import { projectsQuery } from "../projects";
 import { IssueStatusBadge } from "./IssueStatusBadge";
-import { isIssueStatus, issueStatusLabels } from "./presentation";
+import { isIssueStatus, issueSignals, issueStatusLabels } from "./presentation";
 import { issuesQuery } from "./queries";
 
 export function IssuesPage() {
@@ -237,11 +237,22 @@ export function IssuesPage() {
                       {issue.title}
                     </Link>
                     <span className="issue-level">{issue.level}</span>
+                    {issueSignals(issue).map((signal) => (
+                      <span className="issue-signal" key={signal}>
+                        {signal}
+                      </span>
+                    ))}
                   </th>
                   <td>
                     <IssueStatusBadge status={issue.status} />
                   </td>
-                  <td>{formatDecimal(issue.occurrence_count)}회</td>
+                  <td>
+                    {formatDecimal(issue.occurrence_count)}회
+                    <small className="issue-activity">
+                      최근 24시간 {formatDecimal(issue.recent_24h_count)}
+                      {issue.recent_24h_count === "100" ? "+" : ""}회
+                    </small>
+                  </td>
                   <td className="issue-time-pair">
                     <span>{formatTimestampUs(issue.first_seen_us)}</span>
                     <strong>{formatTimestampUs(issue.last_seen_us)}</strong>

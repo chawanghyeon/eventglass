@@ -87,6 +87,9 @@ it("renders partial untrusted exception and breadcrumb values as text with fallb
                   filename: "app.ts",
                   colno: 9,
                   function: "<script>bad()</script>",
+                  module: "payment.worker",
+                  in_app: true,
+                  context_line: "throw new Error('<script>bad()</script>')",
                 },
               ],
             },
@@ -118,6 +121,11 @@ it("renders partial untrusted exception and breadcrumb values as text with fallb
   ])
     expect(exceptions.getByText(label)).toBeInTheDocument();
   expect(document.querySelector("script")).toBeNull();
+  expect(exceptions.getByText("모듈 payment.worker")).toBeInTheDocument();
+  expect(exceptions.getByText("앱 코드")).toBeInTheDocument();
+  expect(
+    exceptions.getByText("throw new Error('<script>bad()</script>')"),
+  ).toBeInTheDocument();
   const breadcrumbs = within(
     screen.getByRole("region", { name: "Breadcrumbs" }),
   );

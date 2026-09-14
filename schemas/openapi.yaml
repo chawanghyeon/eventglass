@@ -1576,6 +1576,10 @@ components:
         - revision
         - created_at_us
         - updated_at_us
+        - last_regressed_at_us
+        - recent_24h_count
+        - previous_24h_count
+        - activity_as_of_us
       properties:
         id:
           $ref: "#/components/schemas/IssueId"
@@ -1617,6 +1621,20 @@ components:
           $ref: "#/components/schemas/Int64String"
         updated_at_us:
           $ref: "#/components/schemas/Int64String"
+        last_regressed_at_us:
+          oneOf:
+            - $ref: "#/components/schemas/Int64String"
+            - type: "null"
+          description: Latest real post-resolve occurrence received after the resolve watermark.
+        recent_24h_count:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+          description: Event-time count in the past 24 hours, capped at 100.
+        previous_24h_count:
+          $ref: "#/components/schemas/NonNegativeDecimalString"
+          description: Event-time count in the preceding 24 hours, capped at 100.
+        activity_as_of_us:
+          $ref: "#/components/schemas/Int64String"
+          description: Server clock used for both bounded activity windows.
     IssueCursor:
       type: object
       additionalProperties: false

@@ -148,6 +148,17 @@ export function RecordDetailPanel({
                             <li key={frameIndex}>
                               <code>{frameLabel(frame)}</code>
                               <span>{text(frame.function) ?? "함수 없음"}</span>
+                              {text(frame.module) ? (
+                                <small>모듈 {text(frame.module)}</small>
+                              ) : null}
+                              {frame.in_app === true ? (
+                                <small>앱 코드</small>
+                              ) : null}
+                              {text(frame.context_line) ? (
+                                <pre className="frame-context">
+                                  {text(frame.context_line)}
+                                </pre>
+                              ) : null}
                             </li>
                           ))}
                         </ol>

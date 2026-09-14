@@ -1249,6 +1249,22 @@ textarea {
   font-size: 0.74rem;
   text-transform: uppercase;
 }
+.issue-signal {
+  display: inline-block;
+  margin-left: 0.4rem;
+  color: var(--danger-ink, #9d3434);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.issue-activity {
+  display: block;
+  color: var(--muted-ink, #66717d);
+}
+.frame-context {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0.25rem 0 0;
+}
 .issue-time-pair {
   min-width: 11rem;
   color: var(--muted);

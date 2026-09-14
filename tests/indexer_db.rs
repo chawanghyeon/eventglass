@@ -382,6 +382,11 @@ fn lifecycle_uses_finalize_time_state_tuple_order_and_deterministic_outbox() -> 
         },
     )?;
     assert_eq!(reopened, ("unresolved".into(), 3, 2, None, None));
+    assert_eq!(
+        db.query_row("SELECT last_regressed_at_us FROM issues", [], |row| row
+            .get::<_, i64>(0))?,
+        2_000_000
+    );
     let deliveries: Vec<(String, String)> = {
         let mut statement = db.prepare(
             "SELECT json_extract(payload_json,'$.kind'),dedupe_key

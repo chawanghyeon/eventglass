@@ -57,6 +57,10 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     revision: "3",
     created_at_us: "1788800000000000",
     updated_at_us: "1788800002000000",
+    last_regressed_at_us: null,
+    recent_24h_count: "0",
+    previous_24h_count: "0",
+    activity_as_of_us: "1788800002000000",
     ...overrides,
   };
 }
@@ -104,6 +108,28 @@ afterEach(() => {
 });
 
 describe("IssuesPage", () => {
+  it("highlights a recent server error regression, surge, and release change", async () => {
+    vi.spyOn(endpoints, "issues").mockResolvedValue({
+      items: [
+        makeIssue({
+          status: "unresolved",
+          first_release: "v1",
+          last_release: "v2",
+          last_regressed_at_us: (BigInt(Date.now()) * 1000n).toString(),
+          activity_as_of_us: (BigInt(Date.now()) * 1000n).toString(),
+          recent_24h_count: "20",
+          previous_24h_count: "5",
+        }),
+      ],
+      next_cursor: null,
+    });
+    renderPage(`/issues?project=${projects[0].id}`);
+    expect(await screen.findByText("재발")).toBeVisible();
+    expect(screen.getByText("최근 급증")).toBeVisible();
+    expect(screen.getByText("릴리스 변경")).toBeVisible();
+    expect(screen.getByText("최근 24시간 20회")).toBeVisible();
+  });
+
   it("keeps filters and stable cursor pagination in the URL and query key", async () => {
     const user = userEvent.setup();
     const page: IssuePage = {

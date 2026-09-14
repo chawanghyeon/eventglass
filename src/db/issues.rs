@@ -58,6 +58,40 @@ pub struct Issue {
     pub revision: String,
     pub created_at_us: String,
     pub updated_at_us: String,
+    pub last_regressed_at_us: Option<String>,
+    /// Event-time activity; capped to bound reads on large Issues.
+    pub recent_24h_count: String,
+    pub previous_24h_count: String,
+    pub activity_as_of_us: String,
+}
+
+const ACTIVITY_WINDOW_US: i64 = 24 * 60 * 60 * 1_000_000;
+const ACTIVITY_COUNT_CAP: i64 = 100;
+
+fn activity_count(db: &Connection, issue_id: &str, start: i64, end: i64) -> Result<i64> {
+    // The occurrence_listing index serves this bounded range. LIMIT is inside
+    // the subquery so an Issue with millions of occurrences costs at most 100
+    // index rows per window, even on a quarter-core installation.
+    let mut statement = db.prepare_cached(
+        "SELECT count(*) FROM (
+           SELECT 1 FROM issue_occurrences
+           WHERE issue_id=?1 AND occurred_at_us>=?2 AND occurred_at_us<?3
+           ORDER BY occurred_at_us DESC LIMIT 100
+         )",
+    )?;
+    Ok(statement.query_row(params![issue_id, start, end], |row| row.get(0))?)
+}
+
+fn fill_activity(db: &Connection, issue: &mut Issue, now: i64) -> Result<()> {
+    let recent_start = now.saturating_sub(ACTIVITY_WINDOW_US);
+    let previous_start = recent_start.saturating_sub(ACTIVITY_WINDOW_US);
+    let recent = activity_count(db, &issue.id, recent_start, now)?;
+    let previous = activity_count(db, &issue.id, previous_start, recent_start)?;
+    debug_assert!(recent <= ACTIVITY_COUNT_CAP && previous <= ACTIVITY_COUNT_CAP);
+    issue.recent_24h_count = recent.to_string();
+    issue.previous_24h_count = previous.to_string();
+    issue.activity_as_of_us = now.to_string();
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -140,12 +174,20 @@ fn issue_from_row(row: &Row<'_>) -> rusqlite::Result<Issue> {
         revision: row.get::<_, i64>(15)?.to_string(),
         created_at_us: row.get::<_, i64>(16)?.to_string(),
         updated_at_us: row.get::<_, i64>(17)?.to_string(),
+        last_regressed_at_us: row
+            .get::<_, Option<i64>>(18)?
+            .map(|value| value.to_string()),
+        recent_24h_count: "0".into(),
+        previous_24h_count: "0".into(),
+        activity_as_of_us: "0".into(),
     })
 }
 
-const ISSUE_COLUMNS: &str = "i.id,i.project_id,i.fingerprint,i.fingerprint_version,i.title,i.culprit,i.level,\
+const ISSUE_COLUMNS: &str =
+    "i.id,i.project_id,i.fingerprint,i.fingerprint_version,i.title,i.culprit,i.level,\
      i.status,i.first_seen_us,i.last_seen_us,i.occurrence_count,i.first_release,i.last_release,\
-     i.resolved_at_us,i.resolved_through_ingest_seq,i.revision,i.created_at_us,i.updated_at_us";
+     i.resolved_at_us,i.resolved_through_ingest_seq,i.revision,i.created_at_us,i.updated_at_us,
+     i.last_regressed_at_us";
 
 pub fn list(
     db: &Connection,
@@ -186,6 +228,10 @@ pub fn list(
     let mut items = rows.collect::<std::result::Result<Vec<_>, _>>()?;
     let has_more = items.len() > limit;
     items.truncate(limit);
+    let now = now_us()?;
+    for issue in &mut items {
+        fill_activity(db, issue, now)?;
+    }
     let next_cursor = has_more.then(|| {
         let last = items.last().expect("positive bounded page has a last row");
         IssueCursor {
@@ -203,9 +249,12 @@ pub fn get(db: &Connection, actor: i64, issue_id: &str) -> Result<Issue> {
          FROM issues i JOIN projects p ON p.id=i.project_id
          WHERE i.id=?1 AND p.is_active=1"
     );
-    db.query_row(&sql, [issue_id], issue_from_row)
+    let mut issue = db
+        .query_row(&sql, [issue_id], issue_from_row)
         .optional()?
-        .ok_or_else(|| IssueDbError::NotFound.into())
+        .ok_or(IssueDbError::NotFound)?;
+    fill_activity(db, &mut issue, now_us()?)?;
+    Ok(issue)
 }
 
 pub fn occurrences(
@@ -347,6 +396,41 @@ mod tests {
             .downcast_ref::<IssueDbError>()
             .expect("Issue error kind")
             .to_string()
+    }
+
+    #[test]
+    fn issue_activity_uses_bounded_event_time_windows() -> Result<()> {
+        let (_directory, database, issue_id) = fixture();
+        let now = now_us()?;
+        let mut insert = database.prepare(
+            "INSERT INTO issue_occurrences(event_key,project_id,issue_id,record_id,shard_id,
+             ingest_seq,occurred_at_us) VALUES(?1,1,?2,?1,'shard',?3,?4)",
+        )?;
+        for ordinal in 0..102_i64 {
+            insert.execute(params![
+                format!("recent-{ordinal}"),
+                issue_id,
+                ordinal + 2,
+                now - 10
+            ])?;
+        }
+        for ordinal in 0..4_i64 {
+            insert.execute(params![
+                format!("previous-{ordinal}"),
+                issue_id,
+                ordinal + 104,
+                now - ACTIVITY_WINDOW_US - 10
+            ])?;
+        }
+        drop(insert);
+        let item = get(&database, 1, &issue_id)?;
+        assert_eq!(item.recent_24h_count, "100");
+        assert_eq!(item.previous_24h_count, "4");
+        assert!(item.activity_as_of_us.parse::<i64>()? >= now);
+        let page = list(&database, 1, 1, None, None, 1, None)?;
+        assert_eq!(page.items[0].recent_24h_count, "100");
+        assert_eq!(page.items[0].previous_24h_count, "4");
+        Ok(())
     }
 
     #[test]

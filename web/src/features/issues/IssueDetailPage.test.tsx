@@ -45,6 +45,10 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
     revision: "9007199254740993",
     created_at_us: "1788800000000000",
     updated_at_us: "1788800001000000",
+    last_regressed_at_us: null,
+    recent_24h_count: "0",
+    previous_24h_count: "0",
+    activity_as_of_us: "1788800002000000",
     ...overrides,
   };
 }

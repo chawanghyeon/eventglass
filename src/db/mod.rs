@@ -23,13 +23,15 @@ const INITIAL_SCHEMA: &str = include_str!("../../migrations/0001_initial.sql");
 const REPLAY_SCHEMA: &str = include_str!("../../migrations/0002_replays.sql");
 const EVICTION_SCHEMA: &str = include_str!("../../migrations/0003_eviction_candidates.sql");
 const PROJECT_INGEST_SCHEMA: &str = include_str!("../../migrations/0004_project_ingest_state.sql");
+const ISSUE_REGRESSION_SCHEMA: &str = include_str!("../../migrations/0005_issue_regression.sql");
 const MIGRATIONS: &[&str] = &[
     INITIAL_SCHEMA,
     REPLAY_SCHEMA,
     EVICTION_SCHEMA,
     PROJECT_INGEST_SCHEMA,
+    ISSUE_REGRESSION_SCHEMA,
 ];
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Open a database after the caller has acquired the exclusive data-directory lock.
 /// A corrupt or newer database is returned as an error, never replaced.
@@ -487,6 +489,49 @@ mod tests {
             |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
         )?;
         assert_eq!(state, (20, 5, 3, 0));
+        Ok(())
+    }
+
+    #[test]
+    fn version_four_upgrade_preserves_issue_rows() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("issue-upgrade.db");
+        let db = Connection::open(&path)?;
+        for (index, sql) in [
+            INITIAL_SCHEMA,
+            REPLAY_SCHEMA,
+            EVICTION_SCHEMA,
+            PROJECT_INGEST_SCHEMA,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            db.execute_batch(sql)?;
+            db.execute(
+                "INSERT INTO schema_migrations(version,checksum,applied_at_us) VALUES(?1,?2,0)",
+                rusqlite::params![
+                    index as i64 + 1,
+                    format!("{:x}", Sha256::digest(sql.as_bytes()))
+                ],
+            )?;
+        }
+        db.execute_batch(
+            "INSERT INTO projects(id,slug,name,created_at_us,updated_at_us)
+             VALUES(1,'keep','Keep',0,0);
+             INSERT INTO issues(id,project_id,fingerprint,fingerprint_version,title,level,status,
+                                first_seen_us,last_seen_us,occurrence_count,first_seen_ingest_seq,
+                                last_seen_ingest_seq,created_at_us,updated_at_us)
+             VALUES('issue',1,'fingerprint',1,'Preserved','error','unresolved',1,1,1,1,1,1,1);",
+        )?;
+        drop(db);
+        let db = open(&path)?;
+        let (title, regressed): (String, Option<i64>) = db.query_row(
+            "SELECT title,last_regressed_at_us FROM issues WHERE id='issue'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(title, "Preserved");
+        assert_eq!(regressed, None);
         Ok(())
     }
 }

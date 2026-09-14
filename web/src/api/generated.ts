@@ -674,6 +674,14 @@ export interface components {
             revision: components["schemas"]["NonNegativeDecimalString"];
             created_at_us: components["schemas"]["Int64String"];
             updated_at_us: components["schemas"]["Int64String"];
+            /** @description Latest real post-resolve occurrence received after the resolve watermark. */
+            last_regressed_at_us: components["schemas"]["Int64String"] | null;
+            /** @description Event-time count in the past 24 hours, capped at 100. */
+            recent_24h_count: components["schemas"]["NonNegativeDecimalString"];
+            /** @description Event-time count in the preceding 24 hours, capped at 100. */
+            previous_24h_count: components["schemas"]["NonNegativeDecimalString"];
+            /** @description Server clock used for both bounded activity windows. */
+            activity_as_of_us: components["schemas"]["Int64String"];
         };
         IssueCursor: {
             last_seen_us: components["schemas"]["Int64String"];
