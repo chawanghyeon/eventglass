@@ -182,6 +182,8 @@ SDK가 기능을 지원하지 않으면 버전 표에 unsupported/이유를 남�
 
 로컬 storage 검사는 고정 digest의 검증 가능한 S3-compatible test server를 격리 실행한다. localhost ephemeral credential만 사용한다. AWS S3 실제 계약은 RC의 전용 bucket/prefix에서 별도로 검사한다. 권한/예산이 없으면 AWS 검증은 BLOCKED이며 release 완료로 표시하지 않는다.
 
+`eventglass backup rehearse`는 운영 data_dir을 열지 않고 임시 디렉터리에서 원격 checkpoint 후보의 다운로드·checksum·설치·현재 schema migration·doctor를 검증한다. 이는 복구 가능성의 읽기 전용 점검이며, pending Inbox를 실제 Indexer로 drain하는 full-loss startup gate나 실제 AWS RC 검증을 대체하지 않는다. 임시 디스크 한도와 S3 읽기 비용을 결과 해석에 포함한다.
+
 AWS 검사는 로컬의 명시적 RC 명령에서만 실행한다. 고유 run prefix와 installation ID를 사용하고 생성한 테스트 객체만 cleanup한다. bucket 전체 삭제 금지. checksum/multipart/conditional create/list pagination/abort/restore 검사를 실제 SDK로 실행하며 object bytes와 요청 수를 기록한다.
 
 Full-loss test는 **harness가 만든 임시 data_dir**임을 marker와 경로로 확인한 뒤 제거한다. 개발자의 `EVENTGLASS_DATA_DIR`, 홈, repo data 디렉터리를 지우는 명령을 재사용하지 않는다.

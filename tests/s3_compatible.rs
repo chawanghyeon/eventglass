@@ -69,6 +69,13 @@ async fn minio_checkpoint_and_object_contract() -> Result<()> {
         ensure_installation(&store, &installation, true).await?,
         installation
     );
+    let empty_rehearsal = tempfile::tempdir()?;
+    assert!(
+        eventglass::operations::rehearse_backup(&store, empty_rehearsal.path())
+            .await
+            .is_err(),
+        "an installation without a checkpoint cannot pass rehearsal"
+    );
     assert!(
         prepare_restore(
             &store,
@@ -139,6 +146,29 @@ async fn minio_checkpoint_and_object_contract() -> Result<()> {
 
     let latest = publish(&store, candidate).await?;
     ensure!(latest.sequence == candidate.document.sequence);
+    let before_rehearsal = list_all(&store).await?.len();
+    let untouched = root.path().join("rehearsal-must-not-use-operating-data");
+    let command = std::process::Command::new(env!("CARGO_BIN_EXE_eventglass"))
+        .args(["backup", "rehearse"])
+        .env("EVENTGLASS_S3_URL", format!("s3://{bucket}/{prefix}"))
+        .env("EVENTGLASS_S3_ENDPOINT", endpoint.as_str())
+        .env("EVENTGLASS_DATA_DIR", &untouched)
+        .env("EVENTGLASS_S3_INITIALIZE", "false")
+        .output()?;
+    ensure!(
+        command.status.success(),
+        "backup rehearsal CLI failed: {}",
+        String::from_utf8_lossy(&command.stderr)
+    );
+    let rehearsal: Value = serde_json::from_slice(&command.stdout)?;
+    ensure!(rehearsal["doctor"]["ok"] == true);
+    ensure!(rehearsal["checkpoint_id"] == candidate.document.checkpoint_id);
+    ensure!(rehearsal["checkpoint_ingest_seq"] == "2");
+    ensure!(
+        !untouched.exists(),
+        "rehearsal opened the configured operating data directory"
+    );
+    ensure!(list_all(&store).await?.len() == before_rehearsal);
 
     let cancelled_destination = root.path().join("cancelled-data").join(".restore");
     assert!(

@@ -31,6 +31,16 @@ async fn main() -> anyhow::Result<()> {
         println!("{}", serde_json::to_string_pretty(&report)?);
         return Ok(());
     }
+    if args.iter().map(String::as_str).collect::<Vec<_>>() == ["backup", "rehearse"] {
+        #[cfg(feature = "s3")]
+        {
+            let report = eventglass::operations::backup_rehearsal(&config).await?;
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        #[cfg(not(feature = "s3"))]
+        anyhow::bail!("backup rehearsal requires an S3-enabled binary");
+    }
     let reset_email = match args.as_slice() {
         [admin, reset, email] if admin == "admin" && reset == "reset-password" => {
             Some(email.as_str())
@@ -42,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
             || args == ["serve"]
             || args == ["admin", "setup-token"]
             || reset_email.is_some(),
-        "usage: eventglass [serve|version|doctor|admin setup-token|admin reset-password EMAIL]"
+        "usage: eventglass [serve|version|doctor|backup rehearse|admin setup-token|admin reset-password EMAIL]"
     );
     let app = AppState::open(config).await?;
     if let Some(email) = reset_email {

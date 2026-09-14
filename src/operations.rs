@@ -183,6 +183,85 @@ pub fn doctor(data_dir: &Path) -> Result<DoctorReport> {
     doctor_connection(&db, data_dir)
 }
 
+#[cfg(feature = "s3")]
+#[derive(Debug, Serialize)]
+pub struct BackupRehearsalReport {
+    pub checkpoint_id: String,
+    pub checkpoint_sequence: String,
+    pub checkpoint_ingest_seq: String,
+    pub doctor: DoctorReport,
+}
+
+/// Exercise download, verification, installation and schema migration in an
+/// isolated temporary directory. The remote ObjectStore is read-only here.
+#[cfg(feature = "s3")]
+pub async fn rehearse_backup(
+    store: &dyn crate::storage::s3::ObjectStore,
+    scratch: &Path,
+) -> Result<BackupRehearsalReport> {
+    ensure!(scratch.is_dir(), "rehearsal scratch directory is missing");
+    ensure!(
+        std::fs::read_dir(scratch)?.next().is_none(),
+        "rehearsal scratch directory must be empty"
+    );
+    let installation = crate::storage::remote::read_installation(store)
+        .await?
+        .context("S3 prefix has no installation")?;
+    let free = fs4::available_space(scratch)?;
+    let total = fs4::total_space(scratch)?;
+    let floor = (total / 10).max(512 * 1024 * 1024);
+    let download_budget = free.saturating_sub(floor) / 2;
+    ensure!(
+        download_budget >= 4 * 1024 * 1024,
+        "insufficient scratch disk for rehearsal"
+    );
+    let defaults = crate::storage::remote::RestoreLimits::default();
+    let limits = crate::storage::remote::RestoreLimits {
+        snapshot_bytes: defaults.snapshot_bytes.min(download_budget),
+        shard_archive_bytes: defaults.shard_archive_bytes.min(download_budget),
+        shard_expanded_bytes: defaults.shard_expanded_bytes.min(download_budget),
+        total_download_bytes: defaults.total_download_bytes.min(download_budget),
+    };
+    let staged = scratch.join(format!(".restore-{}", uuid::Uuid::new_v4()));
+    let prepared = crate::storage::remote::prepare_restore(
+        store,
+        &installation.installation_id,
+        &staged,
+        limits,
+        || false,
+    )
+    .await?;
+    let checkpoint_id = prepared.document.checkpoint_id.clone();
+    let checkpoint_sequence = prepared.document.sequence.to_string();
+    let checkpoint_ingest_seq = prepared.document.cut.boundary.ingest_seq.to_string();
+    crate::storage::remote::install_prepared(scratch, prepared)?;
+    // Startup migrates older snapshots before opening the core. Do that only
+    // in scratch; starting the core here could trigger external alert delivery.
+    drop(crate::db::open(&scratch.join("meta.db"))?);
+    let doctor = doctor(scratch)?;
+    Ok(BackupRehearsalReport {
+        checkpoint_id,
+        checkpoint_sequence,
+        checkpoint_ingest_seq,
+        doctor,
+    })
+}
+
+#[cfg(feature = "s3")]
+pub async fn backup_rehearsal(config: &crate::config::Config) -> Result<BackupRehearsalReport> {
+    let url = config
+        .s3_url
+        .as_deref()
+        .context("EVENTGLASS_S3_URL is required for backup rehearsal")?;
+    let location = crate::storage::s3::S3Location::parse(url)?;
+    let store =
+        crate::storage::s3::AwsObjectStore::load(location, config.s3_endpoint.as_ref()).await?;
+    let scratch = tempfile::Builder::new()
+        .prefix("eventglass-backup-rehearsal-")
+        .tempdir()?;
+    rehearse_backup(&store, scratch.path()).await
+}
+
 pub fn doctor_connection(db: &Connection, data_dir: &Path) -> Result<DoctorReport> {
     let (installation, generation): (String, String) = db.query_row(
         "SELECT installation_id,storage_generation FROM runtime_state WHERE singleton=1",
