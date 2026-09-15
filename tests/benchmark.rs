@@ -205,6 +205,23 @@ async fn seeded_dataset_capacity() -> Result<()> {
     let visibility_started = Instant::now();
     wait_for_visibility(&app, i64::try_from(records)?).await?;
     let visibility_lag = visibility_started.elapsed();
+    println!(
+        "seed complete: seed_ms={} visibility_ms={} batches={} segments={}",
+        seed_elapsed.as_millis(),
+        visibility_lag.as_millis(),
+        app.indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .performance()
+            .batches,
+        app.indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .snapshot()?
+            .searcher
+            .segment_readers()
+            .len()
+    );
 
     let warmup_started = Instant::now();
     while warmup_started.elapsed() < phases.warmup {
@@ -857,7 +874,8 @@ fn cgroup_evidence() -> Value {
             .map(|value| value.trim().to_owned())
     };
     json!({
-        "cpu.max": read("cpu.max"), "memory.max": read("memory.max"),
+        "cpu.max": read("cpu.max"), "cpu.stat": read("cpu.stat"),
+        "memory.max": read("memory.max"),
         "memory.swap.max": read("memory.swap.max"), "memory.peak": read("memory.peak"),
         "memory.events": read("memory.events"),
     })
