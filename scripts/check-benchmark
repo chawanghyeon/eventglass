@@ -120,6 +120,7 @@ def main():
                     "cargo",
                     "test",
                     "--locked",
+                    "--release",
                     "--test",
                     "benchmark",
                     "--no-run",
@@ -128,6 +129,7 @@ def main():
                 stdout=output,
             )
         executable = None
+        executable_profile = {}
         for line in artifact_log.read_text().splitlines():
             item = json.loads(line)
             if (
@@ -136,9 +138,19 @@ def main():
                 and item.get("executable")
             ):
                 executable = item["executable"]
+                executable_profile = item.get("profile", {})
         artifact_log.unlink()
         if executable is None:
             raise RuntimeError("benchmark test executable was not produced")
+        if (
+            executable_profile.get("opt_level") != "3"
+            or executable_profile.get("debug_assertions") is not False
+            or executable_profile.get("overflow_checks") is not False
+        ):
+            raise RuntimeError(
+                "benchmark executable does not prove release optimization: "
+                + json.dumps(executable_profile, sort_keys=True)
+            )
 
         limited = [
             f"--cpus={cpus}",
@@ -256,6 +268,12 @@ def main():
                 },
                 "container_oom_killed": state["OOMKilled"],
                 "selected_tests": selected,
+                "build_profile": {
+                    "name": "release",
+                    "opt_level": executable_profile.get("opt_level"),
+                    "debug_assertions": executable_profile.get("debug_assertions"),
+                    "overflow_checks": executable_profile.get("overflow_checks"),
+                },
             }
         )
         replacement = report.with_suffix(report.suffix + ".tmp")
