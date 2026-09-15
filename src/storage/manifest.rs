@@ -303,15 +303,23 @@ pub fn local_size(root: &Path, manifest: &Manifest) -> Result<u64> {
         })
 }
 
+fn active_entry_size(path: &Path) -> Result<Option<u64>> {
+    let Some(metadata) = optional_metadata(path)? else {
+        return Ok(None);
+    };
+    ensure!(
+        metadata.file_type().is_file(),
+        "active shard contains a non-regular entry"
+    );
+    Ok(Some(metadata.len()))
+}
+
 pub fn active_size(root: &Path) -> Result<u64> {
     fs::read_dir(root)?.try_fold(0u64, |sum, entry| {
-        let metadata = fs::symlink_metadata(entry?.path())?;
-        ensure!(
-            metadata.file_type().is_file(),
-            "active shard contains a non-regular entry"
-        );
-        sum.checked_add(metadata.len())
-            .context("active shard size overflow")
+        let Some(size) = active_entry_size(&entry?.path())? else {
+            return Ok(sum);
+        };
+        sum.checked_add(size).context("active shard size overflow")
     })
 }
 
@@ -396,6 +404,7 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let manifest = valid_manifest();
         assert!(local_size(directory.path(), &manifest).is_err());
+        assert_eq!(active_entry_size(&directory.path().join("removed"))?, None);
         fs::create_dir(directory.path().join("nested"))?;
         assert!(active_size(directory.path()).is_err());
         Ok(())
