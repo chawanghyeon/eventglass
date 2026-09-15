@@ -95,6 +95,8 @@ struct Report {
     seed_elapsed_ms: u128,
     seed_records_per_second: f64,
     visibility_lag_ms: u128,
+    indexer_performance: eventglass::indexer::IndexerPerformance,
+    active_segments: usize,
     warmup_duration_ms: u128,
     sustained_duration_ms: u128,
     drain_duration_ms: u128,
@@ -414,7 +416,7 @@ async fn seeded_dataset_capacity() -> Result<()> {
         );
     }
     let report = Report {
-        format_version: 3,
+        format_version: 4,
         duration_unit: "microseconds",
         size_unit: "bytes",
         profile,
@@ -430,6 +432,19 @@ async fn seeded_dataset_capacity() -> Result<()> {
         seed_elapsed_ms: seed_elapsed.as_millis(),
         seed_records_per_second: records as f64 / seed_elapsed.as_secs_f64(),
         visibility_lag_ms: visibility_lag.as_millis(),
+        indexer_performance: app
+            .indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .performance(),
+        active_segments: app
+            .indexer
+            .as_ref()
+            .context("missing Indexer")?
+            .snapshot()?
+            .searcher
+            .segment_readers()
+            .len(),
         warmup_duration_ms: warmup_elapsed.as_millis(),
         sustained_duration_ms: sustained_elapsed.as_millis(),
         drain_duration_ms: drain_elapsed.as_millis(),
