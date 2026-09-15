@@ -3,7 +3,11 @@
 use std::{
     collections::HashSet,
     path::Path,
-    sync::{Arc, Mutex, RwLock},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, ensure};
@@ -20,6 +24,60 @@ pub struct Indexer {
     control: Arc<Control>,
     view: Arc<RwLock<View>>,
     registry: crate::storage::registry::Registry,
+    performance: Arc<PerformanceCounters>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexerPerformance {
+    pub batches: u64,
+    pub records: u64,
+    pub prepare_us: u64,
+    pub native_commit_us: u64,
+    pub sqlite_finalize_us: u64,
+    pub reader_publish_us: u64,
+    pub active_size_us: u64,
+    pub max_batch_us: u64,
+    pub max_batch_records: u64,
+}
+
+#[derive(Default)]
+struct PerformanceCounters {
+    batches: AtomicU64,
+    records: AtomicU64,
+    prepare_us: AtomicU64,
+    native_commit_us: AtomicU64,
+    sqlite_finalize_us: AtomicU64,
+    reader_publish_us: AtomicU64,
+    active_size_us: AtomicU64,
+    max_batch_us: AtomicU64,
+    max_batch_records: AtomicU64,
+}
+
+impl PerformanceCounters {
+    fn add(counter: &AtomicU64, duration: Duration) {
+        let value = u64::try_from(duration.as_micros()).unwrap_or(u64::MAX);
+        let _ = counter.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            Some(current.saturating_add(value))
+        });
+    }
+
+    fn snapshot(&self) -> IndexerPerformance {
+        IndexerPerformance {
+            batches: self.batches.load(Ordering::Relaxed),
+            records: self.records.load(Ordering::Relaxed),
+            prepare_us: self.prepare_us.load(Ordering::Relaxed),
+            native_commit_us: self.native_commit_us.load(Ordering::Relaxed),
+            sqlite_finalize_us: self.sqlite_finalize_us.load(Ordering::Relaxed),
+            reader_publish_us: self.reader_publish_us.load(Ordering::Relaxed),
+            active_size_us: self.active_size_us.load(Ordering::Relaxed),
+            max_batch_us: self.max_batch_us.load(Ordering::Relaxed),
+            max_batch_records: self.max_batch_records.load(Ordering::Relaxed),
+        }
+    }
+
+    fn maximum(counter: &AtomicU64, value: u64) {
+        counter.fetch_max(value, Ordering::Relaxed);
+    }
 }
 
 pub enum ReadPin {
@@ -74,6 +132,7 @@ struct RunContext {
     installation: String,
     backup: Option<crate::storage::backup::BackupCoordinator>,
     updates: broadcast::Sender<i64>,
+    performance: Arc<PerformanceCounters>,
 }
 
 struct RotateContext<'a> {
@@ -246,6 +305,8 @@ impl Indexer {
         let worker_wake = wake.clone();
         let worker_backup = backup.clone();
         let worker_updates = updates.clone();
+        let performance = Arc::new(PerformanceCounters::default());
+        let worker_performance = performance.clone();
         let join = tokio::spawn(async move {
             if let Err(error) = run(
                 RunContext {
@@ -256,6 +317,7 @@ impl Indexer {
                     installation: worker_installation,
                     backup: worker_backup,
                     updates: worker_updates,
+                    performance: worker_performance,
                 },
                 active,
                 shard_id,
@@ -280,6 +342,7 @@ impl Indexer {
             }),
             view,
             registry,
+            performance,
         })
     }
 
@@ -294,6 +357,10 @@ impl Indexer {
             .map_err(|_| anyhow::anyhow!("index publication lock poisoned"))?;
         ensure!(!view.failed, "indexer unavailable");
         Ok(view.published.clone())
+    }
+
+    pub fn performance(&self) -> IndexerPerformance {
+        self.performance.snapshot()
     }
 
     pub fn pin_shards(&self, ids: &[String]) -> Result<Vec<ReadPin>> {
@@ -499,6 +566,7 @@ async fn run(
         installation,
         backup,
         updates,
+        performance,
     } = context;
     loop {
         if *stop.borrow() {
@@ -537,10 +605,12 @@ async fn run(
                 .published = rotated.2;
             continue;
         }
+        let prepare_started = Instant::now();
         let batch = db
             .call(|db| metadata::prepare(db, &Limits::default()))
             .await
             .context("prepare_batch_failed")?;
+        PerformanceCounters::add(&performance.prepare_us, prepare_started.elapsed());
         let Some(batch) = batch else {
             tokio::select! {
                 _=wake.notified()=>{},
@@ -550,7 +620,9 @@ async fn run(
             continue;
         };
         let boundary = batch.boundary;
+        let batch_records = u64::try_from(batch.records.len()).unwrap_or(u64::MAX);
         crash_point("before_native_commit");
+        let native_started = Instant::now();
         let (returned, batch) = tokio::task::spawn_blocking(move || -> Result<_> {
             active.commit(&batch.records, boundary)?;
             Ok((active, batch))
@@ -558,19 +630,23 @@ async fn run(
         .await
         .context("native_commit_worker_failed")?
         .context("native_commit_failed")?;
+        PerformanceCounters::add(&performance.native_commit_us, native_started.elapsed());
         active = returned;
         crash_point("after_native_commit");
         // Stop/cancellation is checked only between complete commit/finalize/publish batches.
         let id = shard_id.clone();
+        let finalize_started = Instant::now();
         let finalized = db
             .call(move |db| metadata::finalize(db, &id, batch))
             .await
             .context("sqlite_finalize_failed")?;
+        PerformanceCounters::add(&performance.sqlite_finalize_us, finalize_started.elapsed());
         ensure!(
             finalized == boundary,
             "finalized boundary differs from committed batch"
         );
         crash_point("after_sqlite_finalize");
+        let publish_started = Instant::now();
         let (returned, published) = tokio::task::spawn_blocking(move || -> Result<_> {
             let published = active.publish(finalized)?;
             Ok((active, published))
@@ -578,6 +654,18 @@ async fn run(
         .await
         .context("reader_reload_worker_failed")?
         .context("reader_reload_failed")?;
+        PerformanceCounters::add(&performance.reader_publish_us, publish_started.elapsed());
+        PerformanceCounters::maximum(
+            &performance.max_batch_us,
+            u64::try_from(prepare_started.elapsed().as_micros()).unwrap_or(u64::MAX),
+        );
+        PerformanceCounters::maximum(&performance.max_batch_records, batch_records);
+        performance.batches.fetch_add(1, Ordering::Relaxed);
+        let _ = performance
+            .records
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(batch_records))
+            });
         active = returned;
         crash_point("after_reader_reload");
         view.write()
@@ -585,10 +673,12 @@ async fn run(
             .published = published;
         let _ = updates.send(finalized.ingest_seq);
         let active_path = data_dir.join("shards").join(&shard_id);
+        let size_started = Instant::now();
         let measured = tokio::task::spawn_blocking(move || {
             crate::storage::manifest::active_size(&active_path)
         })
         .await??;
+        PerformanceCounters::add(&performance.active_size_us, size_started.elapsed());
         let now = crate::model::now_us()?;
         let active_id = shard_id.clone();
         if let Some(plan) = db
@@ -928,4 +1018,17 @@ mod tests {
         indexer.shutdown().await.expect("first shutdown");
         indexer.shutdown().await.expect("idempotent shutdown");
     }
+}
+#[test]
+fn performance_counters_accumulate_and_track_batch_maximums() {
+    let counters = PerformanceCounters::default();
+    PerformanceCounters::add(&counters.native_commit_us, Duration::from_micros(3));
+    PerformanceCounters::add(&counters.native_commit_us, Duration::from_micros(4));
+    PerformanceCounters::maximum(&counters.max_batch_us, 11);
+    PerformanceCounters::maximum(&counters.max_batch_us, 7);
+    PerformanceCounters::maximum(&counters.max_batch_records, 3_000);
+    let snapshot = counters.snapshot();
+    assert_eq!(snapshot.native_commit_us, 7);
+    assert_eq!(snapshot.max_batch_us, 11);
+    assert_eq!(snapshot.max_batch_records, 3_000);
 }
