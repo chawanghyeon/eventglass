@@ -9,6 +9,7 @@ import subprocess
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+RUST_ROOT = ROOT / "rust"
 IMAGE = "rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97"
 MEMORY_BYTES = 536_870_912
 OPERATIONAL_MEMORY_BYTES = 1_073_741_824
@@ -51,11 +52,11 @@ def run_container(arguments, stdout=None):
 def source_hash():
     digest = hashlib.sha256()
     roots = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "build.rs"]
-    paths = [ROOT / name for name in roots]
+    paths = [RUST_ROOT / name for name in roots]
     for directory in ["src", "migrations", "tests"]:
-        paths.extend(path for path in (ROOT / directory).rglob("*") if path.is_file())
+        paths.extend(path for path in (RUST_ROOT / directory).rglob("*") if path.is_file())
     for path in sorted(paths):
-        digest.update(str(path.relative_to(ROOT)).encode())
+        digest.update(str(path.relative_to(RUST_ROOT)).encode())
         digest.update(b"\0")
         digest.update(path.read_bytes())
     return digest.hexdigest()
@@ -94,7 +95,7 @@ def main():
         "--mount",
         f"type=volume,src={cargo_volume},dst=/cargo",
         "--workdir",
-        "/workspace",
+        "/workspace/rust",
     ]
     try:
         print(

@@ -1,5 +1,7 @@
 # eventglass
 
+Repository layout: the existing Rust product lives in [`rust/`](rust/README.md); the independent Go design lives in [`go/eventglass/`](go/eventglass/README.md). Shared scripts, SDK tooling, deployment orchestration, and historical design documents remain at the repository root. Production deployment still builds only the Rust product. Run the commands below from the repository root.
+
 Eventglass: 단일 Rust 프로세스 기반 Error Tracking + Application Log 검색 + Sentry Session Replay 서버.
 
 관리자·프로젝트 관리, Sentry 수신과 durable Inbox, Indexer의 검색 공개·재시작 복구, Issue·검색·집계·Live·Related Logs·경보 API와 UI, S3 checkpoint 복구와 cold hydration을 구현했습니다. 공식 Sentry SDK의 Replay·행동 분석·Feedback은 [지원 계약](docs/observe/replay.md)을 확인하세요. 전체 범위는 [구현 설계](docs/observe/implementation.md)와 [아키텍처](docs/observe/architecture.md), 개발 명령은 [개발 안내](CONTRIBUTING.md)를 확인하세요.
@@ -10,17 +12,17 @@ Eventglass: 단일 Rust 프로세스 기반 Error Tracking + Application Log 검
 
 ```sh
 ./scripts/bootstrap
-npm --prefix web run build
-cargo build --locked --features embed-ui --bin eventglass
-EVENTGLASS_DATA_DIR=./data target/debug/eventglass admin setup-token
-EVENTGLASS_DATA_DIR=./data target/debug/eventglass serve
+npm --prefix rust/web run build
+(cd rust && CARGO_TARGET_DIR=target cargo build --locked --features embed-ui --bin eventglass)
+EVENTGLASS_DATA_DIR=./data rust/target/debug/eventglass admin setup-token
+EVENTGLASS_DATA_DIR=./data rust/target/debug/eventglass serve
 ```
 
 서버 실행 **전에** 일회용 설정 토큰을 발급합니다. 실행 중에는 데이터 디렉터리 잠금 때문에 관리 CLI를 동시에 사용할 수 없습니다. 기본 주소는 `http://127.0.0.1:8080`이며, 브라우저의 초기 설정 화면에서 토큰으로 첫 관리자를 생성합니다. 토큰은 30분 후 만료됩니다.
 
-관리자 비밀번호를 잊었다면 서버를 중지한 뒤 `EVENTGLASS_DATA_DIR=./data target/debug/eventglass admin reset-password admin@example.com`을 실행합니다. 활성 관리자만 복구하며 새 무작위 비밀번호를 stdout에 한 번 출력하고 해당 계정의 기존 세션을 모두 회수합니다. 출력은 비밀번호 관리자에 보관하고 서버를 다시 시작하세요. 비밀번호를 명령 인수나 로그에 넣지 않습니다.
+관리자 비밀번호를 잊었다면 서버를 중지한 뒤 `EVENTGLASS_DATA_DIR=./data rust/target/debug/eventglass admin reset-password admin@example.com`을 실행합니다. 활성 관리자만 복구하며 새 무작위 비밀번호를 stdout에 한 번 출력하고 해당 계정의 기존 세션을 모두 회수합니다. 출력은 비밀번호 관리자에 보관하고 서버를 다시 시작하세요. 비밀번호를 명령 인수나 로그에 넣지 않습니다.
 
-`EVENTGLASS_DATA_DIR=./data target/debug/eventglass doctor`는 서버를 시작하거나 DB를 초기화하지 않고 기존 metadata, catalog, local shard manifest와 Replay blob 무결성을 읽기 전용으로 검사합니다.
+`EVENTGLASS_DATA_DIR=./data rust/target/debug/eventglass doctor`는 서버를 시작하거나 DB를 초기화하지 않고 기존 metadata, catalog, local shard manifest와 Replay blob 무결성을 읽기 전용으로 검사합니다.
 
 `EVENTGLASS_ADDR`, `EVENTGLASS_DATA_DIR`, `EVENTGLASS_BASE_URL`로 주소·데이터 위치·외부 origin을 설정합니다. 원격 접속용 origin은 HTTPS가 필요합니다. S3 빌드는 `EVENTGLASS_S3_URL=s3://bucket/prefix`를 사용하며 새 빈 prefix는 최초 한 번 `EVENTGLASS_S3_INITIALIZE=true`가 필요합니다. 호환 서버는 loopback `EVENTGLASS_S3_ENDPOINT`로만 지정할 수 있습니다.
 

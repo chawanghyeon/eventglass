@@ -17,7 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-docker buildx build --platform "$EVENTGLASS_CONTAINER_PLATFORM" --load --tag "$IMAGE" "$ROOT"
+docker buildx build --file "$ROOT/rust/Dockerfile" --platform "$EVENTGLASS_CONTAINER_PLATFORM" --load --tag "$IMAGE" "$ROOT"
 docker volume create "$VOLUME" >/dev/null
 docker network create --internal "$NETWORK" >/dev/null
 

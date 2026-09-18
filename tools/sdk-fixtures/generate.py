@@ -21,7 +21,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL_DIR = ROOT / "tools" / "sdk-fixtures"
-FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "sentry"
+FIXTURE_ROOT = ROOT / "rust" / "tests" / "fixtures" / "sentry"
 PUBLIC_KEY = "fixturePublicKey"
 FIXED_DSN = f"http://{PUBLIC_KEY}@127.0.0.1:PORT/1"
 NORMALIZABLE_DSN = f"http://{PUBLIC_KEY}@127.0.0.1:8123/1"

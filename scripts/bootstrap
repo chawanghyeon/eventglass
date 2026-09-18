@@ -10,6 +10,7 @@ REPO_ROOT=$(CDPATH='' cd -- "$SCRIPT_DIR/.." && pwd)
 PATH="$REPO_ROOT/.tools/bin:$PATH"
 export PATH
 QUALITY_ENV="$REPO_ROOT/.tools/quality"
+cd "$REPO_ROOT/rust"
 : "${PRE_COMMIT_HOME:=$REPO_ROOT/.tools/pre-commit-cache}"
 export PRE_COMMIT_HOME
 
@@ -54,9 +55,9 @@ fi
 "$QUALITY_ENV/bin/python" -m pip install --disable-pip-version-check --requirement "$REPO_ROOT/requirements/quality.txt"
 "$QUALITY_ENV/bin/python" "$SCRIPT_DIR/hooks/check-tool-versions.py"
 
-cd "$REPO_ROOT"
 cargo fetch --locked
-npm --prefix "$REPO_ROOT/web" ci
+npm --prefix "$REPO_ROOT/rust/web" ci
+cd "$REPO_ROOT"
 "$QUALITY_ENV/bin/pre-commit" install-hooks
 
 hooks_path=$(git config --get core.hooksPath || true)

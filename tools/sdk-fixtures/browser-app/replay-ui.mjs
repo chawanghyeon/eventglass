@@ -3,7 +3,7 @@ import { inflateSync } from 'node:zlib';
 
 export async function checkReplayUi(page,baseUrl,dsn) {
   const parsed=new URL(dsn);const project=parsed.pathname.slice(1);
-  const root=new URL('../../../tests/fixtures/replay/',import.meta.url);
+  const root=new URL('../../../rust/tests/fixtures/replay/',import.meta.url);
   for(const name of ['plain-2.envelope','plain-0.envelope','plain-2.envelope','plain-1.envelope','compressed-0.envelope','compressed-1.envelope','compressed-2.envelope','feedback.envelope','plain-error.envelope','compressed-error.envelope']) {
     const response=await fetch(`${baseUrl}/api/${project}/envelope/?sentry_key=${parsed.username}`,{method:'POST',body:await readFile(new URL(name,root))});
     if(response.status!==202)throw Error(`Replay fixture HTTP ${response.status}: ${await response.text()}`);

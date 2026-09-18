@@ -50,7 +50,7 @@ fn real_sdks_reach_running_eventglass() -> Result<()> {
         )
     })?;
     let output = Command::new("python3")
-        .arg(root.join("tools/sdk-fixtures/live.py"))
+        .arg(root.join("../tools/sdk-fixtures/live.py"))
         .arg("--binary")
         .arg(&binary)
         .arg("--data-dir")
@@ -92,7 +92,7 @@ fn real_sdks_reach_running_eventglass() -> Result<()> {
     )?;
     let direct_report_path = directory.path().join("direct-result.json");
     let direct_output = Command::new("python3")
-        .arg(root.join("tools/sdk-fixtures/live.py"))
+        .arg(root.join("../tools/sdk-fixtures/live.py"))
         .arg("--binary")
         .arg(&binary)
         .arg("--mode")

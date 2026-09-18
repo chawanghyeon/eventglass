@@ -686,7 +686,7 @@ def main() -> int:
     parser.add_argument(
         "--binary",
         type=Path,
-        default=Path(os.environ.get("EVENTGLASS_BIN", ROOT / "target" / "debug" / "eventglass")),
+        default=Path(os.environ.get("EVENTGLASS_BIN", ROOT / "rust" / "target" / "debug" / "eventglass")),
         help="already-built Eventglass binary (default: EVENTGLASS_BIN or target/debug/eventglass)",
     )
     parser.add_argument("--report", type=Path, help="optional sanitized JSON result path")

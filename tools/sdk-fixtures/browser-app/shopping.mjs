@@ -5,7 +5,7 @@ import {chromium} from 'playwright';
 import {createServer} from 'node:http';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
-const output=new URL('../../../tests/fixtures/replay/',import.meta.url);
+const output=new URL('../../../rust/tests/fixtures/replay/',import.meta.url);
 const bundle=await build({stdin:{contents:`import * as Sentry from '@sentry/browser';
 Sentry.init({dsn:location.origin.replace('://','://public@')+'/1',integrations:[Sentry.replayIntegration()],replaysSessionSampleRate:1,replaysOnErrorSampleRate:1,environment:'shopping-fixture',release:'storefront@1',sendClientReports:false});
 window.flushReplay=()=>Sentry.getReplay().flush();`,resolveDir:fileURLToPath(new URL('.',import.meta.url))},bundle:true,write:false,format:'iife',platform:'browser'});

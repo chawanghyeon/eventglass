@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+RUST_ROOT = ROOT / 'rust'
 IMAGE = 'rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97'
 TARGETS = ['contracts', 'integration', 'auth', 'ingest', 'ingest_http', 'sdk', 'replay', 'indexer_native', 'indexer', 'indexer_db', 'issues', 'issue_detail', 'tokens', 'query_scope', 'search', 'search_http', 'live_http', 'alerts', 'alerts_http', 'records_http', 'seal', 'archive', 'aggregate', 'operations', 'cold', 'disk_pressure']
 
@@ -42,9 +43,9 @@ def main():
         stage = pathlib.Path(temporary)
         stage.chmod(0o755)  # Test children run as the production-style unprivileged UID.
         for name in ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml', 'build.rs']:
-            shutil.copy2(ROOT/name, stage/name)
+            shutil.copy2(RUST_ROOT/name, stage/name)
         for name in ['src', 'migrations', 'tests']:
-            shutil.copytree(ROOT/name, stage/name)
+            shutil.copytree(RUST_ROOT/name, stage/name)
         source_hash = hashlib.sha256()
         for path in sorted(stage.rglob('*')):
             if path.is_file():

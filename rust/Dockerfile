@@ -1,20 +1,20 @@
 # syntax=docker/dockerfile:1.7
 FROM node:22.22.2-bookworm-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS web
 WORKDIR /source/web
-COPY schemas/ /source/schemas/
-COPY web/package.json web/package-lock.json ./
+COPY rust/schemas/ /source/schemas/
+COPY rust/web/package.json rust/web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts
-COPY web/ ./
+COPY rust/web/ ./
 RUN npm run generated:check && npm run typecheck && npm run build
 
 FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS build
 ARG EVENTGLASS_REVISION=development
 ENV EVENTGLASS_REVISION=$EVENTGLASS_REVISION
 WORKDIR /source
-COPY Cargo.toml Cargo.lock rust-toolchain.toml build.rs ./
-COPY migrations/ migrations/
-COPY schemas/ schemas/
-COPY src/ src/
+COPY rust/Cargo.toml rust/Cargo.lock rust/rust-toolchain.toml rust/build.rs ./
+COPY rust/migrations/ migrations/
+COPY rust/schemas/ schemas/
+COPY rust/src/ src/
 COPY --from=web /source/web/dist web/dist
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/source/target \

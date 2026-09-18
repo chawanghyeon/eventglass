@@ -1,5 +1,7 @@
 # Eventglass 개발 안내
 
+Rust 제품은 `rust/`에 있으며 아래 `./scripts/*` 명령은 저장소 루트에서 그대로 실행합니다. Cargo를 직접 실행할 때는 `cd rust`로 고정 toolchain과 manifest를 선택합니다. UI는 `rust/web/`, API schema는 `rust/schemas/`입니다. 공유 SDK 도구·배포 설정·기존 설계 문서는 루트에 유지합니다. Docker build context는 저장소 루트이며 Dockerfile은 `rust/Dockerfile`입니다: `docker build -f rust/Dockerfile .`. production service·원격 데이터 경로·바이너리 이름은 바뀌지 않습니다.
+
 Rust 1.97.1, Node 22.22.2/npm 10.9.7, Python 3.12를 사용합니다. `./scripts/bootstrap`은 버전을 확인하고 잠긴 의존성·저장소 내부 검사 도구·Git hooks를 준비합니다. 사용자 전역 Git 설정은 변경하지 않습니다.
 
 ```sh
@@ -26,7 +28,7 @@ S3가 설정된 배포 바이너리에서 `eventglass backup rehearse`는 원격
 
 `storage`, `resource`, `benchmark-100k`와 운영 조건 검사는 실행 가능한 Docker가 필요합니다. `storage`는 digest로 고정한 MinIO를 임시 network와 localhost 포트에서 실행하고 임시 credential·bucket·prefix만 사용합니다. Linux 자원 검사는 2 CPU/4GiB에서 빌드한 뒤 생성된 테스트 프로그램만 기본 1 CPU/1GiB 제한 컨테이너에서 실행합니다. `--cpus 0.25`는 운영 CPU quota를 사용합니다. cgroup 제한값과 OOM 여부를 검사하고 `.tools/resource/report.json`을 생성합니다. 512MiB 추가 검사는 `./scripts/check-resource --memory-bytes 536870912`로 실행합니다. 10만 건 benchmark는 배포와 같은 release 최적화 test executable로 빌드와 측정을 분리하고 실제 Inbox→Indexer→검색·집계 경로를 CPU 1/512MiB/swap 0에서 실행해 `.tools/benchmark/100k.json`을 생성합니다. 보고서의 `build_profile`은 최적화 수준과 debug assertion 비활성화를 증명한다. `--operational`은 CPU 0.25/1GiB/swap 0에서 동일한 workload를 실행해 `.tools/benchmark/100k-operational.json`을 생성하고 data_dir 전체 사용량을 50GB 예산과 대조합니다. 50GB 파일시스템 quota를 강제하는 검사는 아니며 별도 디스크 부족 테스트가 있습니다. 100만·1천만 건 수동 검증은 각각 `./scripts/check-benchmark 1m`, `./scripts/check-benchmark 10m`으로 실행합니다.
 
-Hook은 check-only입니다. 필요할 때 `cargo fmt --all`과 `npm --prefix web exec prettier -- --write .`을 실행하고 diff를 검토합니다. `SKIP`·`--no-verify`로 실패를 숨기지 않습니다.
+Hook은 check-only입니다. 필요할 때 `(cd rust && cargo fmt --all)`과 `npm --prefix rust/web exec prettier -- --write .`을 실행하고 diff를 검토합니다. `SKIP`·`--no-verify`로 실패를 숨기지 않습니다.
 
 완료하고 검증한 단위로 `main`에 직접 커밋하고 즉시 `git push origin main`을 실행합니다. 커밋 제목은 game-uridogu-com처럼 `feat: 한국어 변경 요약` 형식을 사용하며, 변경에 맞게 `fix`, `perf`, `test`, `docs`, `chore`를 선택합니다. 범위가 필요한 경우 `chore(deploy): …`처럼 붙입니다. 본문에는 필요한 문제 설명, 실제 변경, 실행한 검사와 남은 제한을 간결하게 기록합니다. 이미 공개한 커밋을 메시지 통일만을 위해 재작성하거나, 과거 단계를 소급한 가짜 커밋이나 단계별 Markdown 실행 일지를 만들지 않습니다. pre-push가 검사와 artifact staging을 담당하고 GitHub의 `Deploy` workflow는 해당 commit 활성화만 담당합니다.
 

@@ -14,9 +14,10 @@ command -v cargo-deny >/dev/null 2>&1 || {
     exit 1
 }
 
-cd "$ROOT"
+cd "$ROOT/rust"
 cargo deny --locked check advisories bans licenses sources
 npm --prefix web audit --omit=dev --audit-level=high
+cd "$ROOT"
 npm --prefix tools/sdk-fixtures/node-app audit --omit=dev --audit-level=high
 npm --prefix tools/sdk-fixtures/browser-app audit --omit=dev --audit-level=high
 "$ROOT/.tools/quality/bin/pre-commit" run secrets --all-files

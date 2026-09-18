@@ -23,7 +23,16 @@ git -C "$ROOT" archive --format=tar "$REVISION" > "$SOURCE/source.tar"
 tar -xf "$SOURCE/source.tar" -C "$SOURCE"
 rm "$SOURCE/source.tar"
 
+# Select the layout from the archived revision, never from the dirty worktree.
+# Retain the old layout so previously released commits remain reproducible.
+if [ -f "$SOURCE/rust/Dockerfile" ]; then
+    DOCKERFILE="$SOURCE/rust/Dockerfile"
+else
+    DOCKERFILE="$SOURCE/Dockerfile"
+fi
+
 docker buildx build \
+    --file "$DOCKERFILE" \
     --platform "$PLATFORM" \
     --build-arg "EVENTGLASS_REVISION=$REVISION" \
     --target artifact \

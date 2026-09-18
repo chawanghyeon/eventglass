@@ -44,7 +44,7 @@ docker run --rm \
     --env "MC_HOST_local=http://$ACCESS_KEY:$SECRET_KEY@minio:9000" \
     "$CLIENT_IMAGE" mb "local/$BUCKET" >/dev/null
 
-cd "$ROOT"
+cd "$ROOT/rust"
 SELECTED=$(cargo test --locked --features s3 --test s3_compatible -- \
     --ignored --exact minio_checkpoint_and_object_contract --list --format terse \
     | awk '/: test$/ {count++} END {print count+0}')

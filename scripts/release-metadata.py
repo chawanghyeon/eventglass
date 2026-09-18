@@ -114,7 +114,7 @@ def main() -> None:
         raise SystemExit(f"missing release binaries: {', '.join(missing)}")
 
     dependencies = sorted(
-        rust_packages(root) + npm_packages(root),
+        rust_packages(root / "rust") + npm_packages(root / "rust"),
         key=lambda item: (item["ecosystem"], item["name"], item["version"]),
     )
     root_package = {

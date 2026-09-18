@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const output = new URL('../../../tests/fixtures/replay/', import.meta.url);
+const output = new URL('../../../rust/tests/fixtures/replay/', import.meta.url);
 await mkdir(output, { recursive: true });
 const bundle = await build({ stdin: { contents: `
 import * as Sentry from '@sentry/browser';

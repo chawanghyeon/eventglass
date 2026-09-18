@@ -6,7 +6,7 @@ if [ "$#" -ne 0 ]; then
   echo "usage: EVENTGLASS_BIN=/optional/path $0" >&2
   exit 2
 fi
-cd "$root"
+cd "$root/rust"
 output=$(mktemp "${TMPDIR:-/tmp}/eventglass-sdk-live.XXXXXX")
 trap 'rm -f "$output"' EXIT HUP INT TERM
 set +e

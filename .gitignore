@@ -12,11 +12,12 @@ __pycache__/
 
 # Local runtime data and credentials
 /data/
+/rust/data/
 node_modules/
-/web/dist/
-/web/coverage/
-/web/test-results/
-/web/playwright-report/
+/rust/web/dist/
+/rust/web/coverage/
+/rust/web/test-results/
+/rust/web/playwright-report/
 .env
 .env.local
 .env.*.local
