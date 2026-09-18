@@ -20,6 +20,9 @@ Complete and verify one gate at a time, then commit directly to `main` and run `
 The former Rust implementation is recoverable from the `rust-version` tag and is not an active build, test, or deployment target.
 
 Read DESIGN.md for behavior and ARCHITECTURE.md for package/state ownership.
+Before continuing implementation, read docs/implementation/README.md and the
+selected packet in docs/implementation/work-plan.md. Its linked contracts fix
+schema/API/transaction decisions; do not infer missing behavior from old Rust docs.
 Use focused pure-Go checks during development; run unit and relevant SDK/PG/S3
 checks before shipping. Native changes additionally require contracts. The native
 Docker stage is cached separately from Go sources; use ARM64 only. The journal

@@ -18,6 +18,6 @@ Complete the requested implementation, relevant verification, and necessary docu
 - Behavior or subsystem contracts: relevant sections of `DESIGN.md`.
 - Architecture or state ownership: `ARCHITECTURE.md`.
 - Test infrastructure, resource limits, or release validation: `docs/observe/quality.md`.
-- Continuing planned implementation: `DESIGN.md` section 22 and the gate status in `README.md`. Historical source material is not an active implementation instruction.
+- Continuing planned implementation: `docs/implementation/README.md`, the first incomplete packet in `docs/implementation/work-plan.md`, `DESIGN.md` section 22, and the gate status in `README.md`. Read the packet's linked contracts before editing. Historical source material is not an active implementation instruction.
 
 Record changes and executed verification in commits, without per-stage Markdown diaries. Follow the commit-then-push workflow on `main` in `CONTRIBUTING.md`. The current pre-push hook runs Go checks; production deployment is not implemented or authorized by that hook. Do not claim historical Rust deployment machinery is available.

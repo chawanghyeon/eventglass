@@ -13,3 +13,9 @@ boundaries, resource lifetimes, fencing and upgrade rules. Architecture checks,
 multi-request streaming journals, shared byte permits and the ingestion schema
 are implemented foundations; the G02 Accept/upload/ACK operation, job execution
 and crash recovery are still pending. Pure-Go checks do not rebuild DuckDB.
+
+Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
+contains the complete v1 design reading map; the
+[`work plan`](docs/implementation/work-plan.md) breaks remaining work into ordered
+packets with files, prerequisites, negative tests and completion gates. These are
+design contracts, not evidence that G02–G08 have been implemented or verified.

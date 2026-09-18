@@ -1,0 +1,282 @@
+# Runtime, maintenance, recovery and release operations
+
+This specifies planned commands/configuration; current executable availability
+is listed in [CONTRIBUTING.md](../../CONTRIBUTING.md) and the work plan. Design
+text is not a passing operational gate. Use ARM64 only and pinned DuckDB2.0.
+
+## App assembly and configuration
+
+`app.Run` constructs validated Config, shared byte/disk/task budgets, pgx pools,
+S3 client, control operations, engine supervisor, concrete role loops, then HTTP.
+Constructors receive dependencies; no globals, default-client mutation or init
+goroutines. A root errgroup/context owns every loop and child. Fatal invariant
+failure cancels the role; dependency outage changes readiness/circuit state,
+not uncontrolled process churn. Single combined process and separate roles call
+the same constructors. No in-memory queue may replace durable PG work.
+
+Required environment variables from DESIGN keep their names. Planned additional
+settings: EVENTGLASS_HTTP_ADDR (default :8080), EVENTGLASS_INTERNAL_ADDR (loopback
+by default), EVENTGLASS_TOKEN_KEY_FILE, EVENTGLASS_ENCRYPTION_KEY_FILE,
+EVENTGLASS_BOOTSTRAP_TOKEN_FILE (setup only), EVENTGLASS_RETENTION_DAYS (initial
+setup only,30 default), EVENTGLASS_MAX_WORKERS (default4),
+EVENTGLASS_TRUSTED_PROXIES (empty default). Resource overrides are a validated
+config file with documented units and generated effective-config output that
+redacts credentials. Unknown role/setting, unsupported version, nonpositive
+budget, missing keys or storage identity mismatch fails startup.
+
+Post-setup retention is PG-authoritative: differing environment values are an
+error, not a silent policy change. Storage identity includes normalized endpoint
+or AWS region, bucket,prefix; `installations.storage_identity` must match. S3
+prefix is server configured, not request-supplied. Startup does read-only HEAD/
+scoped capability checks; missing installation marker on an already initialized
+PG instance fails, never auto-creates a new empty installation. Initial setup
+creates/verifies a small scoped marker and records its SHA before readiness.
+Credentials/default chain run only in supervisor. TLS verification mandatory;
+custom CA allowed, skip-verify not a production option.
+
+Explicit startup order: config -> schema/installation compatibility -> storage
+identity -> budgets/pools -> role recovery scan -> workers/schedulers -> ready.
+Separate `migrate` command performs migrations once under existing advisory lock;
+`run` refuses out-of-range schema and does not race DDL on every pod startup.
+Release manifest advertises min/max reader schema and format versions, not just
+latest migration number. Current binary only supports exact schema until a
+rolling-compatibility test explicitly broadens the range.
+
+## Budgets and bounded overload
+
+| Profile | Initial reservations/caps within CPU1/512MiB cgroup |
+|---|---|
+| API only | wire/decompressed64MiB, parser/projection working256MiB, 2 decoder slots, password hash64MiB shared working reservation, Go GOMEMLIMIT352MiB |
+| Worker only | native256MiB memory_limit, supervisor working64MiB, gateway8MiB, Go GOMEMLIMIT96MiB, one child |
+| Combined | working pool192MiB shared by parser and native-task admission, wire32MiB, supervisor/gateway32MiB, Go GOMEMLIMIT224MiB; serialize decoder and native child when their reservations conflict |
+| Scheduler only | working64MiB, Go GOMEMLIMIT128MiB; no native child by default |
+
+Combined native task reserves the whole192MiB working pool and sets native
+memory_limit192MiB; it does not also receive the worker256MiB limit. Parser
+reservation formula from ARCHITECTURE still applies, so a legal large request
+can429 under this small profile. Login shares the same byte pool; don't promise
+all maxima simultaneously. Count actual Go graphs, SDK buffers, DuckDB unmanaged
+allocations and OS overhead. These are admission policies, not RSS proofs;
+G07 must demonstrate target workload and OOM containment or adjust within512MiB.
+
+Shared disk budget4GiB with512MiB unused safety reserve. Spill cap2GiB, cache cap
+1GiB soft, remaining active spools/outputs via one reservation manager; these
+are not independent quotas summing beyond available disk. Before native work,
+reserve estimated input/output+spill allowance; evict unpinned cache first, fail
+resource_exhausted if insufficient. Track actual growth and kill task on excess.
+No accidental use of system /tmp outside app's owned directory. Startup reaps
+only task directories bearing a validated ownership marker; never broad rm/globs.
+
+Role pool caps API8,worker2,scheduler2. Combined uses one pool cap12, not multiple
+hidden copies. Global PG64 budget: reserve8 for migrations/admin/backup, admit
+role replicas only if sum(max pools)<=56. Deployment/scaler computes bounds from
+all role pools, including warm replicas; connection errors trigger admission
+rather than exceeding budget. Transaction retry never holds a second connection
+while waiting for its first pool slot.
+
+## Child IPC and file boundaries
+
+Extend existing probe-only engine protocol to version1 operations probe/convert/
+query/reduce/compact. Parent writes a length-prefixed JSON control message
+(4-byte big-endian length, max1MiB). Child emits bounded frames (same framing):
+file_pair_ready (conversion/compaction only), then exactly one completed/error
+terminal response. On file_pair_ready parent verifies and uploads that pair,
+persists local manifest parts, removes only those owned output files, then sends
+continue or abort on control input. At most one unacknowledged pair; no native
+child uploads itself. A parent/pipe failure aborts the child. The terminal frame
+plus successful process exit is required before Prepare; uploaded intermediate
+pairs from an incomplete task remain unreferenced intents. Query/reduce emit
+only terminal response. Large canonical input, manifests and
+results are files referenced through supervisor-created handles/relative names
+in the private task directory, never giant stdin/stdout JSON. Query result is
+streaming JSONL with schema header, typed rows and checksum footer; aggregate
+partials use typed Parquet to feed the reducer. Control response lists result
+relative paths, byte counts, hashes, row counts and engine version; streaming
+pair frames keep output disk bounded even for10,000 day partitions. Parent checks
+exit0 plus terminal response/complete manifest; either alone is insufficient. Reject
+symlinks/path traversal/unknown fields/operations. stdout is protocol only;
+stderr bounded64KiB and sanitized. Child cannot select arbitrary filesystem roots.
+
+Parent constructs capability allowlist from exact catalog manifests. Gateway
+binds loopback with per-task256-bit random handles, validates method/path/range/
+task deadline, and logs no handle. Revoke on cancellation/expiry; every block
+request checks task still live. Cap8 active range requests/child and1MiB block
+buffers within shared8MiB. HEAD contains exact length, range responses206 with
+verified blocks, invalid/outside ranges416. FullSHA is verified on full spool;
+partial reads verify blockSHA, exact last-block size and pinned object identity.
+No child AWS environment, no instance metadata route, no unapproved extension
+autoload/network install. Use deployment network policy plus restricted child
+environment; loopback gateway alone is not a general filesystem/network sandbox.
+
+One child owns one task; context cancellation interrupts native call, SIGTERM,
+then SIGKILL after2s and wait/reap before reclaiming permits. Process-group
+termination kills descendants. cgroup OOM tests must verify the supervisor/API
+survive; use separately bounded child cgroup/container if needed in deployment.
+If combined-role512MiB cannot isolate survival, fail G07 combined profile instead
+of claiming separation guarantees it. Never leave orphan child work on scale-in.
+
+## Compaction and retention transactions
+
+Compaction candidate: same tenant/lane/schema/grouping version/event_day/kind,
+current generation and no active reservation. Prefer >=8 files smaller than8MiB
+or predicted at least50% GET reduction, output target32–64MiB, max input256MiB
+compressed/128 bundles/task and estimated scratch allowance. Maximum one active
+maintenance task/lane. Small quiet datasets need not be rewritten forever.
+Scheduler pauses maintenance if ingest oldest>5s or query queue>0.5s; at most20%
+of measured spare worker time per rolling60s, no stealing reserved ingest slots.
+
+Reserve transaction locks lane then task and inputs: record selected bundle IDs,
+their exact valid_from and input identity hashes, set reserved_by; do not close
+catalog intervals yet. Read inputs with a maintenance pin and verify pairs.
+Native merge preserves canonical values, IDs/seq/received time and grouping
+version, changes physical layout only. Upload outputs with fenced intents.
+Swap transaction locks lane/task/intents/bundles, rechecks live tuple and **each
+reserved input still current**; unrelated newer publications may exist. Increment
+current catalog_generation, close only reserved inputs at G, insert replacements
+at G, release reservations, complete task. Do not require the whole lane's
+generation stayed unchanged (that would starve compaction under ingest). Do not
+advance published_seq. Failure before swap leaves originals current; retries
+never retire unrelated files.
+
+Retention advances monotonic installation floor=max(previous_floor,DBnow-days).
+This is logical visibility for **new snapshots**; widening retention does not
+resurrect data. Scheduler scans current bundles by received bounds. Fully older
+bundles close their interval without replacement; mixed bundles use same reserve/
+rewrite/swap protocol keeping received>=cutoff. Existing snapshots keep their
+old floor/generation and pin old files until expiry. Snapshots created during
+rewrite use either complete old or complete new catalog under lane locks.
+Occurrence detail rows delete only after no snapshot can need them; lifetime
+Issue summary remains. Dedupe/receipts retain at least retention+7days and until
+no pending job/outcome/occurrence FK needs them; expiry is minimum, not automatic
+cascade deletion. Remove referenced child/parent rows explicitly in bounded
+transactions (<=1,000 records) while preserving batch recovery metadata.
+On retention increase, extend existing dedupe/receipt protection to at least
+received_time+new_retention+7days. Accept's expired-dedupe check uses the maximum
+of stored expires_at and that current-policy bound, so it remains safe while
+background extension is incomplete. Reducing retention never shortens already
+promised dedupe protection. Snapshot/backup protection can extend it further.
+Completed job/output rows are historical metadata, not perpetual object pins:
+only unfinished/prepared jobs protect temporary output refs; published catalog
+and backup references independently protect their live objects.
+
+## Object lifecycle and backup interlock
+
+GC is mark -> delete -> confirm, never LIST -> blindly delete. Eligible means:
+not current catalog, no live snapshot generation referencing it, no job/prepared
+output/task pin, no retained receipt/journal replay need, no protected backup
+window, and past conservative retirement grace. GC locks installation shared,
+lane(s), intent; rechecks authoritative refs, marks deleting with fence and
+commits. Only then issue S3 DELETE. Readers never acquire a new pin after mark.
+For retired published objects require retired_at+max(8days,configured backup
+protection) and dynamic backup interlock. Intent expires_at is only for never
+referenced uploads. Journals remain protected until batch publication **and**
+all above recovery conditions; they are not disposable at ACK or conversion.
+
+Backup interlock: freeze physical deletion when backup health/oldest recoverable
+point is unknown. Record verified backup sets/PITR horizon and conservative
+object protection time. Any retained manual/base backup extends horizon until
+explicitly expired; never claim8days protects an indefinitely retained backup.
+A backup begins under installation coordination before export and registers
+protection before a GC pass can mark needed objects. Snapshot its reference
+inventory, including pending journals/prepared outputs, not only current files.
+For WAL recovery between inventories, preserve every object referenced at any
+point in the retained horizon using retirement-time protection. Delete backup
+set only after its replacement and WAL continuity are verified.
+
+Unknown LIST objects are quarantined for operator inspection, not auto-adopted.
+Tombstones retain installation/key/generation/expectedSHA. Periodic paginated
+inventory resweeps deleting/deleted keys to remove late stale PUTs. Keep
+tombstones while the generation's writer credentials could still complete a
+write; default never prune until generation retired and credentials revoked.
+Abort owned multipart uploads after24h only when no live intent/worker owns
+them; backup prefix/foreign prefixes excluded. Provider retries bounded, missing
+object on DELETE counts success, forbidden does not. Metrics distinguish live,
+retired protected, reclaimable and orphan bytes.
+
+## Backup and restore runbook specification
+
+Use pgBackRest with pinned image/tool version and tested PG17 support, daily
+base backup plus continuous WAL; live-object and backup-delete roles separated.
+S3 versioning alone is not coordinated PG recovery. No independent lifecycle
+rule deletes journals/bundles. WAL age>60s warning, >5min readiness for backup
+status degraded (ingestion can remain ready with explicit RPO warning); oldest
+restorable age and last isolated rehearsal displayed. Every24h perform isolated
+restore rehearsal with outgoing network denied and alerts paused.
+
+Planned CLI:
+
+```text
+eventglass-go doctor --read-only
+eventglass-go repair inspect --tenant <id> --lane <0..15>
+eventglass-go repair retry --job <uuid> --expected-fence <n>
+eventglass-go backup verify --backup-id <id>
+eventglass-go restore verify --report <owned-local-path>
+eventglass-go restore activate --expected-generation <n> --verification <id>
+```
+
+Inspect is default; retry never skips a seq/changes selected records. No force
+publish, reconstruct-from-LIST or drop-lane command. Mutating CLI requires admin
+DB role, explicit scoped arguments and records audit event. Verification report
+stores checksum/installation/PG recovery point/object inventory/generation/test
+outcomes, no credentials. Reports are evidence artifacts, not stage diaries.
+
+Disaster procedure:
+
+1. Stop API/workers/schedulers; isolate old DB endpoints and revoke old writers'
+   S3 credentials/network access. Confirm no old process can reach restored DB.
+2. Restore PG base+WAL in isolated environment to explicit time/LSN, preserving
+   original installation_id and storage identity. Record achievable RPO; lost
+   commits after that point are not recovered merely by finding newer S3 bytes.
+3. Keep recovery_state=restoring, alerts_paused=true, external delivery denied.
+   Verify every restored referenced journal/file/prepared output: size/SHA,
+   scope, schemas, selection, file-pair identity, counter/job consistency. Query
+   temporary results may be invalidated; durable accepted data may not be lost.
+4. Increment storage_generation; revoke all sessions/tokens/leases, fence jobs
+   and tasks. Requeue unfinished conversion/publication from original receipts
+   and valid prepared artifacts. Cancel transient user queries/snapshots. Record
+   old object's creation generation separately: new readers may read verified
+   old-generation objects; new writes/authority use new generation. Do not reject
+   all historical files just because their intent generation is older.
+5. Replay pending journals without renormalizing, verify contiguous cuts and
+   known ACK oracle up to recovery point. Missing/corrupt durable refs keep
+   unhealthy; provide exact object/job failure, never empty successful query.
+6. Activate only matching verification report/current generation with fresh
+   credentials. Outgoing alerts stay paused until admin explicitly resumes;
+   pending deliveries may repeat after disaster, preserve stable delivery IDs.
+7. Rehearse SDK ingest/read/detail/Issue mutation/retention/snapshot/restart;
+   remove only isolated test resources with ownership markers. Production
+   activation is never implied by push or a successful local test.
+
+## Scaling and release evidence
+
+Separate ingress, ingest-worker, query-worker, maintenance pools use same image,
+explicit role/pool labels (worker capability config ingest/query/maintenance).
+Warm ingress and query min1; ingest min1 when pending work, maintenance min0.
+EWMA throughput alpha0.2 every10s with conservative prior1MiB/s/worker, convert
+queued bytes and oldest age into DESIGN drain targets. Out2 samples, in300s,
+max25% reduction; clamp PG budget and configured worker max. If dependency error
+ratio>20% over30s or pool wait p95>1s, freeze scale-out, circuit-break new work
+with jittered probes every5s; don't hide stalled age. Tenant round-robin claims
+max1 child/tenant/worker and max4 global query tasks/query; document that global
+fairness is approximate until G07 measures skew across replicas.
+
+Kubernetes/KEDA manifests select Linux ARM64, resource requests/limits, startup/
+readiness/liveness, grace30s, private PG/S3/gateway network, non-root read-only
+root, bounded scratch, secrets mounts. Query scaler metric comes from queued
+estimated bytes/service-rate target, not merely jobs count. Min/max and pool
+connection equations must agree across rendered manifests. Compose is local
+demonstration, not host-HA/autoscaling guarantee. Provisioning cloud resources
+requires separate user authorization; commit manifests only.
+
+Release matrix requires real AWS S3 and one proven self-host backend (Garage
+candidate, MinIO local fixture is not production endorsement), cold/warm cache,
+1/2/4 workers and whole-installation costs. Exact dataset/engine/images/host/
+cgroup/network/settings/seeds/SHA recorded by harness. Numeric targets in DESIGN
+must pass or release stays blocked. Schema rollback requires demonstrated reader
+compatibility or coordinated restore; never run Down blindly on live data.
+
+Open assumptions are **experiments**, not implementation choices: native peak
+RSS/128MiB output sizing, cgroup OOM survival, throughput/cost, provider multipart/
+Range semantics, PITR object protection and rolling-version reader compatibility.
+Their owner, test and failure behavior are explicit in the work plan. No stable
+DuckDB2.0 release claim: the currently approved official prerelease stays pinned.

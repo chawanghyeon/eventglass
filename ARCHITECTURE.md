@@ -5,6 +5,10 @@ invariants; this document assigns implementation ownership. CONTRIBUTING.md
 defines executable checks. README.md reports completed gates. The original
 source brief is immutable historical input, not a competing architecture.
 
+[Implementation contracts](docs/implementation/README.md) specialize this map
+into schema, concrete transactions, APIs, runtime protocols and testable packets.
+They describe planned work, not completed capabilities.
+
 ## Deployment and authority
 
 Use one Go module and release image with API, worker and scheduler roles.
@@ -78,7 +82,7 @@ before preparing or publishing output.
 | Orphan | GC changes expired unreferenced intent to deleting under lock; deletes; retains tombstone | Late PUT cannot publish; resweep tombstones |
 | Request | validate/auth snapshot -> spool -> upload -> Accept -> ACK | Lost reply returns matching receipt on internal retry |
 | Batch | accepted -> prepared -> published at contiguous lane cut | Poison input blocks its lane visibly; no silent skip |
-| Job | queued -> running lease/fence -> prepared/completed or bounded retry | Owner, generation, fence and live DB-clock lease checked on every mutation |
+| Job | queued -> running conversion -> prepared (unleased) -> running publication -> completed | Each claim increments fence; live authority required on every mutation; durable outputs survive takeover |
 | Snapshot | scope/cut registration -> heartbeat -> expiry/release | Pin acquisition and GC exclusion are atomic |
 | Restore | quiesce old writers -> restore PG/WAL -> verify S3 refs -> new generation -> resume | Never adopt objects newer than restored PG cut |
 
@@ -88,6 +92,8 @@ old worker. Restore must isolate old processes/credentials before reopening.
 S3 keys include attempt identity; fencing a SQL write cannot cancel an in-flight PUT.
 No S3/network work runs while a database transaction holds locks.
 Use project/key -> lane -> dedupe -> job/intent -> Issue -> child-row lock order.
+Installation/tenant/current-user authority rows precede that order where relevant;
+see the control-plane contract for exact modes and lookup/retry behavior.
 
 A mixed-project microbatch is revalidated under all relevant project/key locks.
 If any request became stale, the attempted Accept commits nothing. Rebuild a

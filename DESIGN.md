@@ -4,6 +4,11 @@ Date: 2026-09-18. Status: **implementation specification**, not an implemented o
 
 This is the normative handoff for a new agent, independent of conversation history. MUST/prohibitions are correctness contracts; initial values are tunable policies. Close unverified library assumptions through section22 gates, not by silently weakening contracts. Keep Go documentation in English.
 
+The detailed [implementation handoff](docs/implementation/README.md) freezes
+schema additions, transaction algorithms, API/UI contracts, operation protocols
+and ordered testable work packets. Read it before continuing G02. It specializes
+this document; it does not claim that the planned system is already implemented.
+
 ## 0. Decisions and scope
 
 ### 0.1 Final decisions
@@ -241,7 +246,7 @@ search_values includes message, exception, breadcrumb messages, and queryable na
 
 ### 5.2 Payload/bundles
 
-payload.parquet contains record_id/raw_json/envelope_sdk_json/normalization_warnings_json. Raw is scrubbed original shape, not the sole canonical reconstruction source. Publish analytics+payload atomically. Lists/counts never read payload; detail locates record_id in catalog-selected bundles.
+payload.parquet contains record_id/raw_json/envelope_sdk_json/normalization_warnings_json and canonical_metadata_json (all canonical fields except raw/envelope_sdk_json, with exact typed values and timestamp/version metadata). Raw is scrubbed original shape, not the sole canonical reconstruction source. Publish analytics+payload atomically. Lists/counts never read payload; detail locates record_id in catalog-selected bundles. The G03 schema extends G00's contract fixture; it must not invent missing canonical metadata from today's normalizer.
 
 Initial Zstd3, suitable dictionaries, row-group target16,384 and8MiB canonical processing flush. Verify actual writer behavior in G00. Compressed file target32–64MiB, hard target128MiB; low-volume time flush must not wait indefinitely. Partition `(tenant,lane,event UTC day,kind)`, sort `(project_id,service,event_time_us,record_id)`. Wide-time input spills/repartitions; no unbounded per-project writers. Late events use their real day. Catalog both event/receipt time bounds.
 
@@ -301,7 +306,7 @@ After journal upload, one transaction:
 4. Increment accepted_seq, assign received time, insert batch/receipts/convert job/outcomes.
 5. Reference intent, COMMIT, then durable ACK.
 
-Conversion uses accepted selection, not every journal candidate. Lost replies do not undo commits. Batch only fully validated requests; accept atomically. Bounded DB retries preserve IDs. Assigned empty/duplicate-only sequences complete empty publication without Parquet; otherwise they would stall the lane. Empty requests without seq may commit diagnostics only.
+Conversion uses accepted selection, not every journal candidate. Lost replies do not undo commits. Batch only fully validated requests; accept atomically. Bounded DB retries preserve IDs. All requests, including empty/unsupported-only, take the same journal/receipt/sequence path in v1. Empty/duplicate-only sequences complete empty publication without Parquet; otherwise they would stall the lane.
 
 For mixed-project batches, any stale request aborts the attempted transaction. Rebuild a new journal containing still-valid requests with unchanged acceptance IDs; rejected requests receive their own failure. Old uploads remain unreferenced. Re-normalize changed scrub rules only while the original input is still privately held; otherwise reject and never ACK stale bytes. Receipt content hashes exclude transient authentication snapshots.
 
@@ -329,7 +334,12 @@ Snapshot creation:
 
 TTL15min, heartbeat30s, maximum active extension1h. Reuse only existing live snapshot rows; tokens cannot resurrect retired generations. Rows/histogram/detail share a snapshot. Sort `(event_time_us DESC,event_time_ns_remainder DESC,record_id DESC)` with stable tuple cursor, never OFFSET. Received-time sorting is a separate enum.
 
-HMAC token: version, installation generation, snapshot_id, principal/scope hash, normalized query hash, sort, cursor tuple, expiry. Protect secret; never expose it in URLs. Tamper/mismatch400, forbidden403, expired410, restore generation mismatch409. Detail validates snapshot and permissions.
+HMAC read token binds version, installation generation, snapshot_id,
+principal/scope hash, normalized dataset/filter hash and expiry. A cursor also
+binds operation/projection/sort/limit and last tuple. Rows and histogram can
+therefore reuse one dataset snapshot without changing its scope. Protect signing
+secret; never expose it in URLs. Tamper/mismatch400, forbidden403, expired410,
+restore generation mismatch409. Detail validates snapshot and permissions.
 
 Any file selection/download/SQL/merge failure fails the whole result. Progressive UI output must say complete=false and cannot serve as exact count/alert success.
 
@@ -412,6 +422,14 @@ Disk LRU cache key=(installation,object_id,content_hash,block_index), single-fli
 
 Stream journal decode, apply accepted selection, bulk append through verified DuckDB API. Per-row INSERT/CGO is baseline only; initial append batch2,048 rows, reduced for large records by bytes. G00 verifies nested attrs/decimals.
 
+v1 conversion handles one accepted batch per job. Prepare persists immutable
+output metadata and moves the job to unleased prepared state; an ordered publisher
+claims it with a new fence. This prevents a prepared successor from holding
+compute while waiting for a predecessor. Conversion may produce small time-flush
+files; compaction reaches the32–64MiB steady-state target. Do not delay visibility
+to fill a file. Wide-day inputs use bounded streaming output/metadata, not a
+post-ACK partition-count rejection. See the detailed ingestion/IPC contracts.
+
 Preserve record_id/lane/seq. Do not duplicate mutable Issue status/count in Parquet. Derive manifest statistics from actual output, never estimates used for pruning.
 
 Compact only same tenant/lane/schema/event-day/kind. Reserve bounded input files/generation; verify analytics/payload identity sets via counts/hashes. CAS that reserved inputs are still current; atomically close their valid_to_generation and open replacements at valid_from_generation. Never retire unreserved late files. Compaction does not advance published_seq. Failed outputs are orphans while originals remain readable. Schedule by size/read demand/backlog/expected GET reduction, within maintenance budget; pause under ingest/query pressure, not indiscriminate periodic rewrites.
@@ -450,7 +468,7 @@ Client reports are approximate SDK losses. Dedupe within receipt/item, not unkno
 
 ## 16. Retention, GC, backup, disaster recovery
 
-Default received-time retention30days; receipts/dedupe retention+7days. Old event-time alone cannot immediately delete fresh ACKed records. Rewrite mixed-retention files into new generations. Pin retention cutoff per snapshot so rows do not disappear midway.
+Default received-time retention30days; receipts/dedupe retention+7days. Old event-time alone cannot immediately delete fresh ACKed records. Rewrite mixed-retention files into new generations. Pin retention cutoff per snapshot so rows do not disappear midway. Logical retention floor is monotonic; increasing retention cannot resurrect expired data. Issue summary counts are lifetime unique published occurrences, while retained occurrence detail may expire.
 
 Delete objects only if unreferenced by current catalog, active query/detail leases, recoverable PG backup/PITR window, intents/jobs, and past safety grace. Initial7-day PITR requires at least8-day retirement grace, **including journals**. Longer backups extend object protection and cost. Never apply independent S3 lifecycle deletion to live/recovery objects.
 
@@ -547,6 +565,10 @@ Cost includes compute seconds, storage/journal/backup/index GB-month, S3 PUT/GET
 ## 22. Implementation gates
 
 Preserve earlier contracts at each gate. Record actual checks in commit bodies, not per-stage diaries. Do not implement successful stubs for missing checks.
+
+Use [ordered implementation packets](docs/implementation/work-plan.md) for file
+ownership, prerequisites, named negative tests and gate closure. Management
+authorization precedes public query exposure in G04; login UI follows in G05.
 
 Perform architecture/import checks on each change. G02 additionally measures maximum-input memory, request-to-batch ratio, S3 PUT and PG transaction counts. G03 measures file-size distribution and publication lag; G04 measures cold/warm query scan and GET costs. G07 retains the full sustained resource/scaling gate. Earlier measurements do not substitute for it.
 
