@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Compare a Rust benchmark report with the experimental Go report."""
+
+import argparse
+import json
+import pathlib
+
+
+def read_report(path: pathlib.Path) -> dict:
+    return json.loads(path.read_text())
+
+
+def value(report: dict, *keys: str):
+    current = report
+    for key in keys:
+        current = current[key]
+    return current
+
+
+def format_value(metric: str, number: float) -> str:
+    if metric == "bytes" or metric.endswith("_bytes"):
+        return f"{number / 1024 / 1024:.1f} MiB"
+    if metric.endswith("_us") or metric.endswith("_ms"):
+        return f"{number:,.0f}"
+    return f"{number:,.0f}"
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("rust_report", type=pathlib.Path)
+    parser.add_argument("go_report", type=pathlib.Path)
+    args = parser.parse_args()
+    rust = read_report(args.rust_report)
+    go = read_report(args.go_report)
+    metrics = [
+        ("seed + visibility", ("seed_elapsed_ms",), "ms"),
+        ("accept p50", ("acceptance_latency", "p50"), "us"),
+        ("accept p95", ("acceptance_latency", "p95"), "us"),
+        ("index prepare", ("indexer_performance", "prepare_us"), "us"),
+        ("native commit", ("indexer_performance", "native_commit_us"), "us"),
+        ("SQLite finalize", ("indexer_performance", "sqlite_finalize_us"), "us"),
+        ("structured p95", ("structured_search_latency", "p95"), "us"),
+        ("text p95", ("text_search_latency", "p95"), "us"),
+        ("histogram p95", ("histogram_latency", "p95"), "us"),
+        ("data directory", ("data_dir_bytes",), "bytes"),
+    ]
+    print("metric                 Rust          Go       Go/Rust")
+    print("---------------------  ------------  --------  --------")
+    for label, first, unit in metrics:
+        rust_value = value(rust, *first)
+        go_value = value(go, *first)
+        if label == "seed + visibility":
+            rust_value += value(rust, "visibility_lag_ms")
+            go_value += value(go, "visibility_lag_ms")
+        ratio = go_value / rust_value if rust_value else 0
+        print(f"{label:<21} {format_value(unit, rust_value):>12}  {format_value(unit, go_value):>8}  {ratio:>7.2f}x")
+    print()
+    print("Rust backend:", rust.get("native_format", "unknown"))
+    print("Go backend:  ", go.get("native_format", "unknown"))
+    print("Go/Rust below 1.00x means the Go report was faster for that metric.")
+
+
+if __name__ == "__main__":
+    main()

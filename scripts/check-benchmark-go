@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Build and run the experimental Go core-path benchmark."""
+
+import argparse
+import json
+import os
+import pathlib
+import subprocess
+import tempfile
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+GO_ROOT = ROOT / "go" / "benchmark"
+PROFILES = {"smoke": 10_000, "100k": 100_000, "1m": 1_000_000, "10m": 10_000_000}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("profile", choices=PROFILES, nargs="?", default="smoke")
+    parser.add_argument("--report", type=pathlib.Path)
+    args = parser.parse_args()
+    report = (args.report or ROOT / ".tools" / "benchmark" / f"go-{args.profile}.json").resolve()
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.unlink(missing_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="eventglass-go-build-") as build_dir, tempfile.TemporaryDirectory(prefix="eventglass-go-data-") as data_dir:
+        binary = pathlib.Path(build_dir) / "eventglass-go-benchmark"
+        subprocess.run(
+            [
+                "go",
+                "build",
+                "-tags",
+                "fts5",
+                "-trimpath",
+                "-ldflags=-s -w",
+                "-o",
+                str(binary),
+                ".",
+            ],
+            cwd=GO_ROOT,
+            check=True,
+            env={**os.environ, "CGO_ENABLED": "1"},
+        )
+        subprocess.run(
+            [
+                str(binary),
+                "-records",
+                str(PROFILES[args.profile]),
+                "-profile",
+                f"go-{args.profile}",
+                "-data-dir",
+                data_dir,
+                "-report",
+                str(report),
+            ],
+            cwd=ROOT,
+            check=True,
+            env={**os.environ, "EVENTGLASS_BENCH_REVISION": "working-tree"},
+        )
+
+    evidence = json.loads(report.read_text())
+    if evidence["inbox_records_after_drain"] != 0 or evidence["inbox_bytes_after_drain"] != 0:
+        raise RuntimeError("Go benchmark left Inbox data behind")
+    print(
+        f"Go benchmark evidence: {report}\n"
+        f"records={evidence['records']} seed_ms={evidence['seed_elapsed_ms']} "
+        f"visibility_ms={evidence['visibility_lag_ms']} "
+        f"search_p95_us={evidence['text_search_latency']['p95']}"
+    )
+
+
+if __name__ == "__main__":
+    main()
