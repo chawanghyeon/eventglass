@@ -39,3 +39,10 @@ repos:
         pass_filenames: false
         require_serial: true
         stages: [pre-commit]
+      - id: pre-push-go
+        name: Go unit and layout contracts
+        entry: ./scripts/check unit
+        language: system
+        pass_filenames: false
+        require_serial: true
+        stages: [pre-push]

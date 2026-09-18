@@ -16,7 +16,7 @@ def parse(path: pathlib.Path) -> None:
     with path.open("rb") as stream:
         if suffix == ".json":
             json.load(stream)
-        elif suffix == ".toml" or path.name == "Cargo.lock":
+        elif suffix == ".toml":
             tomllib.load(stream)
         elif suffix in {".yaml", ".yml"}:
             list(yaml.safe_load_all(stream))

@@ -10,7 +10,7 @@ import tempfile
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-GO_ROOT = ROOT / "go" / "benchmark"
+GO_ROOT = ROOT / "benchmark"
 PROFILES = {"smoke": 10_000, "100k": 100_000, "1m": 1_000_000, "10m": 10_000_000}
 
 

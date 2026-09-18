@@ -3,6 +3,10 @@
 .tools
 **/node_modules
 tools/sdk-fixtures/.npm-cache
+tools/sdk-fixtures/.pip-cache
 tools/sdk-fixtures/.venv
+tools/sdk-fixtures/.go-build-cache
+tools/sdk-fixtures/.go-mod-cache
+tools/sdk-fixtures/.playwright-browsers
 **/__pycache__
 data

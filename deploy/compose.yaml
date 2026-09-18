@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:17.11-bookworm@sha256:051f7b7b3abdd564d5d1bd1e8c4b9c1b6e77087d1dd22020ede611c096a272e0
+    environment:
+      POSTGRES_DB: eventglass
+      POSTGRES_USER: eventglass
+      POSTGRES_PASSWORD: local-test-only
+    command: ["postgres", "-c", "synchronous_commit=on"]
+    ports:
+      - "127.0.0.1::5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eventglass -d eventglass"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    tmpfs:
+      - /var/lib/postgresql/data
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: eventglass-local
+      MINIO_ROOT_PASSWORD: eventglass-local-secret
+    ports:
+      - "127.0.0.1::9000"
+    tmpfs:
+      - /data
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-eu", "-c"]
+    command:
+      - |
+        until mc alias set local http://minio:9000 eventglass-local eventglass-local-secret; do sleep 1; done
+        mc mb --ignore-existing local/eventglass-g00
