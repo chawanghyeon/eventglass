@@ -1,3 +1,7 @@
+> Historical Rust reference only. Active Go scope and architecture are defined in
+> [DESIGN.md](../../DESIGN.md) and [ARCHITECTURE.md](../../ARCHITECTURE.md).
+> This document does not add requirements to the Go implementation.
+
 # 별도 관리 없이 동작하는 비용 효율 설계
 
 상태: 2026-09-12 사용자가 구현과 100% 테스트 커버리지 검증을 승인한 목표 설계. 이전 C01–C07 및 A01–A03 계획을 대체한다.

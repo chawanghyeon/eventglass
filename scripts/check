@@ -25,8 +25,8 @@ check_go_version() {
 
 unit() {
   check_go_version
-  go test ./internal/api ./internal/control ./internal/ingest ./internal/sdk ./internal/storage
-  go vet ./internal/api ./internal/control ./internal/ingest ./internal/sdk ./internal/storage
+  go test ./tests/architecture ./internal/api ./internal/control ./internal/ingest ./internal/model ./internal/resource ./internal/sdk ./internal/storage
+  go vet ./internal/api ./internal/control ./internal/ingest ./internal/model ./internal/resource ./internal/sdk ./internal/storage
   python3 -m unittest deploy/test_layout.py
   test "$(sha256sum docs/observe/source-design.md | awk '{print $1}')" = "4cccddc98f76d5c38099958587386c55756a08cf366c26ed9e65eeedec0526e5"
 }
@@ -35,7 +35,6 @@ contracts() {
   docker_required contracts
   case "$(uname -m)" in
     arm64|aarch64) platform=linux/arm64 ;;
-    x86_64|amd64) platform=linux/amd64 ;;
     *) echo "unsupported contract-test architecture: $(uname -m)" >&2; exit 1 ;;
   esac
   docker buildx build --platform "$platform" --target test --load --tag eventglass-go:g00-test .
@@ -91,6 +90,20 @@ missing() {
 }
 
 case "${1:-}" in
+  architecture) check_go_version; go test -count=1 ./tests/architecture ;;
+  focused)
+    check_go_version
+    shift
+    case "${1:-}" in
+      api|control|ingest|model|resource|sdk|storage)
+        package=$1
+        shift
+        go test "./internal/$package" "$@"
+        ;;
+      *) echo "focused requires api|control|ingest|model|resource|sdk|storage" >&2; exit 2 ;;
+    esac
+    ;;
+  journal-bench) check_go_version; go test ./internal/storage -run '^$' -bench BenchmarkJournal -benchmem -count=1 ;;
   unit) unit ;;
   contracts) contracts ;;
   integration) integration ;;
@@ -101,5 +114,5 @@ case "${1:-}" in
   scale) docker_required scale; missing "scale verification" ;;
   comparison) docker_required comparison; missing "comparison verification" ;;
   release) docker_required release; missing "release verification" ;;
-  *) echo "usage: ./scripts/check {unit|contracts|integration|sdk|crash|web|resource|scale|comparison|release}" >&2; exit 2 ;;
+  *) echo "usage: ./scripts/check {unit|architecture|focused PACKAGE|journal-bench|contracts|integration|sdk|crash|web|resource|scale|comparison|release}" >&2; exit 2 ;;
 esac

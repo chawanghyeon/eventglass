@@ -212,6 +212,26 @@ func TestIdentityDomainAndClientReport(t *testing.T) {
 	}
 }
 
+func TestSourceIdentityIsSeparateFromOccurrenceIdentity(t *testing.T) {
+	envelope := sdk.Envelope{Items: []sdk.Item{{Type: "event", Value: map[string]any{
+		"event_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "message": "same source",
+	}}}}
+	normalize := func(acceptance string) model.Record {
+		batch, err := NormalizeEnvelope(envelope, NormalizeOptions{TenantID: 1, ProjectID: 1, AcceptanceID: acceptance, ArrivalTime: time.Unix(1, 0)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return batch.Records[0]
+	}
+	first, retry, later := normalize("first"), normalize("first"), normalize("later")
+	if first.RecordID != retry.RecordID || first.RecordID == later.RecordID {
+		t.Fatal("occurrence identity is not retry-stable and expiry-safe")
+	}
+	if *first.SourceEventID != *later.SourceEventID {
+		t.Fatal("source dedupe identity changed")
+	}
+}
+
 func findAttribute(attributes []model.Attribute, path string) *model.Attribute {
 	for index := range attributes {
 		if attributes[index].Path == path {

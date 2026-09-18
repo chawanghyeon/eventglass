@@ -1,13 +1,23 @@
-# Eventglass implementation rules
+# Eventglass working instructions
 
-Read docs/observe/implementation.md, architecture.md, quality.md and the relevant work package before changing a subsystem. Latest user instruction (2026-09-09): do not create or use subagents; the primary agent performs the remaining work directly. This supersedes earlier delegation authorization.
+Complete the requested implementation, relevant verification, and necessary documentation. Resolve routine local work without approval loops. The primary agent works directly; do not use subagents.
 
-- Keep source-design.md byte-identical to the user attachment. Document corrections separately.
-- Backend dependencies flow from HTTP/app to concrete operations/domain/storage; domain modules must not depend on HTTP. Move transaction policy out of handlers.
-- Frontend separates generated API contracts, server query state, URL search state, and local form/view state. Follow docs/observe/architecture.md.
-- One operational SQLite DB and one sequential Indexer. Preserve durable ACK, commit/finalize/publish boundaries, shared search authorization, and complete checkpoint recovery.
-- Do not invent a query parser, WAL, general aggregation engine, or speculative service/repository abstraction.
-- Do not use subagents. Complete and verify each coherent stage directly, then commit and immediately push it. Keep changes and executed test results in commit messages; do not create per-stage Markdown diaries.
-- Work directly on `main` and push to `origin main` immediately after each commit. Follow game-uridogu-com's commit titles: `type: 한국어 변경 요약`, with an optional scope such as `chore(deploy): …`. Use feat/fix/perf/test/docs/chore as appropriate. Do not rewrite already published history just to change its message style.
-- Use real tests and report executed commands. Missing tools/tests, 0 selected tests, skipped required checks, and unexecuted benchmarks are not passing evidence.
-- The user authorizes commit-then-push for every stage. After the full implementation and verification finish, deploy through `ssh oracle`, following game-uridogu-com deployment conventions and selecting an appropriate domain. Do not deploy unfinished work or send external alerts. Test data belongs in isolated temporary directories.
+## Product constraints
+
+- Keep `docs/observe/source-design.md` byte-identical to the user attachment; document corrections separately.
+- Backend dependencies flow from HTTP/app to operations/domain/storage. Domain modules do not depend on HTTP; transaction policy belongs outside handlers.
+- Frontend separates generated API contracts, server query state, URL search state, and local form/view state.
+- PostgreSQL owns receipts, authorization, jobs, and catalog state; S3 owns sanitized journal and bundle bytes. Preserve durable ACK, fenced Accept/Publish, shared search authorization, and coordinated PG/S3 recovery.
+- Use the root Go module and ARM64 verification. DuckDB execution must use the pinned 2.0 build. Read `DESIGN.md` for behavior and `ARCHITECTURE.md` for ownership before changing a subsystem.
+- Use existing query/storage engines. Avoid speculative service/repository layers.
+- Test data belongs in isolated temporary directories. Do not send external alerts.
+
+## Task references
+
+- Setup and check commands: `CONTRIBUTING.md`.
+- Behavior or subsystem contracts: relevant sections of `DESIGN.md`.
+- Architecture or state ownership: `ARCHITECTURE.md`.
+- Test infrastructure, resource limits, or release validation: `docs/observe/quality.md`.
+- Continuing planned implementation: `DESIGN.md` section 22 and the gate status in `README.md`. Historical source material is not an active implementation instruction.
+
+Record changes and executed verification in commits, without per-stage Markdown diaries. Follow the commit-then-push workflow on `main` in `CONTRIBUTING.md`. The current pre-push hook runs Go checks; production deployment is not implemented or authorized by that hook. Do not claim historical Rust deployment machinery is available.

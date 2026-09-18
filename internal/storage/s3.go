@@ -89,17 +89,42 @@ func (s *S3Store) objectKey(key string) (string, error) {
 }
 
 func (s *S3Store) Put(ctx context.Context, key string, data []byte) (ObjectInfo, error) {
+	digest := sha256.Sum256(data)
+	return s.PutStream(ctx, key, bytes.NewReader(data), int64(len(data)), hex.EncodeToString(digest[:]))
+}
+
+// PutStream uploads a private immutable spool without retaining a full object
+// in Go memory. The workflow must register an intent before calling this.
+func (s *S3Store) PutStream(ctx context.Context, key string, body io.ReadSeeker, size int64, checksum string) (ObjectInfo, error) {
+	if size < 0 || size == int64(^uint64(0)>>1) {
+		return ObjectInfo{}, errors.New("invalid object size")
+	}
+	if _, err := decodeHash(checksum); err != nil {
+		return ObjectInfo{}, err
+	}
 	objectKey, err := s.objectKey(key)
 	if err != nil {
 		return ObjectInfo{}, err
 	}
-	digest := sha256.Sum256(data)
-	checksum := hex.EncodeToString(digest[:])
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		return ObjectInfo{}, err
+	}
+	hash := sha256.New()
+	n, err := io.Copy(hash, io.LimitReader(body, size+1))
+	if err != nil {
+		return ObjectInfo{}, err
+	}
+	if n != size || hex.EncodeToString(hash.Sum(nil)) != checksum {
+		return ObjectInfo{}, errors.New("spool size or checksum mismatch")
+	}
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		return ObjectInfo{}, err
+	}
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(s.bucket),
 		Key:           aws.String(objectKey),
-		Body:          bytes.NewReader(data),
-		ContentLength: aws.Int64(int64(len(data))),
+		Body:          body,
+		ContentLength: aws.Int64(size),
 		Metadata:      map[string]string{checksumMetadataKey: checksum},
 	})
 	if err != nil {
@@ -109,7 +134,7 @@ func (s *S3Store) Put(ctx context.Context, key string, data []byte) (ObjectInfo,
 	if err != nil {
 		return ObjectInfo{}, err
 	}
-	if info.Size != int64(len(data)) || info.SHA256 != checksum {
+	if info.Size != size || info.SHA256 != checksum {
 		return ObjectInfo{}, errors.New("uploaded S3 object metadata does not match content")
 	}
 	return info, nil

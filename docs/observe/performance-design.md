@@ -1,3 +1,7 @@
+> Historical Rust reference only. Active Go scope and architecture are defined in
+> [DESIGN.md](../../DESIGN.md) and [ARCHITECTURE.md](../../ARCHITECTURE.md).
+> This document does not add requirements to the Go implementation.
+
 # 0.25코어 운영 성능 개선 설계
 
 ## 목표와 측정 기준

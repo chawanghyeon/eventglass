@@ -1,3 +1,7 @@
+> Historical Rust reference only. Active Go scope and architecture are defined in
+> [DESIGN.md](../../DESIGN.md) and [ARCHITECTURE.md](../../ARCHITECTURE.md).
+> This document does not add requirements to the Go implementation.
+
 # Source Map 도입 기준
 
 현재 Eventglass는 SDK가 보낸 scrubbed stack frame과 코드 문맥을 그대로 표시한다. JavaScript Source Map으로 원본 위치를 복원하려면 배포된 minified 파일과 해당 map이 동일한 build에 속한다는 증거가 필요하다. Sentry의 [Source Map 점검 문서](https://docs.sentry.io/platforms/javascript/guides/hono/sourcemaps/troubleshooting_js)는 `debug_meta`의 debug ID와 frame `abs_path` 일치, 배포 전 artifact 업로드, minified 파일과 map의 동시 제공을 요구한다. 서버가 오류에 실린 임의 URL을 fetch하거나 release 이름만으로 추측해서 적용하면 다른 코드 위치를 원인으로 표시할 수 있다.

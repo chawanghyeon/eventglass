@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -16,7 +17,10 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/chawanghyeon/eventglass/internal/ingest"
 	"github.com/chawanghyeon/eventglass/internal/model"
+	"github.com/chawanghyeon/eventglass/internal/resource"
+	"github.com/chawanghyeon/eventglass/internal/testkit"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -24,7 +28,7 @@ func TestIngestSupportsBoundedCompressionAndAuthenticates(t *testing.T) {
 	body := []byte("{\"dsn\":\"http://fixturePublicKey@127.0.0.1:8123/1\"}\n{\"type\":\"event\"}\n{\"event_id\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"message\":\"hello\"}")
 	for _, encoding := range []string{"identity", "gzip", "deflate", "br", "zstd"} {
 		t.Run(encoding, func(t *testing.T) {
-			sink := &MemorySink{}
+			sink := &testkit.MemorySink{}
 			handler := newTestHandler(t, sink, nil)
 			request := httptest.NewRequest(http.MethodPost, "/api/1/envelope/", bytes.NewReader(encodeBody(t, encoding, body)))
 			request.Header.Set("Content-Encoding", encoding)
@@ -46,7 +50,7 @@ func TestIngestSupportsBoundedCompressionAndAuthenticates(t *testing.T) {
 }
 
 func TestIngestRejectsConflictingIdentityAndIsAtomic(t *testing.T) {
-	sink := &MemorySink{}
+	sink := &testkit.MemorySink{}
 	handler := newTestHandler(t, sink, nil)
 	body := "{\"dsn\":\"http://otherKey@127.0.0.1:8123/1\"}\n{\"type\":\"event\"}\n{\"message\":\"no\"}"
 	request := httptest.NewRequest(http.MethodPost, "/api/1/envelope/?sentry_key=fixturePublicKey", bytes.NewBufferString(body))
@@ -72,7 +76,7 @@ func TestIngestRejectsConflictingIdentityAndIsAtomic(t *testing.T) {
 }
 
 func TestIngestCORSUnknownItemsRateLimitAndDependencyFailure(t *testing.T) {
-	sink := &MemorySink{}
+	sink := &testkit.MemorySink{}
 	rateLimited := false
 	handler := newTestHandler(t, sink, func() bool { return rateLimited })
 	preflight := httptest.NewRequest(http.MethodOptions, "/api/1/envelope/", nil)
@@ -116,7 +120,7 @@ func TestIngestCORSUnknownItemsRateLimitAndDependencyFailure(t *testing.T) {
 }
 
 func TestStoreResponseAndMalformedInputs(t *testing.T) {
-	sink := &MemorySink{}
+	sink := &testkit.MemorySink{}
 	handler := newTestHandler(t, sink, nil)
 	request := httptest.NewRequest(http.MethodPost, "/api/1/store/?sentry_key=fixturePublicKey", bytes.NewBufferString(`{"event_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","message":"legacy"}`))
 	response := httptest.NewRecorder()
@@ -168,7 +172,7 @@ func TestStoreResponseAndMalformedInputs(t *testing.T) {
 }
 
 func TestMixedEventAndLogsItemCountAndCanonicalLimits(t *testing.T) {
-	sink := &MemorySink{}
+	sink := &testkit.MemorySink{}
 	handler := newTestHandler(t, sink, nil)
 	body := "{}\n{\"type\":\"event\"}\n{\"message\":\"event\"}\n" +
 		"{\"type\":\"log\",\"item_count\":2}\n{\"version\":2,\"items\":[{\"body\":\"one\"},{\"body\":\"two\"}]}"
@@ -198,7 +202,7 @@ func TestMixedEventAndLogsItemCountAndCanonicalLimits(t *testing.T) {
 
 func TestDecoderConcurrencyAndByteAdmission(t *testing.T) {
 	handler, err := NewIngestHandler(Config{
-		TenantID: 1, ProjectID: 1, PublicKey: "fixturePublicKey", Sink: &MemorySink{},
+		TenantID: 1, ProjectID: 1, PublicKey: "fixturePublicKey", Sink: &testkit.MemorySink{},
 		DecoderSlots: 2, IngressBytes: 41 << 20,
 	})
 	if err != nil {
@@ -219,13 +223,13 @@ func TestDecoderConcurrencyAndByteAdmission(t *testing.T) {
 	second()
 	first()
 
-	handler.admission.limit = 30 << 20
+	handler.admission = resource.NewBudget(30 << 20)
 	if _, ok := handler.acquireDecoder(MaxWireBytes); ok {
 		t.Fatal("request exceeding byte admission was admitted")
 	}
 }
 
-func newTestHandler(t *testing.T, sink BatchSink, rateLimited func() bool) *IngestHandler {
+func newTestHandler(t *testing.T, sink Acceptor, rateLimited func() bool) *IngestHandler {
 	t.Helper()
 	handler, err := NewIngestHandler(Config{
 		TenantID: 1, ProjectID: 1, PublicKey: "fixturePublicKey", Sink: sink,
@@ -270,11 +274,69 @@ func encodeBody(t *testing.T, encoding string, body []byte) []byte {
 	return output.Bytes()
 }
 
-var _ BatchSink = (*recordingSink)(nil)
+var _ Acceptor = (*recordingSink)(nil)
 
-type recordingSink struct{ batches []model.Batch }
+type recordingSink struct {
+	batches  []model.NormalizedRequest
+	lastAuth ingest.Authorization
+}
 
-func (sink *recordingSink) Accept(_ context.Context, batch model.Batch) error {
-	sink.batches = append(sink.batches, batch)
+func (sink *recordingSink) Accept(_ context.Context, command ingest.Command) error {
+	sink.lastAuth = command.Authorization
+	sink.batches = append(sink.batches, command.Request)
 	return nil
+}
+
+func TestAuthenticationSnapshotDoesNotEnterCanonicalData(t *testing.T) {
+	sink := &recordingSink{}
+	handler, err := NewIngestHandler(Config{TenantID: 2, ProjectID: 7, PublicKey: "fixturePublicKey",
+		Sink: sink, ProjectRevision: 9, KeyRevision: 3, ScrubRevision: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("POST", "/api/7/envelope/?sentry_key=fixturePublicKey", strings.NewReader("{}"))
+	request.Header.Set("User-Agent", "private-transport-marker")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != 200 {
+		t.Fatal(response.Code, response.Body.String())
+	}
+	if sink.lastAuth != (ingest.Authorization{TenantID: 2, ProjectID: 7, KeyHash: sha256.Sum256([]byte("fixturePublicKey")), ProjectRevision: 9, KeyRevision: 3, ScrubRevision: 5}) {
+		t.Fatal("auth snapshot was lost")
+	}
+	encoded, err := json.Marshal(sink.batches[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("fixturePublicKey")) || bytes.Contains(encoded, []byte("private-transport-marker")) || bytes.Contains(encoded, []byte("KeyHash")) {
+		t.Fatal("transport/auth data entered canonical request")
+	}
+}
+
+func TestWorkingBudgetRejectsBeforeParsingAndReleasesOnErrors(t *testing.T) {
+	budget := resource.NewBudget(50 << 20)
+	sink := &testkit.MemorySink{}
+	handler, err := NewIngestHandler(Config{TenantID: 1, ProjectID: 1, PublicKey: "fixture", Sink: sink, WorkingBudget: budget})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest("POST", "/api/1/envelope/?sentry_key=fixture", strings.NewReader(strings.Repeat("x", 100000)))
+	handler.ServeHTTP(response, request)
+	if response.Code != 429 || budget.Used() != 0 || handler.admission.Used() != 0 {
+		t.Fatal("working admission failed")
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("POST", "/api/1/envelope/?sentry_key=fixture", strings.NewReader("invalid")))
+	if response.Code != 400 || budget.Used() != 0 || handler.admission.Used() != 0 {
+		t.Fatal("parse failure leaked permit")
+	}
+	if err := budget.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("POST", "/api/1/envelope/?sentry_key=fixture", strings.NewReader("{}")))
+	if response.Code != 429 || len(sink.Batches()) != 0 {
+		t.Fatal("draining budget admitted work")
+	}
 }

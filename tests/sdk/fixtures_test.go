@@ -15,6 +15,7 @@ import (
 
 	"github.com/chawanghyeon/eventglass/internal/api"
 	"github.com/chawanghyeon/eventglass/internal/model"
+	"github.com/chawanghyeon/eventglass/internal/testkit"
 )
 
 type fixtureMetadata struct {
@@ -87,7 +88,7 @@ func TestCapturedSDKFixturesNormalizeThroughGoAPI(t *testing.T) {
 			if len(headers) != len(metadata.Requests) {
 				t.Fatal("request/header manifest mismatch")
 			}
-			sink := &api.MemorySink{}
+			sink := &testkit.MemorySink{}
 			handler, err := api.NewIngestHandler(api.Config{
 				TenantID: 1, ProjectID: 1, PublicKey: "fixturePublicKey", Sink: sink,
 				AllowedOrigins: []string{"http://127.0.0.1:PORT"},
@@ -164,7 +165,7 @@ func assertGoStructuredLog(t *testing.T, records []model.Record) {
 	t.Fatal("Go structured log or exact int64 attribute missing")
 }
 
-func flattenRecords(batches []model.Batch) []model.Record {
+func flattenRecords(batches []model.NormalizedRequest) []model.Record {
 	var records []model.Record
 	for _, batch := range batches {
 		records = append(records, batch.Records...)

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -14,12 +15,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/andybalholm/brotli"
 	"github.com/chawanghyeon/eventglass/internal/ingest"
-	"github.com/chawanghyeon/eventglass/internal/model"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/sdk"
 	"github.com/klauspost/compress/zstd"
 )
@@ -29,12 +29,13 @@ const (
 	MaxDecompressedBytes = 20 << 20
 	DefaultIngressBytes  = 64 << 20
 	DefaultDecoderSlots  = 2
+	DefaultWorkingBytes  = 256 << 20
 )
 
 var errStorePayloadTooLarge = errors.New("legacy store payload limit exceeded")
 
-type BatchSink interface {
-	Accept(context.Context, model.Batch) error
+type Acceptor interface {
+	Accept(context.Context, ingest.Command) error
 }
 
 type Config struct {
@@ -43,33 +44,45 @@ type Config struct {
 	PublicKey             string
 	AllowedOrigins        []string
 	DefaultService        string
-	Sink                  BatchSink
+	Sink                  Acceptor
 	Now                   func() time.Time
 	RateLimited           func() bool
 	ForbiddenFixtureValue string
 	DecoderSlots          int
 	IngressBytes          int64
+	ProjectRevision       int64
+	KeyRevision           int64
+	ScrubRevision         int
+	// App injects process-wide budgets when multiple handlers/roles coexist.
+	IngressBudget *resource.Budget
+	WorkingBudget *resource.Budget
 }
 
 type IngestHandler struct {
 	config        Config
 	origins       map[string]struct{}
 	decoderTokens chan struct{}
-	admission     byteAdmission
-}
-
-type byteAdmission struct {
-	mu    sync.Mutex
-	used  int64
-	limit int64
+	admission     *resource.Budget
 }
 
 func NewIngestHandler(config Config) (*IngestHandler, error) {
-	if config.TenantID == 0 || config.ProjectID == 0 || config.PublicKey == "" || config.Sink == nil {
+	if config.TenantID <= 0 || config.ProjectID <= 0 || config.PublicKey == "" || config.Sink == nil {
 		return nil, errors.New("tenant, project, public key, and sink are required")
 	}
 	if config.Now == nil {
 		config.Now = time.Now
+	}
+	if config.ProjectRevision == 0 {
+		config.ProjectRevision = 1
+	}
+	if config.KeyRevision == 0 {
+		config.KeyRevision = 1
+	}
+	if config.ScrubRevision == 0 {
+		config.ScrubRevision = 1
+	}
+	if config.ProjectRevision < 1 || config.KeyRevision < 1 || config.ScrubRevision < 1 {
+		return nil, errors.New("authorization revisions must be positive")
 	}
 	if config.DecoderSlots <= 0 {
 		config.DecoderSlots = DefaultDecoderSlots
@@ -77,10 +90,16 @@ func NewIngestHandler(config Config) (*IngestHandler, error) {
 	if config.IngressBytes <= 0 {
 		config.IngressBytes = DefaultIngressBytes
 	}
+	if config.IngressBudget == nil {
+		config.IngressBudget = resource.NewBudget(config.IngressBytes)
+	}
+	if config.WorkingBudget == nil {
+		config.WorkingBudget = resource.NewBudget(DefaultWorkingBytes)
+	}
 	handler := &IngestHandler{
 		config: config, origins: make(map[string]struct{}),
 		decoderTokens: make(chan struct{}, config.DecoderSlots),
-		admission:     byteAdmission{limit: config.IngressBytes},
+		admission:     config.IngressBudget,
 	}
 	for _, origin := range config.AllowedOrigins {
 		handler.origins[origin] = struct{}{}
@@ -130,9 +149,17 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		writeError(writer, status, reason)
 		return
 	}
+	// Reserve before allocating a parsed object graph. This conservative policy
+	// accounts for maps/strings/projections and canonical/codec scratch; it is
+	// not a claim that Go heap or RSS is bounded by the byte counter.
+	working, err := handler.config.WorkingBudget.Acquire(int64(len(body))*32 + 2*ingest.MaxCanonicalBytes + (8 << 20))
+	if err != nil {
+		writeRateLimit(writer, "working_memory_limited")
+		return
+	}
+	defer working.Release()
 
 	var envelope sdk.Envelope
-	var err error
 	if endpoint == "store" {
 		body, err = decodeStorePayload(body, request.Header.Get("Content-Type"))
 		if err != nil {
@@ -143,6 +170,13 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 			writeError(writer, http.StatusBadRequest, "malformed_store_payload")
 			return
 		}
+		// Legacy form decompression can expand a second time.
+		additional, reserveErr := handler.config.WorkingBudget.Acquire(int64(len(body))*32 + 1)
+		if reserveErr != nil {
+			writeRateLimit(writer, "working_memory_limited")
+			return
+		}
+		defer additional.Release()
 		payload, decodeErr := sdk.DecodeObject(body, sdk.DefaultJSONLimits)
 		if decodeErr != nil {
 			if errors.Is(decodeErr, sdk.ErrLimitExceeded) {
@@ -190,7 +224,25 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusBadRequest, "normalization_failed")
 		return
 	}
-	if err := handler.config.Sink.Accept(request.Context(), batch); err != nil {
+	command := ingest.Command{Request: batch, Authorization: ingest.Authorization{
+		TenantID: handler.config.TenantID, ProjectID: projectID,
+		KeyHash:         sha256.Sum256([]byte(handler.config.PublicKey)),
+		ProjectRevision: handler.config.ProjectRevision, KeyRevision: handler.config.KeyRevision,
+		ScrubRevision: handler.config.ScrubRevision,
+	}}
+	if err := handler.config.Sink.Accept(request.Context(), command); err != nil {
+		if errors.Is(err, ingest.ErrProjectDisabled) {
+			writeError(writer, http.StatusForbidden, "project_disabled")
+			return
+		}
+		if errors.Is(err, ingest.ErrKeyRevoked) {
+			writeError(writer, http.StatusUnauthorized, "invalid_key")
+			return
+		}
+		if errors.Is(err, ingest.ErrAdmissionLimited) || errors.Is(err, ingest.ErrDraining) {
+			writeRateLimit(writer, "admission_limited")
+			return
+		}
 		writeError(writer, http.StatusServiceUnavailable, "dependency_unavailable")
 		return
 	}
@@ -221,30 +273,15 @@ func (handler *IngestHandler) acquireDecoder(contentLength int64) (func(), bool)
 		wireReservation = MaxWireBytes
 	}
 	reservation := wireReservation + MaxDecompressedBytes
-	if !handler.admission.acquire(reservation) {
+	permit, err := handler.admission.Acquire(reservation)
+	if err != nil {
 		<-handler.decoderTokens
 		return nil, false
 	}
 	return func() {
-		handler.admission.release(reservation)
+		permit.Release()
 		<-handler.decoderTokens
 	}, true
-}
-
-func (admission *byteAdmission) acquire(bytes int64) bool {
-	admission.mu.Lock()
-	defer admission.mu.Unlock()
-	if bytes < 0 || admission.used+bytes > admission.limit {
-		return false
-	}
-	admission.used += bytes
-	return true
-}
-
-func (admission *byteAdmission) release(bytes int64) {
-	admission.mu.Lock()
-	defer admission.mu.Unlock()
-	admission.used -= bytes
 }
 
 func (handler *IngestHandler) options(writer http.ResponseWriter, request *http.Request) {
@@ -421,27 +458,3 @@ func writeError(writer http.ResponseWriter, status int, reason string) {
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(map[string]string{"error": reason})
 }
-
-type MemorySink struct {
-	mu      sync.Mutex
-	batches []model.Batch
-	err     error
-}
-
-func (sink *MemorySink) Accept(_ context.Context, batch model.Batch) error {
-	sink.mu.Lock()
-	defer sink.mu.Unlock()
-	if sink.err != nil {
-		return sink.err
-	}
-	sink.batches = append(sink.batches, batch)
-	return nil
-}
-
-func (sink *MemorySink) Batches() []model.Batch {
-	sink.mu.Lock()
-	defer sink.mu.Unlock()
-	return append([]model.Batch(nil), sink.batches...)
-}
-
-func (sink *MemorySink) SetError(err error) { sink.mu.Lock(); defer sink.mu.Unlock(); sink.err = err }

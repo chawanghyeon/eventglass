@@ -33,8 +33,8 @@ type NormalizeOptions struct {
 	ForbiddenValue string
 }
 
-func NormalizeEnvelope(envelope sdk.Envelope, options NormalizeOptions) (model.Batch, error) {
-	batch := model.Batch{AcceptanceID: options.AcceptanceID}
+func NormalizeEnvelope(envelope sdk.Envelope, options NormalizeOptions) (model.NormalizedRequest, error) {
+	batch := model.NormalizedRequest{TenantID: options.TenantID, ProjectID: options.ProjectID, AcceptanceID: options.AcceptanceID}
 	if batch.AcceptanceID == "" {
 		return batch, errors.New("acceptance ID is required")
 	}
@@ -87,6 +87,7 @@ func NormalizeEnvelope(envelope sdk.Envelope, options NormalizeOptions) (model.B
 			return batch, fmt.Errorf("%w: canonical record count exceeds %d", ErrLimitExceeded, MaxCanonicalRecords)
 		}
 	}
+	canonicalBytes := 0
 	for index := range batch.Records {
 		encoded, err := json.Marshal(batch.Records[index])
 		if err != nil {
@@ -95,12 +96,21 @@ func NormalizeEnvelope(envelope sdk.Envelope, options NormalizeOptions) (model.B
 		if len(encoded) > MaxRecordBytes {
 			return batch, fmt.Errorf("%w: record %d exceeds %d bytes", ErrLimitExceeded, index, MaxRecordBytes)
 		}
+		canonicalBytes += len(encoded)
 	}
-	encoded, err := json.Marshal(batch)
+	// Size the request without serializing all records into a second full
+	// buffer. Replace metadata's "records":null with the measured JSON array.
+	metadata := batch
+	metadata.Records = nil
+	encoded, err := json.Marshal(metadata)
 	if err != nil {
 		return batch, err
 	}
-	if len(encoded) > MaxCanonicalBytes {
+	canonicalBytes += len(encoded)
+	if len(batch.Records) > 0 {
+		canonicalBytes += len(batch.Records) - 3
+	}
+	if canonicalBytes > MaxCanonicalBytes {
 		return batch, fmt.Errorf("%w: request exceeds %d canonical bytes", ErrLimitExceeded, MaxCanonicalBytes)
 	}
 	return batch, nil
@@ -239,11 +249,9 @@ func normalizeRecord(payload map[string]any, itemType string, itemOrdinal, recor
 	if err := ensureScrubbed(record.Raw, options.ForbiddenValue); err != nil {
 		return record, err
 	}
-	if record.SourceEventID != nil {
-		record.RecordID = recordID(strconv.FormatInt(options.ProjectID, 10), string(record.Kind), *record.SourceEventID)
-	} else {
-		record.RecordID = recordID(strconv.FormatInt(options.ProjectID, 10), options.AcceptanceID, strconv.Itoa(itemOrdinal), strconv.Itoa(recordOrdinal))
-	}
+	// The source ID is a dedupe key, not an occurrence ID. A later acceptance
+	// after dedupe expiry must not collide with a retained Issue occurrence.
+	record.RecordID = recordID(strconv.FormatInt(options.ProjectID, 10), options.AcceptanceID, strconv.Itoa(itemOrdinal), strconv.Itoa(recordOrdinal))
 	return record, nil
 }
 

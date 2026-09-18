@@ -1,3 +1,7 @@
+> Historical Rust reference only. Active Go scope and architecture are defined in
+> [DESIGN.md](../../DESIGN.md) and [ARCHITECTURE.md](../../ARCHITECTURE.md).
+> This document does not add requirements to the Go implementation.
+
 # Sentry SDK Replay 계약
 
 기준: 2026-09-09, 공식 `@sentry/browser@10.73.0`의 실제 Chromium 전송. 고객 코드는 공식 Sentry SDK 설정만 사용한다. 테스트 페이지의 일반 UI 동작은 Playwright로 실행하며 별도 recorder/listener/tracking API를 추가하지 않는다.

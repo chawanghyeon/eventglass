@@ -85,6 +85,24 @@ func TestPostgreSQLMigrationChecksumsAndRollback(t *testing.T) {
 	if _, err := connection.Exec(ctx, "UPDATE schema_migrations SET sha256=$1 WHERE version=$2", manifest[0].SHA256, manifest[0].Version); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := connection.Exec(ctx, "INSERT INTO schema_migrations(version,name,sha256) VALUES(9999,'future',repeat('0',64))"); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.ApplyMigrations(ctx, databaseURL); err == nil {
+		t.Fatal("future database schema was accepted")
+	}
+	if _, err := connection.Exec(ctx, "DELETE FROM schema_migrations WHERE version=9999"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Exec(ctx, "DELETE FROM schema_migrations WHERE version=$1", manifest[0].Version); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.ApplyMigrations(ctx, databaseURL); err == nil {
+		t.Fatal("gapped migration ledger was accepted")
+	}
+	if _, err := connection.Exec(ctx, "INSERT INTO schema_migrations(version,name,sha256) VALUES($1,$2,$3)", manifest[0].Version, manifest[0].Name, manifest[0].SHA256); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestS3PutRangeListMultipartAbortAndPermissions(t *testing.T) {
@@ -114,6 +132,23 @@ func TestS3PutRangeListMultipartAbortAndPermissions(t *testing.T) {
 	}
 	if !bytes.Equal(rangeBytes, data[len(data)-37:]) {
 		t.Fatal("last range bytes do not match")
+	}
+	spool, err := os.CreateTemp(t.TempDir(), "sanitized-spool-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.Close()
+	if _, err := spool.Write(data); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutStream(ctx, "contracts/stream.bin", spool, int64(len(data)), info.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PutStream(ctx, "contracts/invalid.bin", spool, int64(len(data)-1), info.SHA256); err == nil {
+		t.Fatal("invalid spool uploaded")
+	}
+	if err := store.Delete(ctx, []string{"contracts/stream.bin"}); err != nil {
+		t.Fatal(err)
 	}
 	objects, err := store.List(ctx, "contracts")
 	if err != nil || len(objects) != 1 {

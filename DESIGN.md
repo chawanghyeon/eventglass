@@ -68,7 +68,7 @@ UI -> API(scope/plan) -> PG snapshot -> workers(DuckDB) -> reducer -> response
 
 Small installations use `run --roles=api,worker,scheduler`; distributed deployments separate roles. Native execution belongs only in the binary's `engine-child` subcommand. Measure supervisor+child in one cgroup. Never share one DuckDB file across workers.
 
-Dependencies: HTTP -> operations -> domain/storage/query. Concrete operations own transactions outside handlers. Interfaces belong at real boundaries (Clock/ObjectStore/EngineProcess), not speculative generic Repository/Service layers.
+Dependencies: HTTP -> operations -> domain/storage/query. Concrete operations own transactions outside handlers. Interfaces belong at real boundaries (Clock/ObjectStore/EngineProcess), not speculative generic Repository/Service layers. [ARCHITECTURE.md](ARCHITECTURE.md) defines enforceable package boundaries, resource ownership, state transitions and compatibility. It is the active architecture; historical source material does not override this specification.
 
 ```text
 cmd/eventglass-go/       CLI and child entry point
@@ -84,7 +84,8 @@ internal/storage/       S3, cache, inventory, verified downloads
 internal/maintenance/   Compaction, retention, GC, backups
 internal/alerts/        Evaluation, outbox, delivery
 internal/api/           OpenAPI DTOs, auth, HTTP, SSE
-migrations/             PostgreSQL SQL migrations
+internal/control/migrations/ PostgreSQL SQL migrations embedded by control
+internal/resource/      Shared byte reservations and drain
 web/                    Independent UI and generated DTOs
 tests/                  Contracts, SDK, integration, crash, resources, comparison
 deploy/                 Local/cluster configs and version/digest locks
@@ -204,9 +205,9 @@ Create projections, Issue title/fingerprint, and checksums after scrub. Ignore I
 - acceptance_id is UUIDv4 per validated HTTP request, stable for internal retries, new for another HTTP request.
 - Envelope event_id overrides payload event_id; diagnose conflict, normalize32hex/hyphenated UUID to lowercase32hex.
 - Missing source ID derives from acceptance/item ordinal without masquerading as an SDK ID.
-- record_id is domain-separated, length-prefixed SHA-256 over `(project,kind,event_id)` or `(project,acceptance_id,item_ordinal,record_ordinal)`.
+- Project IDs are installation-wide unique and SQL-enforced. record_id is domain-separated, length-prefixed SHA-256 over `(project,acceptance_id,item_ordinal,record_ordinal)` for every candidate, including source-ID events. This pre-durability correction separates occurrence identity from the source dedupe key.
 - Logs have no assumed standard event_id; never dedupe by envelope event_id, JS sequence, trace/span, or message hash.
-- Accept claims source IDs by project+kind; first committed payload wins. Conflicting content never overwrites. Duplicates ACK with zero new rows/Issue count.
+- Accept claims source IDs by project+kind; first committed candidate record_id and payload win. Conflicting content never overwrites. Duplicates ACK with zero new rows/Issue count. A later request has a different candidate ID, but its rejected candidate is never published. Dedupe expiry therefore permits a new occurrence without colliding with retained Issue history.
 - Retain dedupe for event retention+7 days; later retransmission may be new. No exactly-once claim for ID-less logs across HTTP requests.
 
 ## 5. Durable records and Parquet schema
@@ -248,6 +249,10 @@ Initial Zstd3, suitable dictionaries, row-group target16,384 and8MiB canonical p
 
 Microbatch first of4MiB canonical,1,000 records,100ms oldest wait. Never split requests; larger legal requests get a dedicated batch up to20MiB/10,000 records. Enforce64MiB ingress admission and spool quota. Journal is Zstd JSONL with format/normalizer/schema/scrub header, request headers, canonical records, ordinal ranges/counts/checksums. Validate replay; do not renormalize SDK envelopes.
 
+NormalizedRequest is one HTTP request; JournalBatch contains up to1,000 whole requests of one tenant/lane, possibly from different projects. Journal request headers contain scope/acceptance/counts, never raw HTTP headers or credentials. Each request has a contiguous global record-position range and checksum footer; empty ranges use last=first-1. A batch has a separate UUID and journal intent. Receipts own request selections; output bundle boundaries may span contiguous batches. Keep batch/file counts measurable to detect small-object amplification.
+
+Stream encode/decode through quota-owned sanitized spools. Reserve parsed/projection/codec working memory separately from wire bytes. The current handler uses a conservative32x decoded-size estimate plus48MiB scratch, with additional reservation for legacy expansion; this is not an RSS guarantee. Reject admission explicitly before parsing if the estimate does not fit. G02 must measure maximum-input memory before claiming the512MiB target.
+
 Create16 virtual lanes per tenant; request lane=hash(acceptance_id) modulo lane_count. Batch tenant+lane, allocate buffers on demand. Lane count is versioned topology, not worker count; v1 does not auto-change it. Any worker processes any lane.
 
 Allocate seq via transactional lane counter, not nextval/time/UUID. Rollbacks leave no committed holes. No total order across lanes. Keys: `v1/{installation}/journals/{tenant}/{lane}/{batch_uuid}.jsonl.zst`; server-generated only, no credentials/user paths.
@@ -284,6 +289,8 @@ Scope FKs or operation checks must prevent cross-tenant references with negative
 
 Before upload, commit pending intent/key/expiry/fence. Verify uploaded size/checksum. Accept/Publish locks and validates the intent before referencing it. GC locks expired intents and sets deleting before S3 DELETE; deleting objects cannot publish. Retain tombstones/resweep because stale workers may PUT after deletion. Never adopt late uploads or delete live files solely from LIST. Quarantine unknown ownership.
 
+Every upload attempt has a distinct immutable object key. Job/intent authority includes installation, storage_generation, owner and fence; validate it in every state-changing transaction. Restore quiesces old writers before advancing generation. Incrementing a restored per-job fence alone is insufficient to fence an old worker.
+
 ### 7.3 Accept
 
 After journal upload, one transaction:
@@ -295,6 +302,8 @@ After journal upload, one transaction:
 5. Reference intent, COMMIT, then durable ACK.
 
 Conversion uses accepted selection, not every journal candidate. Lost replies do not undo commits. Batch only fully validated requests; accept atomically. Bounded DB retries preserve IDs. Assigned empty/duplicate-only sequences complete empty publication without Parquet; otherwise they would stall the lane. Empty requests without seq may commit diagnostics only.
+
+For mixed-project batches, any stale request aborts the attempted transaction. Rebuild a new journal containing still-valid requests with unchanged acceptance IDs; rejected requests receive their own failure. Old uploads remain unreferenced. Re-normalize changed scrub rules only while the original input is still privately held; otherwise reject and never ACK stale bytes. Receipt content hashes exclude transient authentication snapshots.
 
 ### 7.4 Claim/prepare/publish
 
@@ -538,6 +547,8 @@ Cost includes compute seconds, storage/journal/backup/index GB-month, S3 PUT/GET
 ## 22. Implementation gates
 
 Preserve earlier contracts at each gate. Record actual checks in commit bodies, not per-stage diaries. Do not implement successful stubs for missing checks.
+
+Perform architecture/import checks on each change. G02 additionally measures maximum-input memory, request-to-batch ratio, S3 PUT and PG transaction counts. G03 measures file-size distribution and publication lag; G04 measures cold/warm query scan and GET costs. G07 retains the full sustained resource/scaling gate. Earlier measurements do not substitute for it.
 
 ### G00 — Isolation and engine/S3 contracts
 

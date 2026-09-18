@@ -29,3 +29,17 @@ func TestSplitMigrationRejectsMissingRollback(t *testing.T) {
 		t.Fatalf("expected marker error, got %v", err)
 	}
 }
+
+func TestMigrationLedgerRejectsFutureGapAndDrift(t *testing.T) {
+	manifest := []Migration{{Version: 1, SHA256: "first"}, {Version: 2, SHA256: "second"}}
+	for _, ledger := range []map[int]string{{3: "future"}, {2: "second"}, {1: "changed"}} {
+		if err := validateMigrationLedger(manifest, ledger); err == nil {
+			t.Fatalf("accepted ledger %v", ledger)
+		}
+	}
+	for _, ledger := range []map[int]string{{}, {1: "first"}, {1: "first", 2: "second"}} {
+		if err := validateMigrationLedger(manifest, ledger); err != nil {
+			t.Fatal(err)
+		}
+	}
+}

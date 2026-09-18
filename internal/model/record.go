@@ -82,7 +82,11 @@ type UnsupportedItem struct {
 	Bytes       int    `json:"bytes"`
 }
 
-type Batch struct {
+// NormalizedRequest is one validated, scrubbed HTTP request. It contains no
+// credentials or transport headers and is not a storage microbatch.
+type NormalizedRequest struct {
+	TenantID         int64             `json:"tenant_id"`
+	ProjectID        int64             `json:"project_id"`
 	AcceptanceID     string            `json:"acceptance_id"`
 	Records          []Record          `json:"records"`
 	Outcomes         []Outcome         `json:"outcomes"`

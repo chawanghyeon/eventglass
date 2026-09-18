@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/chawanghyeon/eventglass/internal/api"
+	"github.com/chawanghyeon/eventglass/internal/testkit"
 )
 
 const liveSentinel = "eventglass-live-scrub-sentinel"
@@ -39,7 +40,7 @@ func TestPinnedSDKsSendToLiveGoAPI(t *testing.T) {
 		}
 	}
 	browserPort := reservePort(t)
-	sink := &api.MemorySink{}
+	sink := &testkit.MemorySink{}
 	handler, err := api.NewIngestHandler(api.Config{
 		TenantID: 1, ProjectID: 1, PublicKey: "fixturePublicKey", Sink: sink,
 		AllowedOrigins: []string{fmt.Sprintf("http://127.0.0.1:%d", browserPort)},
@@ -129,7 +130,7 @@ func TestPinnedNodeSDKHonorsServerRateLimit(t *testing.T) {
 	}
 	tool := filepath.Join(root, "tools", "sdk-fixtures")
 	var attempts atomic.Int32
-	sink := &api.MemorySink{}
+	sink := &testkit.MemorySink{}
 	handler, err := api.NewIngestHandler(api.Config{
 		TenantID: 1, ProjectID: 1, PublicKey: "fixturePublicKey", Sink: sink,
 		RateLimited: func() bool { return attempts.Add(1) == 1 },

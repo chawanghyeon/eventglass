@@ -123,6 +123,10 @@ func ApplyMigrations(ctx context.Context, databaseURL string) error {
 	}
 	rows.Close()
 
+	if err := validateMigrationLedger(manifest, applied); err != nil {
+		return err
+	}
+
 	for _, migration := range manifest {
 		if checksum, exists := applied[migration.Version]; exists {
 			if checksum != migration.SHA256 {
@@ -144,6 +148,32 @@ func ApplyMigrations(ctx context.Context, databaseURL string) error {
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit migration %d: %w", migration.Version, err)
+		}
+	}
+	return nil
+}
+
+// Only an exact prefix of this binary's manifest is a migratable database.
+func validateMigrationLedger(manifest []Migration, applied map[int]string) error {
+	known := make(map[int]string, len(manifest))
+	missing := false
+	for _, migration := range manifest {
+		known[migration.Version] = migration.SHA256
+		checksum, exists := applied[migration.Version]
+		if !exists {
+			missing = true
+			continue
+		}
+		if missing {
+			return fmt.Errorf("migration ledger has a gap before %d", migration.Version)
+		}
+		if checksum != migration.SHA256 {
+			return fmt.Errorf("migration %d checksum mismatch", migration.Version)
+		}
+	}
+	for version := range applied {
+		if _, exists := known[version]; !exists {
+			return fmt.Errorf("unsupported migration version %d", version)
 		}
 	}
 	return nil
