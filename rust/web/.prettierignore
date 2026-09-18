@@ -1,5 +1,0 @@
-dist/
-node_modules/
-src/api/generated.ts
-package-lock.json
-coverage/

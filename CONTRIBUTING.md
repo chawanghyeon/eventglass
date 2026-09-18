@@ -1,35 +1,16 @@
-# Eventglass 개발 안내
+# Contributing to Eventglass
 
-Rust 제품은 `rust/`에 있으며 아래 `./scripts/*` 명령은 저장소 루트에서 그대로 실행합니다. Cargo를 직접 실행할 때는 `cd rust`로 고정 toolchain과 manifest를 선택합니다. UI는 `rust/web/`, API schema는 `rust/schemas/`입니다. 공유 SDK 도구·배포 설정·기존 설계 문서는 루트에 유지합니다. Docker build context는 저장소 루트이며 Dockerfile은 `rust/Dockerfile`입니다: `docker build -f rust/Dockerfile .`. production service·원격 데이터 경로·바이너리 이름은 바뀌지 않습니다.
-
-Rust 1.97.1, Node 22.22.2/npm 10.9.7, Python 3.12를 사용합니다. `./scripts/bootstrap`은 버전을 확인하고 잠긴 의존성·저장소 내부 검사 도구·Git hooks를 준비합니다. 사용자 전역 Git 설정은 변경하지 않습니다.
+The active product is the Go implementation in `go/eventglass`. Use Go 1.26.5 exactly and run commands from that directory unless noted otherwise.
 
 ```sh
-./scripts/bootstrap
-./scripts/check quick         # 형식·구문·secret·workflow
-./scripts/check rust          # Rust check/clippy/unit/doc
-./scripts/check contracts     # native 라이브러리·SQLite 계약
-./scripts/check integration   # 구현된 서버 통합 테스트
-./scripts/check web           # API 생성물·typecheck·lint·unit·build
-./scripts/check crash-smoke   # failpoint 프로세스 복구
-./scripts/check storage       # 고정 MinIO의 S3 checkpoint·전체 유실 복구
-./scripts/check embed-smoke   # UI 내장 바이너리
-./tools/sdk-fixtures/bootstrap-live.sh
-./scripts/check sdk-live      # 실제 Python/Node/Browser/Go SDK 전송
-./scripts/check resource      # Linux 실행: CPU 1 / 1GiB / swap 0
-./scripts/check benchmark-100k # Linux 10만 건: CPU 1 / 512MiB / swap 0
-./scripts/check-benchmark smoke --operational # Linux 1만 건: 빠른 0.25 CPU 성능 비교
-./scripts/check-benchmark 100k --operational # 운영 조건: CPU 0.25 / 1GiB / 50GB 데이터 예산
-./scripts/check-resource --cpus 0.25 # 운영 CPU에서 격리된 Linux 기능 검사
-./scripts/check release       # Linux amd64/arm64 + SPDX/notice/checksum
+cd go/eventglass
+./scripts/check unit
+./scripts/check contracts
+./scripts/check integration
 ```
 
-S3가 설정된 배포 바이너리에서 `eventglass backup rehearse`는 원격 checkpoint를 읽어 운영 데이터와 분리된 임시 디렉터리에 복원하고, 현재 바이너리의 schema migration 및 `doctor` 검사를 수행합니다. 원격 객체와 운영 DB를 쓰지 않고 임시 디렉터리는 종료 시 삭제합니다. 임시 디스크 여유를 기준으로 복원 크기를 보수적으로 제한합니다. 결과 JSON에 실제 선택된 checkpoint ID와 ingest 경계를 표시합니다. 실제 백업을 읽는 만큼 S3 GET/전송 비용은 발생할 수 있습니다.
+Commands for later implementation gates intentionally fail until their gate is implemented. Docker is required for the PostgreSQL/S3 integration environment and Linux multi-architecture image checks. Tests must use temporary databases, buckets, prefixes, directories, and localhost receivers.
 
-`storage`, `resource`, `benchmark-100k`와 운영 조건 검사는 실행 가능한 Docker가 필요합니다. `storage`는 digest로 고정한 MinIO를 임시 network와 localhost 포트에서 실행하고 임시 credential·bucket·prefix만 사용합니다. Linux 자원 검사는 2 CPU/4GiB에서 빌드한 뒤 생성된 테스트 프로그램만 기본 1 CPU/1GiB 제한 컨테이너에서 실행합니다. `--cpus 0.25`는 운영 CPU quota를 사용합니다. cgroup 제한값과 OOM 여부를 검사하고 `.tools/resource/report.json`을 생성합니다. 512MiB 추가 검사는 `./scripts/check-resource --memory-bytes 536870912`로 실행합니다. 10만 건 benchmark는 배포와 같은 release 최적화 test executable로 빌드와 측정을 분리하고 실제 Inbox→Indexer→검색·집계 경로를 CPU 1/512MiB/swap 0에서 실행해 `.tools/benchmark/100k.json`을 생성합니다. 보고서의 `build_profile`은 최적화 수준과 debug assertion 비활성화를 증명한다. `--operational`은 CPU 0.25/1GiB/swap 0에서 동일한 workload를 실행해 `.tools/benchmark/100k-operational.json`을 생성하고 data_dir 전체 사용량을 50GB 예산과 대조합니다. 50GB 파일시스템 quota를 강제하는 검사는 아니며 별도 디스크 부족 테스트가 있습니다. 100만·1천만 건 수동 검증은 각각 `./scripts/check-benchmark 1m`, `./scripts/check-benchmark 10m`으로 실행합니다.
+Complete and verify one gate at a time, then commit directly to `main` and run `git push origin main`. Use commit subjects such as `feat: 한국어 변경 요약`, selecting `fix`, `perf`, `test`, `docs`, or `chore` as appropriate. Do not bypass hooks or rewrite published history merely to normalize messages.
 
-Hook은 check-only입니다. 필요할 때 `(cd rust && cargo fmt --all)`과 `npm --prefix rust/web exec prettier -- --write .`을 실행하고 diff를 검토합니다. `SKIP`·`--no-verify`로 실패를 숨기지 않습니다.
-
-완료하고 검증한 단위로 `main`에 직접 커밋하고 즉시 `git push origin main`을 실행합니다. 커밋 제목은 game-uridogu-com처럼 `feat: 한국어 변경 요약` 형식을 사용하며, 변경에 맞게 `fix`, `perf`, `test`, `docs`, `chore`를 선택합니다. 범위가 필요한 경우 `chore(deploy): …`처럼 붙입니다. 본문에는 필요한 문제 설명, 실제 변경, 실행한 검사와 남은 제한을 간결하게 기록합니다. 이미 공개한 커밋을 메시지 통일만을 위해 재작성하거나, 과거 단계를 소급한 가짜 커밋이나 단계별 Markdown 실행 일지를 만들지 않습니다. pre-push가 검사와 artifact staging을 담당하고 GitHub의 `Deploy` workflow는 해당 commit 활성화만 담당합니다.
-
-설계 기준은 [원안](docs/observe/source-design.md), [구현 계약](docs/observe/implementation.md), [아키텍처](docs/observe/architecture.md), [검증 기준](docs/observe/quality.md), [단계별 완료 조건](docs/observe/work-packages.md)에 있습니다. 첨부 원안은 그대로 보존합니다.
+The former Rust implementation is recoverable from the `rust-version` tag and is not an active build, test, or deployment target.

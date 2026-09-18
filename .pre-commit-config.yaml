@@ -9,29 +9,27 @@ repos:
         entry: .tools/quality/bin/python scripts/hooks/check-text.py
         language: system
         types: [text]
-        exclude: '^(vendor/|rust/web/generated/|rust/tests/fixtures/replay/.*\.envelope$)'
+        exclude: '^vendor/'
         stages: [pre-commit]
       - id: structured-syntax
         name: YAML, TOML, and JSON syntax
         entry: .tools/quality/bin/python scripts/hooks/check-syntax.py
         language: system
         types_or: [json, toml, yaml]
-        exclude: '^(vendor/|rust/web/generated/)'
+        exclude: '^vendor/'
         stages: [pre-commit]
       - id: secrets
         name: detect secrets
         entry: .tools/quality/bin/python scripts/hooks/check-secrets.py
         language: system
         types: [text]
-        exclude: '^(vendor/|rust/web/generated/|rust/web/package-lock\.json$|rust/web/src/api/generated\.ts$)'
+        exclude: '^vendor/'
         stages: [pre-commit]
-      - id: rustfmt
-        name: rustfmt check
-        entry: sh -c 'cd rust && cargo fmt --all -- --check'
+      - id: gofmt
+        name: Go formatting
+        entry: gofmt -d
         language: system
-        types: [rust]
-        pass_filenames: false
-        require_serial: true
+        types: [go]
         stages: [pre-commit]
       - id: workflow-lint
         name: GitHub workflow lint
@@ -41,43 +39,3 @@ repos:
         pass_filenames: false
         require_serial: true
         stages: [pre-commit]
-      - id: web-format
-        name: frontend format check
-        entry: npm --prefix rust/web run format:check
-        language: system
-        files: '^rust/web/(?!src/api/generated\.ts$).+\.(css|html|js|json|mjs|ts|tsx)$'
-        pass_filenames: false
-        require_serial: true
-        stages: [pre-commit]
-      - id: pre-push-rust
-        name: Rust pre-push checks
-        entry: env CARGO_TARGET_DIR=target CARGO_BUILD_JOBS=2 ./scripts/check rust
-        language: system
-        files: '^(rust/(Cargo\.(toml|lock)|rust-toolchain\.toml|build\.rs|src/|tests/|migrations/)|scripts/check$)'
-        pass_filenames: false
-        require_serial: true
-        stages: [pre-push]
-      - id: pre-push-web
-        name: frontend pre-push checks
-        entry: ./scripts/check web
-        language: system
-        files: '^rust/(web/|schemas/openapi\.yaml$)'
-        pass_filenames: false
-        require_serial: true
-        stages: [pre-push]
-      - id: pre-push-deploy-tests
-        name: local deployment transition checks
-        entry: python3 -m unittest discover -s deploy -p 'test_*.py'
-        language: system
-        files: '^(deploy/.*\.py$|scripts/(build-release|check-container|check-resource|check-benchmark)$|rust/Dockerfile$|go/eventglass/.*\.md$)'
-        pass_filenames: false
-        require_serial: true
-        stages: [pre-push]
-      - id: pre-push-deploy
-        name: stage verified deployment
-        entry: ./scripts/deploy
-        language: system
-        pass_filenames: false
-        require_serial: true
-        always_run: true
-        stages: [pre-push]

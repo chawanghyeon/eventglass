@@ -1,12 +1,8 @@
 .git
 .github
 .tools
-**/target
-rust/web/dist
 **/node_modules
-go
 tools/sdk-fixtures/.npm-cache
 tools/sdk-fixtures/.venv
 **/__pycache__
 data
-rust/data
