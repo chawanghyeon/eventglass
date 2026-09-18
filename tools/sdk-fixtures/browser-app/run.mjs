@@ -36,9 +36,13 @@ const server = createServer((request, response) => {
   response.end(html);
 });
 
+const requestedPort = Number.parseInt(process.env.SENTRY_FIXTURE_BROWSER_PORT ?? "0", 10);
+if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
+  throw new Error("invalid SENTRY_FIXTURE_BROWSER_PORT");
+}
 await new Promise((resolve, reject) => {
   server.once("error", reject);
-  server.listen(0, "127.0.0.1", resolve);
+  server.listen(requestedPort, "127.0.0.1", resolve);
 });
 
 const address = server.address();
@@ -80,7 +84,7 @@ try {
       ),
       page.evaluate((name) => window.fixture[name](), operation),
     ]);
-    if (response.status() !== 202 || !result?.flushed) {
+    if (response.status() !== 200 || !result?.flushed) {
       throw new Error(
         `browser fixture ${operation} failed: ${response.status()} ${JSON.stringify(result)}`,
       );

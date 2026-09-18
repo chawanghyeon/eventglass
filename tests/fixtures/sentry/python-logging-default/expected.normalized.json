@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "fixture_role": "normalization_contract_mapping",
+  "assertion": "unordered_record_subsets",
+  "server_normalization_executed": false,
+  "mapping_only": true,
+  "records": [
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "info",
+      "logger": "fixture.python",
+      "message": "python default info"
+    },
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "warning",
+      "logger": "fixture.python",
+      "message": "python default warning"
+    },
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "error",
+      "logger": "fixture.python",
+      "message": "python default error"
+    },
+    {
+      "kind": "error",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "error",
+      "logger": "fixture.python",
+      "message": "python default error"
+    },
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "fatal",
+      "logger": "fixture.python",
+      "message": "python default critical"
+    },
+    {
+      "kind": "error",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "fatal",
+      "logger": "fixture.python",
+      "message": "python default critical"
+    }
+  ],
+  "must_not_contain": [
+    "python default debug omitted"
+  ]
+}

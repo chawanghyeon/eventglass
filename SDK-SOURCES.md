@@ -45,6 +45,10 @@ Inspected tagged sources and matching local module cache:
 
 Consequences: requiring a version would reject valid Go logs. Accept observed extra wrapper metadata. Support RFC3339, not just numeric epochs. Existing Go fixtures cover CaptureException/CaptureMessage, not structured logs; add actual logger fixtures for the new server.
 
+### 4.1 Historical log container version
+
+Official sentry-python commit [`17cc8c7b2c31c2df130418bb49137814d4d35f7b`](https://github.com/getsentry/sentry-python/commit/17cc8c7b2c31c2df130418bb49137814d4d35f7b) changed the log payload directly from `{"items":[...]}` to `{"version":2,"items":[...]}`. Its parent `c1921a4c5df2f2c8bf66baca356c1cbe0440d350` is therefore the historical legacy/version-1 wire evidence; it did not serialize an explicit `version:1` property. G01 keeps separate absent, explicit version1, and version2 dispatch paths. The committed real Go fixture and the official Python history verify the absent path, while an explicit version1 fixed protocol vector verifies dispatch without falsely claiming that a pinned current SDK emitted it.
+
 ## 5. Official protocol
 
 - [Envelopes](https://github.com/getsentry/develop/blob/26cabd61bbd94ac8cffd05f1cacd03950a5576c7/src/docs/sdk/envelopes.mdx): byte lengths, optional final LF, envelope event_id precedence, at most one event/transaction, unknown binary boundaries.
@@ -71,6 +75,6 @@ Record SDK lock/commit/runtime/config including PII/sampling/log enable/flush, w
 
 ## 7. Verification boundary
 
-Completed: inspection of the listed ingestion/log sources/protocols, baseline lock comparison, and design contracts. Not completed: new Go SDK execution, DuckDB/native/Parquet experiments, AWS,512MiB/scaling/cost validation; these belong to G00–G08.
+Completed through G01: inspection of the listed ingestion/log sources and protocols; real localhost capture and Go API execution for Python2.69.0, Node/Browser10.73.0, and Go0.49.0; offline byte fixture replay; structured Go logs; CORS, fork, client-report, flush, and rate-limit behavior. G00 completed the pinned DuckDB/native/Parquet and local S3-compatible contracts on Linux ARM64. Actual AWS, full-system512MiB, scaling, and cost validation remain later gates.
 
 Not comprehensively inspected or guaranteed: Java/.NET/PHP/Ruby/Rust/mobile/native SDKs, all historical/future versions, or excluded Sentry features. New support requires pinned version, relevant wire source inspection, localhost capture, and normalization/search/failure oracles. HTTP200 alone is not compatibility.

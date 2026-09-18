@@ -5,11 +5,22 @@
   "preexisting_dirty_paths": ["AGENTS.md"],
   "source_design_sha256": "4cccddc98f76d5c38099958587386c55756a08cf366c26ed9e65eeedec0526e5",
   "go_design_sha256": "31c24b4cdea64582befbcd9e940000f9f9385ee3dcb82d16ba7d6bd8cca593ad",
-  "sdk_sources_sha256": "5daf2a419b04151f274c7bfd49b60d06c2ecf1b245d61daaec6bf31a022834ca",
+  "sdk_sources_sha256": "81ee35e3842119915c9955d0d74d7c1bc71ff5f63dad3cda481b4e1024cf9333",
+  "sdk_support_sha256": "6b1abdb5b64a60e4856e8381da0b01c24cd81070964d398d88f296cf66464cf2",
   "sdk_sources": {
     "python": {"version": "2.69.0", "commit": "f186a62b34ea44eb6d0db1d20f535817991c32fd"},
     "javascript": {"version": "10.73.0", "commit": "f109d922f5971e2ade549b6c755524168b101818"},
     "go": {"version": "0.49.0", "commit": "78b09d19307aafb162cd57838bd5c72055b14c8c"}
   },
-  "captured_fixtures": []
+  "captured_fixtures": [
+    {"case": "browser-events-and-console", "metadata_sha256": "5e3a3f955729077c6dcf97949c302ceba3ee9bc1ef02ae83c8704b03bfc008a9"},
+    {"case": "go-events", "metadata_sha256": "6f2d0a59ae19d699a0dc0e851e0ffc2b83a4125e7c420b28f7eb7ae2461a9465"},
+    {"case": "node-client-report", "metadata_sha256": "f35bee6ab9cf3c679e7242c054e2d9632d619641b6173c59fe94689f57fda9f5"},
+    {"case": "node-events-and-logs", "metadata_sha256": "75f1856df8782137dba61ed376a675b569573f4d77db7e6e12e5aca57d8489ff"},
+    {"case": "python-celery-fork", "metadata_sha256": "27fe8df94d7a0d44d9f9ca72f9b9f91b22920506445c421883bf50b51e518fed"},
+    {"case": "python-events", "metadata_sha256": "1f03320ce5fe9901a419025b1a63f5408fe9085c37fd42388650763556461833"},
+    {"case": "python-fastapi", "metadata_sha256": "43761138472cfb85b9fb169bae8e38ba2fddba15b914073e2243546c9bc63735"},
+    {"case": "python-logging-debug", "metadata_sha256": "69f96faa10cb68c66089299d097a9d719ce04946fa0394b67dba543c252e3eed"},
+    {"case": "python-logging-default", "metadata_sha256": "8f90df08a0968d125f5f90952308694d18387ad8f983ed8e25dfeb50eb42e174"}
+  ]
 }

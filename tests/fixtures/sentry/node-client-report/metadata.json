@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "case": "node-client-report",
+  "capture": "real_sdk_to_localhost_http",
+  "sdk": {
+    "package": "@sentry/node",
+    "version": "10.73.0"
+  },
+  "runtime": "v24.21.0",
+  "dsn": "http://fixturePublicKey@127.0.0.1:PORT/1",
+  "response": {
+    "status": 202,
+    "content_type": "application/json",
+    "body": "{}"
+  },
+  "integration_options": {
+    "enableLogs": true,
+    "defaultIntegrations": false
+  },
+  "expected_kinds": [
+    "error"
+  ],
+  "requests": [
+    {
+      "file": "envelopes/001.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "chunked",
+      "wire_bytes": 1092,
+      "decompressed_bytes": 1092,
+      "sha256": "2afbe27e9cb9b878aba7d82bcd29a3636407a1ac30e3f9d55079636699163c13",
+      "item_types": [
+        "event"
+      ]
+    },
+    {
+      "file": "envelopes/002.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "chunked",
+      "wire_bytes": 146,
+      "decompressed_bytes": 146,
+      "sha256": "bb3049184d1c571b0f4a81e15669157df54abd26c5b2c68915a2eacb0d8b4f59",
+      "item_types": [
+        "client_report"
+      ]
+    }
+  ],
+  "sanitization": [
+    "dynamic event/trace/span IDs replaced by stable ordinal IDs",
+    "timestamps fixed to 2026-01-02T03:04:05Z",
+    "repository path replaced by <REPO>",
+    "localhost ephemeral port replaced by PORT",
+    "envelope DSN port fixed to 8123 when the SDK serializes it in payload",
+    "inner item byte lengths and outer HTTP content-length recomputed"
+  ]
+}

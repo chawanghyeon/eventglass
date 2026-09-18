@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "fixture_role": "normalization_contract_mapping",
+  "assertion": "unordered_record_subsets",
+  "server_normalization_executed": false,
+  "mapping_only": true,
+  "records": [
+    {
+      "kind": "error",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "error",
+      "message": "celery fixture exception"
+    }
+  ]
+}

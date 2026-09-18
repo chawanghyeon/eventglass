@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"time"
@@ -32,5 +33,14 @@ func main() {
 	sentry.CaptureMessage("go fixture message")
 	if !sentry.Flush(5 * time.Second) {
 		panic("Sentry flush timed out after message")
+	}
+	logger := sentry.NewLogger(context.Background())
+	logger.Info().
+		String("logger.name", "fixture.go").
+		Int64("order_id", 9223372036854775807).
+		StringSlice("regions", []string{"ap-northeast-2", "eu-west-1"}).
+		Emitf("go structured order %s", "order_fixture")
+	if !sentry.Flush(5 * time.Second) {
+		panic("Sentry flush timed out after structured log")
 	}
 }

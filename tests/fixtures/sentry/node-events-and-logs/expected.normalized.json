@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "fixture_role": "normalization_contract_mapping",
+  "assertion": "unordered_record_subsets",
+  "server_normalization_executed": false,
+  "mapping_only": true,
+  "records": [
+    {
+      "kind": "error",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "error",
+      "message": "node fixture exception"
+    },
+    {
+      "kind": "error",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "warning",
+      "message": "node fixture message"
+    },
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "trace",
+      "message": "node fixture trace"
+    },
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "debug",
+      "message": "node fixture debug"
+    },
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "info",
+      "message": "node fixture info"
+    },
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "warning",
+      "message": "node fixture warning"
+    },
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "error",
+      "message": "node fixture error"
+    },
+    {
+      "kind": "log",
+      "project_id": 1,
+      "environment": "fixture",
+      "release": "eventglass-sdk-fixture@1",
+      "level": "fatal",
+      "message": "node fixture fatal"
+    }
+  ]
+}

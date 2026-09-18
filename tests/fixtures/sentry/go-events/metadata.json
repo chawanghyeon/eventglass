@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "case": "go-events",
+  "capture": "real_sdk_to_localhost_http",
+  "sdk": {
+    "package": "github.com/getsentry/sentry-go",
+    "version": "0.49.0"
+  },
+  "runtime": "go version go1.26.5 darwin/arm64",
+  "dsn": "http://fixturePublicKey@127.0.0.1:PORT/1",
+  "response": {
+    "status": 202,
+    "content_type": "application/json",
+    "body": "{}"
+  },
+  "integration_options": {
+    "attach_stacktrace": true,
+    "flush_after_each_event": true
+  },
+  "expected_kinds": [
+    "error",
+    "log"
+  ],
+  "requests": [
+    {
+      "file": "envelopes/001.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "content-length",
+      "wire_bytes": 1630,
+      "decompressed_bytes": 1630,
+      "sha256": "f2caf7ecbed3b783c3ee374b2ddfb75482f7d32a98372259f07a805f1b44f163",
+      "item_types": [
+        "event"
+      ]
+    },
+    {
+      "file": "envelopes/002.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "content-length",
+      "wire_bytes": 1613,
+      "decompressed_bytes": 1613,
+      "sha256": "a004f76611c74d846ba01e5872d7398e44cde97cff31c47eb7aa2a53efe4caab",
+      "item_types": [
+        "event"
+      ]
+    },
+    {
+      "file": "envelopes/003.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "content-length",
+      "wire_bytes": 1268,
+      "decompressed_bytes": 1268,
+      "sha256": "0209d6d7b4c26f9cbb159444c6f49257b14c971ae0164e60a8754ea4779c2785",
+      "item_types": [
+        "log"
+      ]
+    }
+  ],
+  "sanitization": [
+    "dynamic event/trace/span IDs replaced by stable ordinal IDs",
+    "timestamps fixed to 2026-01-02T03:04:05Z",
+    "repository path replaced by <REPO>",
+    "localhost ephemeral port replaced by PORT",
+    "envelope DSN port fixed to 8123 when the SDK serializes it in payload",
+    "inner item byte lengths and outer HTTP content-length recomputed"
+  ]
+}

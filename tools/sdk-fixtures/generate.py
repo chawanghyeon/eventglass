@@ -21,7 +21,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 TOOL_DIR = ROOT / "tools" / "sdk-fixtures"
-FIXTURE_ROOT = ROOT / "rust" / "tests" / "fixtures" / "sentry"
+FIXTURE_ROOT = ROOT / "tests" / "fixtures" / "sentry"
 PUBLIC_KEY = "fixturePublicKey"
 FIXED_DSN = f"http://{PUBLIC_KEY}@127.0.0.1:PORT/1"
 NORMALIZABLE_DSN = f"http://{PUBLIC_KEY}@127.0.0.1:8123/1"
@@ -115,6 +115,17 @@ EXPECTED: dict[str, dict[str, Any]] = {
             {"kind": "log", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "fatal", "message": "node fixture fatal"},
         ],
     },
+    "node-client-report": {
+        "schema_version": 1,
+        "fixture_role": "normalization_contract_mapping",
+        "assertion": "unordered_record_subsets",
+        "server_normalization_executed": False,
+        "mapping_only": True,
+        "records": [
+            {"kind": "error", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "info", "message": "node client report carrier"},
+        ],
+        "must_not_contain": ["node dropped for client report"],
+    },
     "go-events": {
         "schema_version": 1,
         "fixture_role": "normalization_contract_mapping",
@@ -124,6 +135,7 @@ EXPECTED: dict[str, dict[str, Any]] = {
         "records": [
             {"kind": "error", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "error", "message": "go fixture exception"},
             {"kind": "error", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "info", "message": "go fixture message"},
+            {"kind": "log", "project_id": 1, "environment": "fixture", "release": "eventglass-sdk-fixture@1", "level": "info", "logger": "fixture.go", "message": "go structured order order_fixture"},
         ],
     },
 }
@@ -322,8 +334,11 @@ def command_for(case: str) -> list[str]:
         python = TOOL_DIR / ".venv" / "bin" / "python"
         mode = case.removeprefix("python-")
         return [str(python), str(TOOL_DIR / "python-app" / "app.py"), mode]
-    if case == "node-events-and-logs":
-        return ["node", str(TOOL_DIR / "node-app" / "app.mjs")]
+    if case in {"node-events-and-logs", "node-client-report"}:
+        command = ["node", str(TOOL_DIR / "node-app" / "app.mjs")]
+        if case == "node-client-report":
+            command.append("client-report")
+        return command
     if case == "go-events":
         return [str(TOOL_DIR / "go-app" / "eventglass-go-fixture")]
     raise ValueError(case)
@@ -342,7 +357,7 @@ def sdk_version(case: str) -> tuple[str, str]:
         package = json.loads((TOOL_DIR / "browser-app" / "node_modules" / "@sentry" / "browser" / "package.json").read_text())
         return "@sentry/browser", package["version"]
     package = json.loads((TOOL_DIR / "node-app" / "node_modules" / "@sentry" / "node" / "package.json").read_text())
-    if case == "node-events-and-logs":
+    if case in {"node-events-and-logs", "node-client-report"}:
         return "@sentry/node", package["version"]
     if case == "go-events":
         return "github.com/getsentry/sentry-go", "0.49.0"
@@ -436,8 +451,9 @@ def run_case(case: str) -> None:
             ["node", "--version"], capture_output=True, text=True, check=True
         ).stdout.strip()
     else:
+        go_binary = ROOT / ".tools" / "go1.26.5" / "bin" / "go"
         runtime = subprocess.run(
-            ["go", "version"], capture_output=True, text=True, check=True
+            [str(go_binary), "version"], capture_output=True, text=True, check=True
         ).stdout.strip()
     metadata = {
         "schema_version": 1,

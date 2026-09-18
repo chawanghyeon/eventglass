@@ -106,7 +106,17 @@ def verify_case(case: str) -> None:
 
 
 def main() -> int:
+    manifest = json.loads((ROOT / "tests" / "fixtures" / "manifest.json").read_text())
+    declared = {
+        entry["case"]: entry["metadata_sha256"]
+        for entry in manifest["captured_fixtures"]
+    }
+    if set(declared) != set(EXPECTED):
+        raise AssertionError("fixture manifest cases differ from the generator contract")
     for case in sorted(EXPECTED):
+        metadata_bytes = (FIXTURE_ROOT / case / "metadata.json").read_bytes()
+        if hashlib.sha256(metadata_bytes).hexdigest() != declared[case]:
+            raise AssertionError(f"{case}: metadata manifest sha256 mismatch")
         verify_case(case)
         print(f"verified {case}")
     return 0

@@ -4,6 +4,7 @@
 import * as Sentry from "@sentry/node";
 
 const liveSequential = process.env.SENTRY_FIXTURE_MODE === "live-sequential";
+const clientReportMode = process.argv[2] === "client-report";
 
 Sentry.init({
   dsn: process.env.SENTRY_FIXTURE_DSN,
@@ -12,7 +13,11 @@ Sentry.init({
   environment: "fixture",
   release: "eventglass-sdk-fixture@1",
   serverName: "fixture-node-host",
-  sendClientReports: false,
+  sendClientReports: clientReportMode,
+  beforeSend: clientReportMode
+    ? (event) =>
+        event.message === "node dropped for client report" ? null : event
+    : undefined,
 });
 
 Sentry.setUser({ id: "fixture-user", email: "fixture@example.invalid" });
@@ -24,6 +29,18 @@ if (process.env.SENTRY_FIXTURE_SECRET) {
   Sentry.setExtra("password", process.env.SENTRY_FIXTURE_SECRET);
 }
 Sentry.addBreadcrumb({ category: "fixture", message: "before exception" });
+
+if (clientReportMode) {
+  Sentry.captureMessage("node dropped for client report");
+  if (!(await Sentry.flush(5000))) {
+    throw new Error("Sentry.flush() timed out after client-report drop");
+  }
+  Sentry.captureMessage("node client report carrier", "info");
+  if (!(await Sentry.flush(5000))) {
+    throw new Error("Sentry.flush() timed out after client-report carrier");
+  }
+  process.exit(0);
+}
 
 Sentry.captureException(new Error("node fixture exception"));
 if (liveSequential && !(await Sentry.flush(5000))) {

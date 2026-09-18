@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "case": "node-events-and-logs",
+  "capture": "real_sdk_to_localhost_http",
+  "sdk": {
+    "package": "@sentry/node",
+    "version": "10.73.0"
+  },
+  "runtime": "v24.21.0",
+  "dsn": "http://fixturePublicKey@127.0.0.1:PORT/1",
+  "response": {
+    "status": 202,
+    "content_type": "application/json",
+    "body": "{}"
+  },
+  "integration_options": {
+    "enableLogs": true,
+    "defaultIntegrations": false
+  },
+  "expected_kinds": [
+    "error",
+    "log"
+  ],
+  "requests": [
+    {
+      "file": "envelopes/001.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "chunked",
+      "wire_bytes": 1736,
+      "decompressed_bytes": 1736,
+      "sha256": "4841830a638eb4a3e1d84f83d94006543ad42a065609dbdea40a2ad497524a30",
+      "item_types": [
+        "event"
+      ]
+    },
+    {
+      "file": "envelopes/002.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "chunked",
+      "wire_bytes": 1089,
+      "decompressed_bytes": 1089,
+      "sha256": "3221544fd245c16d34dabb53ae7c80f185e3ed7cfc1b63f7e385f58f7958255a",
+      "item_types": [
+        "event"
+      ]
+    },
+    {
+      "file": "envelopes/003.envelope",
+      "content_encoding": "identity",
+      "original_transfer_encoding": "chunked",
+      "wire_bytes": 4328,
+      "decompressed_bytes": 4328,
+      "sha256": "042db834ed85fda605d906746e7d949f8a5495cf216a5f271ff0e2b46b25fdc8",
+      "item_types": [
+        "log"
+      ]
+    }
+  ],
+  "sanitization": [
+    "dynamic event/trace/span IDs replaced by stable ordinal IDs",
+    "timestamps fixed to 2026-01-02T03:04:05Z",
+    "repository path replaced by <REPO>",
+    "localhost ephemeral port replaced by PORT",
+    "envelope DSN port fixed to 8123 when the SDK serializes it in payload",
+    "inner item byte lengths and outer HTTP content-length recomputed"
+  ]
+}

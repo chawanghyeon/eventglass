@@ -15,6 +15,7 @@ class GoLayoutTests(unittest.TestCase):
             "Dockerfile",
             "DESIGN.md",
             "SDK-SOURCES.md",
+            "SDK-SUPPORT.md",
             "cmd/eventglass-go/main.go",
             "internal/engine/child.go",
             "tests/integration/g00_test.go",
@@ -67,6 +68,7 @@ class GoLayoutTests(unittest.TestCase):
             ("source_design_sha256", "docs/observe/source-design.md"),
             ("go_design_sha256", "DESIGN.md"),
             ("sdk_sources_sha256", "SDK-SOURCES.md"),
+            ("sdk_support_sha256", "SDK-SUPPORT.md"),
         ):
             digest = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
             self.assertEqual(manifest[key], digest, relative)
