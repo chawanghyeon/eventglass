@@ -151,6 +151,21 @@ sdk() {
     ./internal/sdk ./internal/ingest ./internal/api ./tests/sdk
 }
 
+web() {
+  expected_node=$(node -p "require('./web/package.json').engines.node")
+  actual_node=$(node -p "process.versions.node")
+  if [ "$actual_node" != "$expected_node" ]; then
+    echo "Node $expected_node is required for web checks; found $actual_node" >&2
+    exit 1
+  fi
+  if [ ! -d web/node_modules ]; then
+    echo "missing web dependencies; run npm ci --prefix web --ignore-scripts" >&2
+    exit 1
+  fi
+  npm test --prefix web
+  npm run build --prefix web
+}
+
 missing() {
   echo "$1 is unavailable until its implementation gate is complete" >&2
   exit 1
@@ -177,7 +192,7 @@ case "${1:-}" in
   integration) integration ;;
   sdk) sdk ;;
   crash) crash ;;
-  web) missing "web verification" ;;
+  web) web ;;
   resource) docker_required resource; missing "resource verification" ;;
   scale) docker_required scale; missing "scale verification" ;;
   comparison) docker_required comparison; missing "comparison verification" ;;

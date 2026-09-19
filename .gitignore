@@ -8,6 +8,7 @@ __pycache__/
 # Local runtime data and credentials
 /data/
 node_modules/
+web/dist/
 .env
 .env.local
 .env.*.local

@@ -335,11 +335,12 @@ alerts principal is server rule scoped solely to its enabled project.
 
 ## Frontend structure and behavior
 
-Planned layout:
+Implemented U1 base layout (later packets extend these feature folders):
 
 ```text
 web/src/app/                 router, providers, auth bootstrap, error boundaries
-web/src/api/generated/       generated DTOs/client; never hand edit
+web/src/generated/           generated DTOs; never hand edit
+web/src/api/                 generated-contract client and error/status adapter
 web/src/features/{auth,projects,issues,logs,explore,alerts,system}/
                             routes, queries, components, local schemas/tests
 web/src/shared/ui/           accessible presentation components

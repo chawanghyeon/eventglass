@@ -148,7 +148,9 @@ state, URL owns shareable search state, component state owns forms/views.
 Rows/histogram share absolute time bounds and read token. Clear cached server
 state on logout/scope change. Render event text as text; fetch payload on detail.
 Generate OpenAPI DTOs when G04/G05 introduce the management/query surface;
-the UI/codegen pipeline is not implemented by this architecture correction.
+U1 implements the generated-contract React/Vite pipeline and its deterministic
+typecheck/test/build gate. Live and later operator features extend the same
+state boundaries rather than adding a second frontend store.
 
 ## Compatibility and operations
 

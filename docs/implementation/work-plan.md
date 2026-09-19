@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4 and G04 packets Q1–Q5 are complete; U1 is the first pending packet. Do not mark a packet complete until
+G03 packets P1–P4, G04 packets Q1–Q5, and G05 packet U1 are complete; U2 is the first pending packet. Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
 in the implementation commit, not by making per-packet diary files.
 
@@ -71,7 +71,7 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 
 | ID / depends on | Read | Files | Required tests and done condition |
 |---|---|---|---|
-| U1 / Q5 | api-ui routes/UI ownership | web package/tool locks, app/router/providers, generated client, shared search/format; scripts/check web | Login/project/Issue/log/explore flows, BigInt display, URL codec,401/403/409/410 states, dataset switch cancels queries; no handwritten generated DTOs |
+| U1 / Q5 — complete | api-ui routes/UI ownership | web package/tool locks, app/router/providers, generated client, shared search/format; scripts/check web | Login/project/Issue/log/explore flows, BigInt display, URL codec,401/403/409/410 states, dataset switch cancels queries; no handwritten generated DTOs |
 | U2 / U1 | query Live | query/live.go; api/live.go; web/features/logs | Zero-match checkpoint advances, resume within partly emitted batch, late event-time received now, reconnect duplicates deduped, slow client/revoke/resync; bounded memory |
 | A1 / Q5 | api-ui alerts, control G05 | migrations/0009_alerts.sql; alerts/evaluate.go; control/alerts.go; api rules/destinations | Cut barrier concurrent Accept, pending batch not zero, delayed complete window, revision/disable/cooldown/retention-expired window, issue transition exactly one outbox row |
 | A2 / A1 | api-ui delivery | alerts/deliver.go,destination.go; control/deliveries.go | Local receiver only: duplicate after lost send reply, signature stable body, retries12, permanent4xx, DNS rebinding/private IPv6/redirects denied, no secret logs, credential rotation fail-closed |
