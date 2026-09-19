@@ -10,6 +10,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -32,9 +33,27 @@ type S3Config struct {
 }
 
 type S3Store struct {
-	client *s3.Client
-	bucket string
-	prefix string
+	client          *s3.Client
+	bucket          string
+	prefix          string
+	putRequests     atomic.Uint64
+	headRequests    atomic.Uint64
+	fullGetRequests atomic.Uint64
+	fullGetBytes    atomic.Uint64
+}
+
+type OperationCounts struct {
+	PutRequests     uint64
+	HeadRequests    uint64
+	FullGetRequests uint64
+	FullGetBytes    uint64
+}
+
+func (s *S3Store) OperationCounts() OperationCounts {
+	return OperationCounts{
+		PutRequests: s.putRequests.Load(), HeadRequests: s.headRequests.Load(),
+		FullGetRequests: s.fullGetRequests.Load(), FullGetBytes: s.fullGetBytes.Load(),
+	}
 }
 
 type ObjectInfo struct {
@@ -120,6 +139,7 @@ func (s *S3Store) PutStream(ctx context.Context, key string, body io.ReadSeeker,
 	if _, err := body.Seek(0, io.SeekStart); err != nil {
 		return ObjectInfo{}, err
 	}
+	s.putRequests.Add(1)
 	_, err = s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:        aws.String(s.bucket),
 		Key:           aws.String(objectKey),
@@ -156,6 +176,7 @@ func (s *S3Store) VerifyObject(ctx context.Context, key string, size int64, chec
 	if err != nil {
 		return err
 	}
+	s.fullGetRequests.Add(1)
 	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(objectKey)})
 	if err != nil {
 		return fmt.Errorf("get S3 object for verification: %w", err)
@@ -166,6 +187,9 @@ func (s *S3Store) VerifyObject(ctx context.Context, key string, size int64, chec
 	}
 	hash := sha256.New()
 	n, err := io.Copy(hash, io.LimitReader(output.Body, size+1))
+	if n > 0 {
+		s.fullGetBytes.Add(uint64(n))
+	}
 	if err != nil {
 		return fmt.Errorf("read S3 object for verification: %w", err)
 	}
@@ -180,6 +204,7 @@ func (s *S3Store) Head(ctx context.Context, key string) (ObjectInfo, error) {
 	if err != nil {
 		return ObjectInfo{}, err
 	}
+	s.headRequests.Add(1)
 	output, err := s.client.HeadObject(ctx, &s3.HeadObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(objectKey)})
 	if err != nil {
 		return ObjectInfo{}, fmt.Errorf("head S3 object: %w", err)

@@ -67,6 +67,42 @@ integration() {
     go test -count=1 ./tests/integration
 }
 
+crash() {
+  check_go_version
+  docker_required crash
+  case "$(uname -m)" in
+    arm64|aarch64) ;;
+    *) echo "unsupported crash-test architecture: $(uname -m)" >&2; exit 1 ;;
+  esac
+  project="eventglass-go-crash-$$"
+  artifact_dir=$(mktemp -d "$ROOT/.tools/eventglass-crash.XXXXXX")
+  cleanup() {
+    docker compose -p "$project" -f deploy/compose.yaml down --volumes --remove-orphans >/dev/null 2>&1 || true
+    rm -rf "$artifact_dir"
+  }
+  trap cleanup EXIT INT TERM
+  docker compose -p "$project" -f deploy/compose.yaml up -d postgres minio
+  docker compose -p "$project" -f deploy/compose.yaml run --rm minio-init
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$artifact_dir/crash.test" ./tests/crash
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$artifact_dir/ingest-resource.test" ./tests/resource
+  runner_image="postgres:17.11-bookworm@sha256:051f7b7b3abdd564d5d1bd1e8c4b9c1b6e77087d1dd22020ede611c096a272e0"
+  docker run --rm --platform linux/arm64 --network "${project}_default" \
+    --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 \
+    -e EVENTGLASS_CRASH_REQUIRED=1 \
+    -e EVENTGLASS_DATABASE_URL="postgres://eventglass:local-test-only@postgres:5432/eventglass?sslmode=disable" \
+    -e EVENTGLASS_S3_ENDPOINT=http://minio:9000 \
+    -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
+    -e EVENTGLASS_TEST_S3_PREFIX="crash-$project" \
+    -e AWS_ACCESS_KEY_ID=eventglass-local \
+    -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+    -v "$artifact_dir:/eventglass-tests:ro" \
+    --entrypoint /eventglass-tests/crash.test "$runner_image" -test.v -test.count=1
+  docker run --rm --platform linux/arm64 \
+    --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 \
+    -v "$artifact_dir:/eventglass-tests:ro" \
+    --entrypoint /eventglass-tests/ingest-resource.test "$runner_image" -test.v -test.count=1
+}
+
 sdk() {
   check_go_version
   python3 tools/sdk-fixtures/verify.py
@@ -108,7 +144,7 @@ case "${1:-}" in
   contracts) contracts ;;
   integration) integration ;;
   sdk) sdk ;;
-  crash) missing "crash verification" ;;
+  crash) crash ;;
   web) missing "web verification" ;;
   resource) docker_required resource; missing "resource verification" ;;
   scale) docker_required scale; missing "scale verification" ;;

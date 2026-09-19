@@ -115,6 +115,15 @@ func TestDurableWorkflowVerifiedUploadDuplicateAndUnsupportedOnly(t *testing.T) 
 	if err != nil || len(objects) != 2 {
 		t.Fatalf("objects=%#v err=%v", objects, err)
 	}
+	controlCounts := operations.OperationCounts()
+	storageCounts := store.OperationCounts()
+	if controlCounts.IntentRegistrations != 2 || controlCounts.IntentUploadedMarks != 2 || controlCounts.AcceptCalls != 2 || controlCounts.AcceptTransactions != 2 || controlCounts.PGWriteTransactions != 6 {
+		t.Fatalf("control operation counts=%#v", controlCounts)
+	}
+	if storageCounts.PutRequests != 2 || storageCounts.HeadRequests != 2 || storageCounts.FullGetRequests != 2 || storageCounts.FullGetBytes == 0 {
+		t.Fatalf("storage operation counts=%#v", storageCounts)
+	}
+	t.Logf("I5 counters requests=3 batches=2 journals=2 S3_PUT=2 S3_HEAD=2 checksum_GET=2 checksum_GET_bytes=%d PG_write_transactions=6", storageCounts.FullGetBytes)
 }
 
 type revokingController struct {

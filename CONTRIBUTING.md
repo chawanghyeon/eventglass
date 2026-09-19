@@ -11,6 +11,7 @@ The active product is the root Go module. Use Go 1.26.5 exactly and run commands
 ./scripts/check contracts
 ./scripts/check integration
 ./scripts/check sdk
+./scripts/check crash
 ```
 
 Commands for later implementation gates intentionally fail until their gate is implemented. `./scripts/check sdk` replays committed captures and runs the pinned SDK applications against a localhost Go handler; run `tools/sdk-fixtures/bootstrap.sh` once to install its locked tools. Docker is required for the PostgreSQL/S3 integration environment and Linux ARM64 image checks. Tests must use temporary databases, buckets, prefixes, directories, and localhost receivers. Linux AMD64 is not a currently verified or supported release target.
@@ -39,3 +40,8 @@ installation marker; it never creates either authority at startup. Configure
 `EVENTGLASS_SCRATCH_DIR`, `EVENTGLASS_S3_REGION`, `EVENTGLASS_S3_BUCKET`, and
 optional endpoint/prefix/path-style settings. AWS credentials use the default
 SDK chain. Worker/scheduler roles, setup, and deployment remain later gates.
+
+`./scripts/check crash` cross-compiles the crash and ingress-resource tests for
+Linux ARM64, then runs them with CPU1/512MiB/no-swap limits against disposable
+PostgreSQL and MinIO. It exercises test-only inherited IPC barriers and SIGKILL;
+no failpoint is exposed by the product HTTP server or runtime environment.

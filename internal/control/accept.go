@@ -37,6 +37,10 @@ type sourceOccurrence struct {
 }
 
 func Accept(ctx context.Context, pool *pgxpool.Pool, batch VerifiedBatch) ([]ReceiptResult, error) {
+	return accept(ctx, pool, batch, nil)
+}
+
+func accept(ctx context.Context, pool *pgxpool.Pool, batch VerifiedBatch, onTransaction func()) ([]ReceiptResult, error) {
 	if pool == nil {
 		return nil, ErrInvalidVerifiedBatch
 	}
@@ -44,6 +48,9 @@ func Accept(ctx context.Context, pool *pgxpool.Pool, batch VerifiedBatch) ([]Rec
 		return nil, err
 	}
 	for attempt := 0; attempt < maxAcceptAttempts; attempt++ {
+		if onTransaction != nil {
+			onTransaction()
+		}
 		result, err := acceptOnce(ctx, pool, batch)
 		if err == nil {
 			return result, nil
