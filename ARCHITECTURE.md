@@ -112,6 +112,9 @@ App injects shared ingress, working-memory, spool and native-task budgets across
 handlers and colocated roles. Reservations follow live data through queue,
 upload and commit; canceling an HTTP response does not free memory still held
 by a background upload. Drain closes admission before waiting for owners.
+Conversion, query execution, and public-result export in one runtime share one
+cancellation-aware native-child gate, so sync help cannot overlap the
+background worker's isolated DuckDB process.
 The current Acceptor call is synchronous: returning means it retains no request
 data. An asynchronous implementation must explicitly transfer the permit too.
 

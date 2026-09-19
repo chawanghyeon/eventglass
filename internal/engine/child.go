@@ -14,9 +14,10 @@ import (
 // ChildRequest is deliberately narrow. Public query input is never accepted by
 // engine-child; a supervisor supplies already validated internal operations.
 type ChildRequest struct {
-	Operation  string             `json:"operation"`
-	Conversion *ConversionRequest `json:"conversion,omitempty"`
-	Query      *QueryRequest      `json:"query,omitempty"`
+	Operation   string              `json:"operation"`
+	Conversion  *ConversionRequest  `json:"conversion,omitempty"`
+	Query       *QueryRequest       `json:"query,omitempty"`
+	QueryExport *QueryExportRequest `json:"query_export,omitempty"`
 }
 
 type ChildResponse struct {
@@ -35,7 +36,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 	}
 	switch request.Operation {
 	case "probe":
-		if request.Conversion != nil || request.Query != nil {
+		if request.Conversion != nil || request.Query != nil || request.QueryExport != nil {
 			return errors.New("probe request cannot contain conversion input")
 		}
 		db, err := Open(ctx, "")
@@ -49,7 +50,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(response)
 	case "convert":
-		if request.Conversion == nil || request.Query != nil {
+		if request.Conversion == nil || request.Query != nil || request.QueryExport != nil {
 			return errors.New("convert request requires conversion input")
 		}
 		encoder := json.NewEncoder(output)
@@ -61,7 +62,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 		}
 		return encoder.Encode(ConversionMessage{Version: ConversionProtocolVersion, Type: "summary", Summary: &summary})
 	case "query":
-		if request.Query == nil || request.Conversion != nil {
+		if request.Query == nil || request.Conversion != nil || request.QueryExport != nil {
 			return errors.New("query operation requires only query input")
 		}
 		summary, err := ExecuteQuery(ctx, *request.Query)
@@ -69,6 +70,15 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 			return err
 		}
 		return json.NewEncoder(output).Encode(QueryMessage{Version: QueryExecutionProtocolVersion, Type: "summary", Summary: summary})
+	case "query_export":
+		if request.QueryExport == nil || request.Query != nil || request.Conversion != nil {
+			return errors.New("query export requires only export input")
+		}
+		summary, err := ExportQueryResult(ctx, *request.QueryExport)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(QueryExportMessage{Version: QueryExecutionProtocolVersion, Type: "summary", Summary: summary})
 	default:
 		return fmt.Errorf("unsupported internal operation %q", request.Operation)
 	}

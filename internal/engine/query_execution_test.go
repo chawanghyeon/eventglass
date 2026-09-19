@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -28,6 +29,7 @@ func TestExecuteQueryRowsAndReducerKeepGlobalOrder(t *testing.T) {
 		(99::BIGINT,999::INTEGER,'`+strings.Repeat("f", 64)+`')) t(event_time_us,event_time_ns_remainder,record_id)`)
 	operation := engine.QueryOperation{
 		Version: engine.QueryExecutionProtocolVersion, Kind: "rows", MaxRows: 5,
+		Result:    engine.QueryResultPlan{Kind: "rows", Limit: 4, Sort: "event_desc"},
 		ScanSQL:   `SELECT * FROM input_rows ORDER BY event_time_us DESC,event_time_ns_remainder DESC,record_id DESC LIMIT 5`,
 		ReduceSQL: `SELECT * FROM input_rows ORDER BY event_time_us DESC,event_time_ns_remainder DESC,record_id DESC LIMIT 5`,
 		EmptySQL:  `SELECT CAST(0 AS BIGINT) event_time_us,CAST(0 AS INTEGER) event_time_ns_remainder,CAST('' AS VARCHAR) record_id WHERE false`,
@@ -91,6 +93,8 @@ func TestExecuteQueryNativeLimbsSurviveLocalOverflowCancellation(t *testing.T) {
 	}
 	operation := engine.QueryOperation{
 		Version: engine.QueryExecutionProtocolVersion, Kind: "aggregate", MaxRows: 1,
+		Result: engine.QueryResultPlan{Kind: "aggregate", Top: 1, OrderMetric: "count", OrderDirection: "desc",
+			Metrics: []engine.QueryResultMetric{{Name: "value", Op: "sum", FieldType: "integer"}}},
 		ScanSQL:   `SELECT ` + strings.Join(limbs, ",") + `,count(*)::BIGINT AS valid_count FROM input_rows`,
 		ReduceSQL: `SELECT sum(l0) l0,sum(l1) l1,sum(l2) l2,sum(l3) l3,sum(l4) l4,sum(valid_count)::BIGINT valid_count FROM input_rows`,
 		EmptySQL:  `SELECT 0::DECIMAL(38,0) l0,0::DECIMAL(38,0) l1,0::DECIMAL(38,0) l2,0::DECIMAL(38,0) l3,0::DECIMAL(38,0) l4,0::BIGINT valid_count`,
@@ -136,6 +140,8 @@ func TestExecuteQueryRejectsTwentyThousandAndOneGroups(t *testing.T) {
 	acceptedInput := filepath.Join(root, "groups-accepted.parquet")
 	writeQueryParquet(t, ctx, acceptedInput, `SELECT range::BIGINT AS group_id FROM range(20000)`)
 	operation := engine.QueryOperation{Version: 1, Kind: "aggregate", MaxRows: 20000,
+		Result: engine.QueryResultPlan{Kind: "aggregate", Top: 100, OrderMetric: "count", OrderDirection: "desc",
+			Metrics: []engine.QueryResultMetric{{Name: "events", Op: "count"}}},
 		ScanSQL: `SELECT group_id,count(*) count FROM input_rows GROUP BY group_id`, ReduceSQL: `SELECT * FROM input_rows`,
 		EmptySQL: `SELECT 0::BIGINT group_id,0::BIGINT count WHERE false`}
 	summary, err := engine.ExecuteQuery(ctx, engine.QueryRequest{
@@ -314,6 +320,98 @@ func TestExecuteQueryGeneratedEmptyHistogramUsesNegativeEpochFloor(t *testing.T)
 	}
 	if total != 1 || zeroBuckets != 2 {
 		t.Fatalf("partial histogram total=%d zero_buckets=%d", total, zeroBuckets)
+	}
+}
+
+func TestExportQueryResultPreservesExactDecimalAndEmptyRows(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	maximum := strings.Repeat("9", 38)
+	input := filepath.Join(root, "export-input.parquet")
+	writeQueryParquet(t, ctx, input, `SELECT CAST('`+maximum+`' AS DECIMAL(38,0)) AS exact_value`)
+	output := filepath.Join(root, "export.jsonl")
+	summary, err := engine.ExportQueryResult(ctx, engine.QueryExportRequest{Version: 1, InputPath: input, OutputPath: output})
+	if err != nil || summary.Rows != 1 {
+		t.Fatalf("summary=%#v err=%v", summary, err)
+	}
+	data, err := os.ReadFile(output)
+	if err != nil || !strings.Contains(string(data), maximum) {
+		t.Fatalf("export=%q err=%v", data, err)
+	}
+	emptyInput := filepath.Join(root, "export-empty.parquet")
+	writeQueryParquet(t, ctx, emptyInput, `SELECT 1::BIGINT value WHERE false`)
+	emptyOutput := filepath.Join(root, "export-empty.jsonl")
+	empty, err := engine.ExportQueryResult(ctx, engine.QueryExportRequest{Version: 1, InputPath: emptyInput, OutputPath: emptyOutput})
+	if err != nil || empty.Rows != 0 || empty.Evidence.Bytes != 0 {
+		t.Fatalf("empty=%#v err=%v", empty, err)
+	}
+}
+
+func TestExecuteQueryDetailJoinsOnlyPairedAuthorizedPayload(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	recordID := strings.Repeat("a", 64)
+	otherID := strings.Repeat("b", 64)
+	analytics := filepath.Join(root, "analytics.parquet")
+	payload := filepath.Join(root, "payload.parquet")
+	writeQueryParquet(t, ctx, analytics, `SELECT * FROM (VALUES
+		(1::BIGINT,2::BIGINT,'`+recordID+`','log',10::BIGINT,11::BIGINT,0::INTEGER,1::BIGINT,0::INTEGER,NULL::VARCHAR,NULL::INTEGER),
+		(1::BIGINT,3::BIGINT,'`+otherID+`','log',10::BIGINT,11::BIGINT,0::INTEGER,1::BIGINT,1::INTEGER,NULL::VARCHAR,NULL::INTEGER))
+		t(tenant_id,project_id,record_id,kind,event_time_us,received_time_us,lane_id,batch_seq,record_ordinal,issue_id,grouping_version)`)
+	writeQueryParquet(t, ctx, payload, `SELECT * FROM (VALUES
+		('`+recordID+`','{"message":"kept"}','{"name":"sdk"}','[]','{"record_id":"`+recordID+`","tenant_id":1,"project_id":2,"event_time_us":10,"arrival_time_us":11}'),
+		('`+otherID+`','{"message":"forbidden"}',NULL,'[]','{"record_id":"`+otherID+`"}'))
+		t(record_id,raw_json,envelope_sdk_json,normalization_warnings_json,canonical_metadata_json)`)
+	filter := &query.Node{Op: "constant", Constant: true}
+	canonical, err := query.CanonicalFilter(filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := query.BuildPlan(model.DatasetSpec{
+		TenantID: 1, ProjectIDs: []int64{2}, Kinds: []model.Kind{model.KindLog}, TimeBasis: model.QueryTimeEvent,
+		StartUS: 0, EndUS: 100, Filter: canonical,
+	}, model.SnapshotScope{LaneCuts: [model.LaneCount]int64{1}}, filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := query.BuildDetailOperation(plan, recordID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "detail.parquet")
+	summary, err := engine.ExecuteQuery(ctx, engine.QueryRequest{
+		Version: 1, QueryID: "detail", Task: model.QueryTaskKey{Stage: model.QueryTaskScan}, Operation: operation,
+		InputPaths: []string{analytics}, PayloadPaths: []string{payload}, OutputPath: output, SpillDirectory: filepath.Join(root, "detail-spill"),
+	})
+	if err != nil || summary.Rows != 1 {
+		t.Fatalf("summary=%#v err=%v", summary, err)
+	}
+	db, err := engine.Open(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var gotID, raw string
+	if err := db.QueryRowContext(ctx, `SELECT record_id,raw_json FROM read_parquet(?)`, output).Scan(&gotID, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if gotID != recordID || !strings.Contains(raw, "kept") || strings.Contains(raw, "forbidden") {
+		t.Fatalf("id=%s raw=%s", gotID, raw)
+	}
+}
+
+func TestExportQueryResultRejectsWholeResultAbovePublicLimit(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	input := filepath.Join(root, "oversized.parquet")
+	output := filepath.Join(root, "oversized.jsonl")
+	writeQueryParquet(t, ctx, input, `SELECT repeat('x', 8388608) payload`)
+	_, err := engine.ExportQueryResult(ctx, engine.QueryExportRequest{Version: 1, InputPath: input, OutputPath: output})
+	if !errors.Is(err, engine.ErrQueryExecutionLimit) {
+		t.Fatalf("oversized export error=%v", err)
+	}
+	if _, statErr := os.Stat(output); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("oversized output was retained: %v", statErr)
 	}
 }
 

@@ -28,7 +28,7 @@ func (operations *QueryOperations) CancelQuery(ctx context.Context, tokenHash [3
 		return errors.Join(ErrQueryFenceStale, err)
 	}
 	if userID != authority.userID || principal != authority.principalHash {
-		return ErrForbidden
+		return ErrQueryNotFound
 	}
 	if state == "canceled" {
 		return tx.Commit(ctx)

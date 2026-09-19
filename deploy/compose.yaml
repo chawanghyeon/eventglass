@@ -31,8 +31,11 @@ services:
     image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
     depends_on:
       - minio
-    entrypoint: ["/bin/sh", "-eu", "-c"]
+    entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        until mc alias set local http://minio:9000 eventglass-local eventglass-local-secret; do sleep 1; done
-        mc mb --ignore-existing local/eventglass-g00
+        while true; do
+          mc alias set local http://minio:9000 eventglass-local eventglass-local-secret >/dev/null 2>&1
+          if mc mb --ignore-existing local/eventglass-g00; then exit 0; fi
+          sleep 1
+        done

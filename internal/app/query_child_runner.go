@@ -20,9 +20,67 @@ type QueryRunner interface {
 
 type ProcessQueryRunner struct {
 	BinaryPath string
+	Gate       *NativeTaskGate
+}
+
+type QueryExportRunner interface {
+	Export(context.Context, engine.QueryExportRequest) (engine.QueryExportSummary, error)
+}
+
+type ProcessQueryExportRunner struct {
+	BinaryPath string
+	Gate       *NativeTaskGate
+}
+
+func (runner ProcessQueryExportRunner) Export(ctx context.Context, request engine.QueryExportRequest) (engine.QueryExportSummary, error) {
+	release, err := runner.Gate.acquire(ctx)
+	if err != nil {
+		return engine.QueryExportSummary{}, err
+	}
+	defer release()
+	binary := runner.BinaryPath
+	if binary == "" {
+		var err error
+		binary, err = os.Executable()
+		if err != nil {
+			return engine.QueryExportSummary{}, err
+		}
+	}
+	input, err := json.Marshal(engine.ChildRequest{Operation: "query_export", QueryExport: &request})
+	if err != nil || len(input) > 1<<20 {
+		return engine.QueryExportSummary{}, errors.Join(errors.New("query export request is too large"), err)
+	}
+	var stdout, stderr boundedBuffer
+	command := exec.CommandContext(ctx, binary, "engine-child")
+	command.Stdin, command.Stdout, command.Stderr = bytes.NewReader(input), &stdout, &stderr
+	command.Env = childEnvironment(os.Environ())
+	if err := command.Run(); err != nil {
+		_ = os.Remove(request.OutputPath)
+		if ctx.Err() != nil {
+			return engine.QueryExportSummary{}, ctx.Err()
+		}
+		return engine.QueryExportSummary{}, fmt.Errorf("query export child failed: %w", err)
+	}
+	var message engine.QueryExportMessage
+	if err := strictAppJSON(stdout.Bytes(), &message); err != nil {
+		return engine.QueryExportSummary{}, err
+	}
+	if message.Version != engine.QueryExecutionProtocolVersion || message.Type != "summary" || message.Summary.Rows < 0 {
+		return engine.QueryExportSummary{}, errors.New("invalid query export summary")
+	}
+	actual, err := storage.InspectFile(request.OutputPath)
+	if err != nil || !reflect.DeepEqual(actual, message.Summary.Evidence) {
+		return engine.QueryExportSummary{}, errors.Join(errors.New("query export evidence differs"), err)
+	}
+	return message.Summary, nil
 }
 
 func (runner ProcessQueryRunner) Run(ctx context.Context, request engine.QueryRequest) (engine.QuerySummary, error) {
+	release, err := runner.Gate.acquire(ctx)
+	if err != nil {
+		return engine.QuerySummary{}, err
+	}
+	defer release()
 	binary := runner.BinaryPath
 	if binary == "" {
 		var err error

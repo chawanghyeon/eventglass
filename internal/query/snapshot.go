@@ -51,6 +51,12 @@ func LoadVerifiedCatalog(ctx context.Context, pager CatalogPager, objects Catalo
 			if err != nil || info.Size != file.Bytes || info.SHA256 != file.SHA256 {
 				return nil, fmt.Errorf("%w: file %s", ErrCatalogObjectMissing, file.FileID)
 			}
+			if file.PayloadObjectKey != "" {
+				payload, payloadErr := objects.Head(ctx, file.PayloadObjectKey)
+				if payloadErr != nil || payload.Size != file.PayloadBytes || payload.SHA256 != file.PayloadSHA256 {
+					return nil, fmt.Errorf("%w: payload for file %s", ErrCatalogObjectMissing, file.FileID)
+				}
+			}
 			result = append(result, file)
 		}
 		if len(page) < command.Limit {

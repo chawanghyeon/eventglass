@@ -48,7 +48,7 @@ func TestDurableQueryWorkflowDownloadsRunsAndCommitsFencedOutput(t *testing.T) {
 	inputBytes := []byte("verified analytics fixture")
 	operationBytes, _ := json.Marshal(engine.QueryOperation{
 		Version: 1, Kind: "rows", ScanSQL: "SELECT * FROM input_rows", ReduceSQL: "SELECT * FROM input_rows",
-		EmptySQL: "SELECT 1 WHERE false", MaxRows: 101,
+		EmptySQL: "SELECT 1 WHERE false", MaxRows: 101, Result: engine.QueryResultPlan{Kind: "rows", Limit: 100, Sort: "event_desc"},
 	})
 	authority := control.QueryTaskAuthority{
 		InstallationID: "00000000-0000-4000-8000-000000000001", StorageGeneration: 1, TenantID: 17,

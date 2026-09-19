@@ -37,6 +37,13 @@ Report accepted and published counts separately, small-file distribution, PG
 lock waits and WAL growth, S3 calls/bytes, cold/warm query latency, backup/WAL age
 and blocked lanes. Include all PG/S3 costs in whole-installation comparisons.
 
+The Q5 public-query fixture was executed on Linux ARM64 with the pinned DuckDB
+`v2.0.0-dev84020`, disposable PostgreSQL, and MinIO on 2026-09-20 via
+`./scripts/check integration`. The same two-row catalog and read token produced
+cold HEAD=3, full GET=3, 8,348 bytes, 401ms and warm HEAD=3, full GET=3, 8,348
+bytes, 86ms. These are correctness-fixture observations, not sustained SLO or
+production-cache claims; G07 retains the representative load/resource gate.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

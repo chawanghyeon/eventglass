@@ -68,6 +68,89 @@ func DatasetHash(spec model.DatasetSpec) (string, []byte, error) {
 	return hex.EncodeToString(digest[:]), append([]byte(nil), encoded...), nil
 }
 
+// DecodeDatasetIdentity reverses the canonical identity envelope retained in a
+// snapshot. The filter remains canonical bytes; workers never reinterpret it.
+func DecodeDatasetIdentity(encoded []byte) (model.DatasetSpec, error) {
+	const prefix = "eventglass-dataset"
+	if len(encoded) <= len(prefix) || !bytes.Equal(encoded[:len(prefix)], []byte(prefix)) {
+		return model.DatasetSpec{}, errors.New("invalid dataset identity")
+	}
+	reader := bytes.NewReader(encoded[len(prefix):])
+	version, err := binary.ReadUvarint(reader)
+	if err != nil || version != datasetEncodingVersion {
+		return model.DatasetSpec{}, errors.New("unsupported dataset identity")
+	}
+	tenantID, err := binary.ReadVarint(reader)
+	if err != nil {
+		return model.DatasetSpec{}, errors.New("invalid dataset tenant")
+	}
+	projects, err := readDatasetCount(reader, 100)
+	if err != nil || projects < 1 {
+		return model.DatasetSpec{}, errors.New("invalid dataset projects")
+	}
+	spec := model.DatasetSpec{TenantID: tenantID, ProjectIDs: make([]int64, projects)}
+	for index := range spec.ProjectIDs {
+		spec.ProjectIDs[index], err = binary.ReadVarint(reader)
+		if err != nil {
+			return model.DatasetSpec{}, errors.New("invalid dataset project")
+		}
+	}
+	kindCount, err := readDatasetCount(reader, 3)
+	if err != nil || kindCount < 1 {
+		return model.DatasetSpec{}, errors.New("invalid dataset kinds")
+	}
+	spec.Kinds = make([]model.Kind, kindCount)
+	for index := range spec.Kinds {
+		value, readErr := readDatasetBytes(reader, 32)
+		if readErr != nil {
+			return model.DatasetSpec{}, readErr
+		}
+		spec.Kinds[index] = model.Kind(value)
+	}
+	timeBasis, err := readDatasetBytes(reader, 32)
+	if err != nil {
+		return model.DatasetSpec{}, err
+	}
+	spec.TimeBasis = model.QueryTimeBasis(timeBasis)
+	spec.StartUS, err = binary.ReadVarint(reader)
+	if err != nil {
+		return model.DatasetSpec{}, errors.New("invalid dataset start")
+	}
+	spec.EndUS, err = binary.ReadVarint(reader)
+	if err != nil {
+		return model.DatasetSpec{}, errors.New("invalid dataset end")
+	}
+	spec.Filter, err = readDatasetBytes(reader, 32768)
+	if err != nil || reader.Len() != 0 {
+		return model.DatasetSpec{}, errors.New("invalid dataset filter")
+	}
+	_, canonical, err := DatasetHash(spec)
+	if err != nil || !bytes.Equal(canonical, encoded) {
+		return model.DatasetSpec{}, errors.New("noncanonical dataset identity")
+	}
+	return spec, nil
+}
+
+func readDatasetCount(reader *bytes.Reader, maximum uint64) (int, error) {
+	value, err := binary.ReadUvarint(reader)
+	if err != nil || value > maximum {
+		return 0, errors.New("invalid dataset count")
+	}
+	return int(value), nil
+}
+
+func readDatasetBytes(reader *bytes.Reader, maximum uint64) ([]byte, error) {
+	size, err := binary.ReadUvarint(reader)
+	if err != nil || size > maximum || size > uint64(reader.Len()) {
+		return nil, errors.New("invalid dataset bytes")
+	}
+	value := make([]byte, int(size))
+	if _, err := reader.Read(value); err != nil {
+		return nil, err
+	}
+	return value, nil
+}
+
 func encodeNode(buffer *bytes.Buffer, node *Node) {
 	writeBytes(buffer, []byte(node.Op))
 	switch node.Op {

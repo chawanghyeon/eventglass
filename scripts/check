@@ -82,6 +82,17 @@ integration() {
     AWS_ACCESS_KEY_ID=eventglass-local \
     AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
     go test -count=1 ./tests/integration
+  docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:integration-build .
+  docker run --rm --platform linux/arm64 --network "${project}_default" \
+    -e EVENTGLASS_INTEGRATION_REQUIRED=1 \
+    -e EVENTGLASS_DATABASE_URL="postgres://eventglass:local-test-only@postgres:5432/eventglass?sslmode=disable" \
+    -e EVENTGLASS_S3_ENDPOINT=http://minio:9000 \
+    -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
+    -e EVENTGLASS_TEST_BINARY=/out/eventglass-go \
+    -e AWS_ACCESS_KEY_ID=eventglass-local \
+    -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+    -w /src eventglass-go:integration-build \
+    go test -tags=duckdb_use_static_lib -count=1 -run '^TestPublicQueryEndToEnd$' -v ./tests/integration
 }
 
 crash() {

@@ -23,6 +23,9 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 			progressed, err = runtime.runOneConversion(ctx)
 		}
 		if err == nil && !progressed {
+			progressed, err = runtime.runOneQueryCoordinator(ctx)
+		}
+		if err == nil && !progressed {
 			progressed, err = runtime.runOneQuery(ctx)
 		}
 		if ctx.Err() != nil {
@@ -47,6 +50,43 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 	return nil
 }
 
+func (runtime *Runtime) runOneQueryCoordinator(ctx context.Context) (bool, error) {
+	if runtime.queryControl == nil || runtime.queryPlanner == nil {
+		return false, nil
+	}
+	job, err := runtime.queryControl.ClaimQueryCoordinator(ctx, runtime.installation.InstallationID, runtime.installation.StorageGeneration, runtime.workerOwner)
+	if err != nil || job == nil {
+		return false, err
+	}
+	err = runtime.withQueryCoordinatorHeartbeat(ctx, job.Authority, func(planContext context.Context) error {
+		return runtime.queryPlanner.Execute(planContext, job.Authority)
+	})
+	return true, err
+}
+
+func (runtime *Runtime) withQueryCoordinatorHeartbeat(ctx context.Context, authority control.QueryCoordinatorAuthority, plan func(context.Context) error) error {
+	planContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- plan(planContext) }()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-result:
+			return err
+		case <-ctx.Done():
+			cancel()
+			return errors.Join(ctx.Err(), <-result)
+		case <-ticker.C:
+			if _, err := runtime.queryControl.HeartbeatQueryCoordinator(ctx, authority); err != nil {
+				cancel()
+				return errors.Join(err, <-result)
+			}
+		}
+	}
+}
+
 func (runtime *Runtime) runOneQuery(ctx context.Context) (bool, error) {
 	if runtime.queryControl == nil || runtime.queryWorker == nil {
 		return false, nil
@@ -67,26 +107,7 @@ func (runtime *Runtime) runOneQuery(ctx context.Context) (bool, error) {
 }
 
 func (runtime *Runtime) withQueryHeartbeat(ctx context.Context, authority control.QueryTaskAuthority, task func(context.Context) error) error {
-	taskContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	result := make(chan error, 1)
-	go func() { result <- task(taskContext) }()
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-result:
-			return err
-		case <-ctx.Done():
-			cancel()
-			return errors.Join(ctx.Err(), <-result)
-		case <-ticker.C:
-			if _, err := runtime.queryControl.HeartbeatQueryTask(ctx, authority); err != nil {
-				cancel()
-				return errors.Join(err, <-result)
-			}
-		}
-	}
+	return executeQueryTaskWithHeartbeat(ctx, runtime.queryControl, authority, task)
 }
 
 func queryFailureCode(err error) string {

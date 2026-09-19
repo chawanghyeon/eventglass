@@ -765,8 +765,11 @@ export interface components {
             top: number;
             order?: components["schemas"]["MetricOrder"];
             read_token?: string;
-            /** @enum {string} */
-            mode?: "auto" | "sync" | "async";
+            /**
+             * @default auto
+             * @enum {string}
+             */
+            mode: "auto" | "sync" | "async";
         };
         Metric: {
             name: string;

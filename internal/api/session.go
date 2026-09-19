@@ -46,6 +46,7 @@ type ManagementConfig struct {
 	BuildMarker     MarkerBuilder
 	OnSetupComplete func()
 	Now             func() time.Time
+	Queries         PublicQueryService
 }
 
 type ManagementHandler struct{ config ManagementConfig }
@@ -88,6 +89,9 @@ func (handler *ManagementHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/projects/{id}/keys", handler.listProjectKeys)
 	mux.HandleFunc("POST /v1/projects/{id}/keys", handler.createProjectKey)
 	mux.HandleFunc("DELETE /v1/projects/{id}/keys/{key_id}", handler.revokeProjectKey)
+	if handler.config.Queries != nil {
+		handler.registerQueryRoutes(mux)
+	}
 }
 
 func (handler *ManagementHandler) getSetup(writer http.ResponseWriter, request *http.Request) {

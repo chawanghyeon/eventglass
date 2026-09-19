@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -18,6 +19,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/api"
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/ingest"
+	"github.com/chawanghyeon/eventglass/internal/query"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
@@ -30,6 +32,7 @@ type Runtime struct {
 	publication  *control.PublicationOperations
 	queryControl *control.QueryOperations
 	queryWorker  *DurableQueryWorkflow
+	queryPlanner *DurableQueryCoordinator
 	converter    *DurableConversionWorkflow
 	publisher    *DurablePublicationWorkflow
 	workerOwner  string
@@ -123,7 +126,9 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		config: config, resources: resources, database: database, store: store, installation: installation,
 		markerKey: markerKey, markerBytes: int64(len(marker)), markerSHA: markerSHA, started: make(chan struct{}),
 	}
+	nativeTasks := NewNativeTaskGate()
 	mux := http.NewServeMux()
+	var publicQueries *PublicQueryService
 	if config.Roles[RoleAPI] {
 		authHashKey, err := readHexSecret(config.AuthHashKeyFile)
 		if err != nil {
@@ -132,6 +137,25 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		passwords, err := api.NewPasswordHasher(resources.Working)
 		if err != nil {
 			return fail(err)
+		}
+		tokenKey, err := readHexSecret(config.TokenKeyFile)
+		if err != nil {
+			return fail(fmt.Errorf("read token signing key: %w", err))
+		}
+		tokenDigest := sha256.Sum256(tokenKey[:])
+		tokens, err := query.NewTokenCodec(query.SigningKey{ID: hex.EncodeToString(tokenDigest[:8]), Secret: tokenKey}, nil)
+		if err != nil {
+			return fail(err)
+		}
+		queryOperations, err := database.QueryOperations()
+		if err != nil {
+			return fail(err)
+		}
+		runtime.queryControl = queryOperations
+		publicQueries = &PublicQueryService{
+			Control: queryOperations, Store: store, Tokens: tokens, Exporter: ProcessQueryExportRunner{Gate: nativeTasks},
+			ScratchDir: filepath.Join(config.ScratchDir, "query-results"), InstallationID: installation.InstallationID,
+			StorageGeneration: installation.StorageGeneration,
 		}
 		management, err := api.NewManagementHandler(api.ManagementConfig{
 			Auth: authOperations, Passwords: passwords, PublicOrigin: strings.TrimRight(config.PublicURL, "/"),
@@ -142,6 +166,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			OnSetupComplete: func() {
 				runtime.ready.Store(true)
 			},
+			Queries: publicQueries,
 		})
 		if err != nil {
 			return fail(err)
@@ -193,20 +218,33 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			return fail(err)
 		}
 		runtime.publication, runtime.workerOwner = operations, owner
-		runtime.converter = &DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
+		runtime.converter = &DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{Gate: nativeTasks}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
 		runtime.publisher = &DurablePublicationWorkflow{Control: operations, Store: store}
 	}
 	if config.Roles[RoleScheduler] || config.Roles[RoleWorker] {
-		operations, err := database.QueryOperations()
-		if err != nil {
-			return fail(err)
+		if runtime.queryControl == nil {
+			operations, err := database.QueryOperations()
+			if err != nil {
+				return fail(err)
+			}
+			runtime.queryControl = operations
 		}
-		runtime.queryControl = operations
 	}
 	if config.Roles[RoleWorker] {
 		runtime.queryWorker = &DurableQueryWorkflow{
-			Control: runtime.queryControl, Store: store, Runner: ProcessQueryRunner{},
+			Control: runtime.queryControl, Store: store, Runner: ProcessQueryRunner{Gate: nativeTasks},
 			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "query-worker"),
+		}
+		runtime.queryPlanner = &DurableQueryCoordinator{Control: runtime.queryControl, Objects: store}
+		if publicQueries != nil {
+			syncOwner, err := randomUUID()
+			if err != nil {
+				return fail(err)
+			}
+			publicQueries.Sync = &DurableQuerySyncExecutor{
+				Control: runtime.queryControl, Workflow: runtime.queryWorker, InstallationID: installation.InstallationID,
+				StorageGeneration: installation.StorageGeneration, Owner: syncOwner,
+			}
 		}
 	}
 	mux.HandleFunc("/livez", runtime.livez)

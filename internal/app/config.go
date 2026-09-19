@@ -27,6 +27,7 @@ type Config struct {
 	ScratchDir         string
 	BootstrapTokenFile string
 	AuthHashKeyFile    string
+	TokenKeyFile       string
 	InsecureCookie     bool
 	Roles              map[Role]bool
 	S3                 storage.S3Config
@@ -53,7 +54,8 @@ func LoadConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	config := Config{
 		DatabaseURL: value("EVENTGLASS_DATABASE_URL"), HTTPAddr: value("EVENTGLASS_HTTP_ADDR"),
 		PublicURL: value("EVENTGLASS_PUBLIC_URL"), ScratchDir: value("EVENTGLASS_SCRATCH_DIR"),
-		BootstrapTokenFile: value("EVENTGLASS_BOOTSTRAP_TOKEN_FILE"), AuthHashKeyFile: value("EVENTGLASS_AUTH_HASH_KEY_FILE"), Roles: roles,
+		BootstrapTokenFile: value("EVENTGLASS_BOOTSTRAP_TOKEN_FILE"), AuthHashKeyFile: value("EVENTGLASS_AUTH_HASH_KEY_FILE"),
+		TokenKeyFile: value("EVENTGLASS_TOKEN_KEY_FILE"), Roles: roles,
 		S3:           storage.S3Config{Endpoint: endpoint, Region: value("EVENTGLASS_S3_REGION"), Bucket: value("EVENTGLASS_S3_BUCKET"), Prefix: value("EVENTGLASS_S3_PREFIX"), PathStyle: pathStyle},
 		DrainTimeout: 30 * time.Second,
 	}
@@ -84,8 +86,8 @@ func (config Config) Validate() error {
 			return fmt.Errorf("unsupported role %q", role)
 		}
 	}
-	if config.Roles[RoleAPI] && config.AuthHashKeyFile == "" {
-		return errors.New("EVENTGLASS_AUTH_HASH_KEY_FILE is required for the API role")
+	if config.Roles[RoleAPI] && (config.AuthHashKeyFile == "" || config.TokenKeyFile == "") {
+		return errors.New("EVENTGLASS_AUTH_HASH_KEY_FILE and EVENTGLASS_TOKEN_KEY_FILE are required for the API role")
 	}
 	parsed, err := url.Parse(config.PublicURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {

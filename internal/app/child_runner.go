@@ -21,9 +21,15 @@ const maxChildMessageBytes = 256 << 10
 
 type ProcessConversionRunner struct {
 	BinaryPath string
+	Gate       *NativeTaskGate
 }
 
 func (runner ProcessConversionRunner) Run(ctx context.Context, request engine.ConversionRequest, emit func(engine.ConvertedBundle) error) (engine.ConversionSummary, error) {
+	release, err := runner.Gate.acquire(ctx)
+	if err != nil {
+		return engine.ConversionSummary{}, err
+	}
+	defer release()
 	binary := runner.BinaryPath
 	if binary == "" {
 		var err error

@@ -92,6 +92,26 @@ func TestDatasetHashNormalizesSetsButPreservesExpressionOrder(t *testing.T) {
 	}
 }
 
+func TestDatasetIdentityRoundTripsAndRejectsTrailingBytes(t *testing.T) {
+	root := &Node{Op: "constant", Constant: true}
+	filter, err := CanonicalFilter(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := model.DatasetSpec{TenantID: 7, ProjectIDs: []int64{9, 2}, Kinds: []model.Kind{model.KindLog, model.KindError}, TimeBasis: model.QueryTimeReceived, StartUS: -1, EndUS: 10, Filter: filter}
+	_, encoded, err := DatasetHash(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeDatasetIdentity(encoded)
+	if err != nil || decoded.TenantID != 7 || decoded.ProjectIDs[0] != 2 || decoded.Kinds[0] != model.KindError || decoded.StartUS != -1 {
+		t.Fatalf("decoded=%#v err=%v", decoded, err)
+	}
+	if _, err := DecodeDatasetIdentity(append(encoded, 0)); err == nil {
+		t.Fatal("dataset identity with trailing bytes accepted")
+	}
+}
+
 func stringLiteral(value string) *Node {
 	literal := Literal{Type: StringType, String: value}
 	return &Node{Op: "literal", Type: StringType, Literal: &literal}

@@ -46,23 +46,23 @@ func (workflow DurableQueryWorkflow) Execute(ctx context.Context, task control.Q
 		return errors.Join(engine.ErrQueryExecutionInvalid, err)
 	}
 	if manifest.Version != query.QueryProtocolVersion || manifest.QueryID != task.Authority.QueryID || manifest.TenantID != task.Authority.TenantID || manifest.Generation != task.Authority.StorageGeneration || manifest.Task != task.Authority.Key {
-		return engine.ErrQueryExecutionInvalid
+		return errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query task manifest scope mismatch"))
 	}
 	digest := sha256.Sum256(manifest.Operation)
 	if hex.EncodeToString(digest[:]) != manifest.OperationHash {
-		return engine.ErrQueryExecutionInvalid
+		return errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query task operation digest mismatch"))
 	}
 	var operation engine.QueryOperation
 	if err := strictAppJSON(manifest.Operation, &operation); err != nil {
 		return errors.Join(engine.ErrQueryExecutionInvalid, err)
 	}
-	inputs, err := workflow.downloadQueryInputs(ctx, taskDirectory, task, manifest)
+	inputs, payloads, err := workflow.downloadQueryInputs(ctx, taskDirectory, task, manifest, operation)
 	if err != nil {
 		return err
 	}
 	request := engine.QueryRequest{
 		Version: engine.QueryExecutionProtocolVersion, QueryID: task.Authority.QueryID, Task: task.Authority.Key,
-		Operation: operation, InputPaths: inputs, OutputPath: filepath.Join(taskDirectory, "result.parquet"),
+		Operation: operation, InputPaths: inputs, PayloadPaths: payloads, OutputPath: filepath.Join(taskDirectory, "result.parquet"),
 		SpillDirectory: filepath.Join(taskDirectory, "spill"),
 	}
 	summary, err := workflow.Runner.Run(ctx, request)
@@ -99,7 +99,7 @@ func (workflow DurableQueryWorkflow) Execute(ctx context.Context, task control.Q
 	})
 }
 
-func (workflow DurableQueryWorkflow) downloadQueryInputs(ctx context.Context, directory string, task control.QueryTask, manifest query.TaskManifest) ([]string, error) {
+func (workflow DurableQueryWorkflow) downloadQueryInputs(ctx context.Context, directory string, task control.QueryTask, manifest query.TaskManifest, operation engine.QueryOperation) ([]string, []string, error) {
 	type input struct {
 		key      string
 		bytes    int64
@@ -109,31 +109,45 @@ func (workflow DurableQueryWorkflow) downloadQueryInputs(ctx context.Context, di
 	switch task.Authority.Key.Stage {
 	case model.QueryTaskScan:
 		if len(task.Inputs) != 0 || len(manifest.Files) < 1 || len(manifest.Files) > query.MaxFilesPerScan {
-			return nil, engine.ErrQueryExecutionInvalid
+			return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query scan inputs are invalid"))
 		}
 		for _, file := range manifest.Files {
 			selected = append(selected, input{file.ObjectKey, file.Bytes, file.SHA256})
 		}
 	case model.QueryTaskReduce:
 		if len(manifest.Files) != 0 || len(task.Inputs) != len(manifest.Inputs) || len(task.Inputs) > query.ReduceFanIn {
-			return nil, engine.ErrQueryExecutionInvalid
+			return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query reducer inputs are invalid"))
 		}
 		for index, artifact := range task.Inputs {
 			if artifact.Ordinal != index || manifest.Inputs[index].Producer != artifact.Producer {
-				return nil, engine.ErrQueryExecutionInvalid
+				return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query reducer input order is invalid"))
 			}
 			selected = append(selected, input{artifact.ObjectKey, artifact.Bytes, artifact.SHA256})
 		}
 	default:
-		return nil, engine.ErrQueryExecutionInvalid
+		return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query task stage is invalid"))
 	}
 	paths := make([]string, len(selected))
 	for index, item := range selected {
 		path := filepath.Join(directory, fmt.Sprintf("input-%03d.parquet", index))
 		if err := workflow.Store.DownloadToFile(ctx, item.key, path, item.bytes, item.checksum); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		paths[index] = path
 	}
-	return paths, nil
+	var payloads []string
+	if task.Authority.Key.Stage == model.QueryTaskScan && operation.Kind == "detail" {
+		payloads = make([]string, len(manifest.Files))
+		for index, file := range manifest.Files {
+			if file.PayloadObjectKey == "" || file.PayloadBytes <= 0 || len(file.PayloadSHA256) != 64 {
+				return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query payload manifest is invalid"))
+			}
+			path := filepath.Join(directory, fmt.Sprintf("payload-%03d.parquet", index))
+			if err := workflow.Store.DownloadToFile(ctx, file.PayloadObjectKey, path, file.PayloadBytes, file.PayloadSHA256); err != nil {
+				return nil, nil, err
+			}
+			payloads[index] = path
+		}
+	}
+	return paths, payloads, nil
 }

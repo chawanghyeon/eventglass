@@ -87,6 +87,21 @@ func TestQueryPlanTasksWinningAttemptsAndFixedReduction(t *testing.T) {
 	if state != "succeeded" || resultBytes != completion.Bytes {
 		t.Fatalf("state=%s bytes=%d", state, resultBytes)
 	}
+	status, err := operations.GetQueryStatus(ctx, tokenHash, fixture.tenantID, queryID)
+	if err != nil || status.State != "succeeded" || status.Result == nil || status.PlanFiles != 9 || status.PlanInputBytes != 9*(8<<20) {
+		t.Fatalf("status=%#v err=%v", status, err)
+	}
+	_, otherToken := addQueryPrincipal(t, fixture, 99)
+	if err := operations.FailSucceededQueryResult(ctx, otherToken, fixture.tenantID, queryID, "query_result_invalid"); !errors.Is(err, control.ErrQueryNotFound) {
+		t.Fatalf("other session failed result: %v", err)
+	}
+	if err := operations.FailSucceededQueryResult(ctx, tokenHash, fixture.tenantID, queryID, "query_result_invalid"); err != nil {
+		t.Fatal(err)
+	}
+	status, err = operations.GetQueryStatus(ctx, tokenHash, fixture.tenantID, queryID)
+	if err != nil || status.State != "failed" || status.ErrorCode != "query_result_invalid" {
+		t.Fatalf("failed status=%#v err=%v", status, err)
+	}
 }
 
 func TestQueryLevelBudgetIsSharedAcrossWinningTasks(t *testing.T) {
@@ -173,6 +188,24 @@ func TestQueryCoordinatorTakeoverCancellationAndLateResultFence(t *testing.T) {
 	takeover, err := operations.ClaimQueryCoordinator(ctx, acceptInstallationID, 1, "new-coordinator")
 	if err != nil || takeover == nil || takeover.Authority.Fence != 2 {
 		t.Fatalf("takeover=%#v err=%v", takeover, err)
+	}
+	planning, err := operations.LoadQueryPlanContext(ctx, takeover.Authority)
+	if err != nil || planning.Snapshot.SnapshotID != snapshot.SnapshotID || planning.OperationHash != hex.EncodeToString(digest[:]) {
+		t.Fatalf("planning=%#v err=%v", planning, err)
+	}
+	dataset, err := query.DecodeDatasetIdentity(planning.Snapshot.DatasetBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := operations.CatalogPageForQuery(ctx, takeover.Authority, control.CatalogCommand{
+		TenantID: fixture.tenantID, SnapshotID: snapshot.SnapshotID, DatasetSHA256: snapshot.DatasetSHA256,
+		DatasetBytes: snapshot.DatasetBytes, TimeBasis: dataset.TimeBasis, StartUS: dataset.StartUS, EndUS: dataset.EndUS, Kinds: dataset.Kinds, Limit: 256,
+	})
+	if err != nil || len(page) != 0 {
+		t.Fatalf("durable catalog page=%#v err=%v", page, err)
+	}
+	if _, err := operations.HeartbeatQueryCoordinator(ctx, takeover.Authority); err != nil {
+		t.Fatal(err)
 	}
 	plan, err := query.BuildExecutionPlan(query.PlanScope{
 		QueryID: queryID, TenantID: fixture.tenantID, SnapshotID: snapshot.SnapshotID, Generation: 1,

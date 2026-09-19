@@ -93,8 +93,27 @@ func (operations *QueryOperations) ClaimQueryCoordinator(ctx context.Context, in
 }
 
 func (operations *QueryOperations) ClaimQueryTask(ctx context.Context, installationID string, generation int64, owner string) (*QueryTask, error) {
+	return operations.claimQueryTask(ctx, installationID, generation, owner, "")
+}
+
+// ClaimQueryTaskForQuery uses the same durable scheduler and fencing path as a
+// background worker, but restricts admission to one already-authorized query.
+// It lets an interactive request help its own query without stealing unrelated
+// tenant work.
+func (operations *QueryOperations) ClaimQueryTaskForQuery(ctx context.Context, installationID string, generation int64, owner, queryID string) (*QueryTask, error) {
+	if uuid.Validate(queryID) != nil {
+		return nil, errors.New("invalid target query")
+	}
+	return operations.claimQueryTask(ctx, installationID, generation, owner, queryID)
+}
+
+func (operations *QueryOperations) claimQueryTask(ctx context.Context, installationID string, generation int64, owner, targetQueryID string) (*QueryTask, error) {
 	if installationID == "" || generation <= 0 || owner == "" || len(owner) > 128 {
 		return nil, errors.New("invalid query task claim")
+	}
+	var target any
+	if targetQueryID != "" {
+		target = targetQueryID
 	}
 	tx, err := operations.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
@@ -109,6 +128,7 @@ func (operations *QueryOperations) ClaimQueryTask(ctx context.Context, installat
 	var deadline time.Time
 	err = tx.QueryRow(ctx, `SELECT q.query_id::text,q.tenant_id,q.snapshot_id::text,q.deadline
 		FROM query_jobs q WHERE q.state IN ('queued','running') AND q.deadline>clock_timestamp()
+		AND ($1::uuid IS NULL OR q.query_id=$1::uuid)
 		AND EXISTS (SELECT 1 FROM query_tasks t WHERE t.query_id=q.query_id AND t.tenant_id=q.tenant_id
 			AND t.state='queued' AND t.retry_at<=clock_timestamp() AND t.attempt<3
 			AND NOT EXISTS (SELECT 1 FROM query_task_inputs i
@@ -116,7 +136,7 @@ func (operations *QueryOperations) ClaimQueryTask(ctx context.Context, installat
 				AND p.stage=i.producer_stage AND p.level=i.producer_level AND p.partition_id=i.producer_partition_id
 				WHERE i.tenant_id=t.tenant_id AND i.query_id=t.query_id AND i.consumer_stage=t.stage
 				AND i.consumer_level=t.level AND i.consumer_partition_id=t.partition_id AND p.state<>'succeeded'))
-		ORDER BY q.deadline,q.query_id FOR UPDATE OF q SKIP LOCKED LIMIT 1`).Scan(&queryID, &tenantID, &snapshotID, &deadline)
+		ORDER BY q.deadline,q.query_id FOR UPDATE OF q SKIP LOCKED LIMIT 1`, target).Scan(&queryID, &tenantID, &snapshotID, &deadline)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

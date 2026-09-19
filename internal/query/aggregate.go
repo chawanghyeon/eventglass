@@ -42,6 +42,8 @@ type AggregateOperationSpec struct {
 	GroupBy   []GroupDimension
 	Metrics   []AggregateMetric
 	Histogram *AggregateHistogram
+	Top       int
+	Order     AggregateOrder
 }
 
 var metricNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
@@ -89,9 +91,30 @@ func BuildAggregateOperation(spec AggregateOperationSpec) (engine.QueryOperation
 	if err != nil {
 		return engine.QueryOperation{}, err
 	}
+	top, order := spec.Top, spec.Order
+	if top == 0 {
+		top = 100
+	}
+	if order.Metric == "" {
+		order = AggregateOrder{Metric: "count", Direction: "desc"}
+	}
+	if top < 1 || top > 1000 || order.Direction != "asc" && order.Direction != "desc" {
+		return engine.QueryOperation{}, errors.New("invalid aggregate result order")
+	}
+	resultPlan := engine.QueryResultPlan{Kind: "aggregate", Top: top, OrderMetric: order.Metric, OrderDirection: order.Direction, Histogram: spec.Histogram != nil}
+	for _, group := range spec.GroupBy {
+		resultPlan.Groups = append(resultPlan.Groups, engine.QueryResultGroup{Op: group.Op, Name: group.Name, Namespace: group.Namespace, Path: group.Path, Type: string(group.Type)})
+	}
+	for _, metric := range spec.Metrics {
+		fieldType := ""
+		if metric.Field != nil {
+			fieldType = string(metric.Field.Type)
+		}
+		resultPlan.Metrics = append(resultPlan.Metrics, engine.QueryResultMetric{Name: metric.Name, Op: metric.Op, FieldType: fieldType})
+	}
 	return engine.QueryOperation{
 		Version: engine.QueryExecutionProtocolVersion, Kind: "aggregate", MaxRows: MaxAggregateGroups,
-		ScanSQL: scan, ReduceSQL: reduce, EmptySQL: empty, ScanArguments: scanArguments,
+		ScanSQL: scan, ReduceSQL: reduce, EmptySQL: empty, ScanArguments: scanArguments, Result: resultPlan,
 	}, nil
 }
 

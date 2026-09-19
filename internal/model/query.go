@@ -75,6 +75,10 @@ type CatalogFile struct {
 	LaneID            int
 	Kind              Kind
 	BlockSHA256       []string
+	PayloadFileID     string `json:",omitempty"`
+	PayloadObjectKey  string `json:",omitempty"`
+	PayloadBytes      int64  `json:",omitempty"`
+	PayloadSHA256     string `json:",omitempty"`
 }
 
 func QueryPrincipalHash(userID int64, sessionTokenHash [32]byte) string {

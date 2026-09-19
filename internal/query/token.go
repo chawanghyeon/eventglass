@@ -245,7 +245,7 @@ func (codec *TokenCodec) checkExpected(generation int64, principalHash, datasetH
 	if !time.UnixMicro(expiresAtUS).After(codec.now()) {
 		return ErrTokenExpired
 	}
-	if datasetHash != expected.DatasetHash || expected.OperationHash != operationHash || expected.Sort != sortName || expected.Limit != limit {
+	if expected.DatasetHash != "" && datasetHash != expected.DatasetHash || expected.OperationHash != operationHash || expected.Sort != sortName || expected.Limit != limit {
 		return ErrTokenMismatch
 	}
 	return nil

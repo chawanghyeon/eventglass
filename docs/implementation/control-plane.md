@@ -45,8 +45,9 @@ sdk_outcomes. Their source is authoritative for current column names.
 | 0005_auth_queries | G04 | users/memberships/grants/sessions/login limits/audit, snapshots/query tasks, retention/recovery/bootstrap policy fields |
 | 0006_query_snapshots | G04 | immutable post-Q1 snapshot authority revisions and installation retention policy |
 | 0007_query_execution | G04 | immutable query task shape and temporary-output producer authority |
-| 0008_alerts | G05 | destinations, alerts, evaluations, deliveries, audit action additions |
-| 0009_maintenance | G06 | maintenance_tasks, maintenance_inputs, backup_sets |
+| 0008_query_results | G04 | sealed input-byte accounting used by public query routing and result statistics |
+| 0009_alerts | G05 | destinations, alerts, evaluations, deliveries, audit action additions |
+| 0010_maintenance | G06 | maintenance_tasks, maintenance_inputs, backup_sets |
 
 The sequence is a starting manifest for this tree. If a packet requires an
 additional migration, append the next free version and update this table in
@@ -210,10 +211,10 @@ retention_tick_at timestamptz, encryption key ID,
 and alerts_paused Boolean. Encryption key material is a mounted secret, not PG.
 Project retention days/revision are added by0003 because dedupe needs them;
 snapshot floor, recovery state and bootstrap state are added by0005;0006 adds
-installation retention policy and immutable snapshot authority revisions;0009
+installation retention policy and immutable snapshot authority revisions;0010
 adds backup/task state.
 G04 management mutations require
-audit_events: create that table in0005 and extend its action enum in0008.
+audit_events: create that table in0005 and extend its action enum in0009.
 G03 Issue mutation operation IDs live in issue_transitions.operation_id with a
 scoped unique index; add the nullable actor FK in0005. Preserve these IDs when
 adding general management auditing; don't erase retry history on upgrade.
@@ -223,7 +224,7 @@ columns per C04; preserve exact decoded values.
 Replace sdk_outcomes string-key PK with category/reason digests per C04 while
 retaining full encoded strings; never index unbounded SDK values directly.
 0005 adds setup attempt/
-state/marker/fingerprint/lease fields per C08.0009 adds batch recovery_state
+state/marker/fingerprint/lease fields per C08.0010 adds batch recovery_state
 live/retired, journal_retired_at, nullable journal FK with retired/published CHECK,
 and compact retirement summaries per C07. No current applied migration changes.
 

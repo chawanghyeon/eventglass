@@ -33,6 +33,10 @@ func TestReadTokenRoundTripRotationAndErrorPrecedence(t *testing.T) {
 	if err != nil || got.SnapshotID != snapshot.SnapshotID || got.KeyID != "current" {
 		t.Fatalf("claims=%#v err=%v", got, err)
 	}
+	withoutDataset, err := codec.VerifyRead(token, TokenExpectation{Generation: 7, PrincipalHash: principal})
+	if err != nil || withoutDataset.DatasetHash != dataset {
+		t.Fatalf("pre-dataset claims=%#v err=%v", withoutDataset, err)
+	}
 
 	oldCodec, _ := NewTokenCodec(previous, nil)
 	oldCodec.now = codec.now

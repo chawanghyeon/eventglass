@@ -40,7 +40,8 @@ exactly migrated PostgreSQL schema and matching S3 identity. Configure
 `EVENTGLASS_SCRATCH_DIR`, `EVENTGLASS_S3_REGION`, `EVENTGLASS_S3_BUCKET`, and
 optional endpoint/prefix/path-style settings. The API role also requires
 `EVENTGLASS_AUTH_HASH_KEY_FILE`, whose file contains one random 32-byte value as
-64 lowercase hexadecimal characters. A fresh installation additionally uses
+64 lowercase hexadecimal characters, and `EVENTGLASS_TOKEN_KEY_FILE` with an
+independent value in the same format for signed read/cursor tokens. A fresh installation additionally uses
 `EVENTGLASS_BOOTSTRAP_TOKEN_FILE` in the same format; startup stores only its
 hash, exposes the recoverable setup surface, and keeps readiness and ingestion
 closed until setup commits. Production management cookies require HTTPS.

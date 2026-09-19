@@ -154,13 +154,13 @@ func (operations *QueryOperations) SealQueryPlan(ctx context.Context, command Se
 	if _, err := lockDurableQueryScope(ctx, tx, command.Authority.TenantID, snapshotID, command.Authority.StorageGeneration); err != nil {
 		return err
 	}
-	var state string
+	var state, operationKind string
 	var owner string
 	var fence int64
 	var deadline, now time.Time
 	var sealed *string
-	if err := tx.QueryRow(ctx, `SELECT state,coordinator_owner,coordinator_fence,deadline,sealed_plan_sha,clock_timestamp()
-		FROM query_jobs WHERE tenant_id=$1 AND query_id=$2 FOR UPDATE`, command.Authority.TenantID, command.Authority.QueryID).Scan(&state, &owner, &fence, &deadline, &sealed, &now); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT state,operation_kind,coordinator_owner,coordinator_fence,deadline,sealed_plan_sha,clock_timestamp()
+		FROM query_jobs WHERE tenant_id=$1 AND query_id=$2 FOR UPDATE`, command.Authority.TenantID, command.Authority.QueryID).Scan(&state, &operationKind, &owner, &fence, &deadline, &sealed, &now); err != nil {
 		return err
 	}
 	if sealed != nil {
@@ -204,10 +204,10 @@ func (operations *QueryOperations) SealQueryPlan(ctx context.Context, command Se
 		}
 	}
 	result, err := tx.Exec(ctx, `UPDATE query_jobs SET state='queued',sealed_plan_sha=$5,plan_file_count=$6,plan_scan_count=$7,
-		plan_bytes=$8,coordinator_owner=NULL,lease_until=NULL,updated_at=clock_timestamp()
+		plan_bytes=$8,plan_input_bytes=$9,coordinator_owner=NULL,lease_until=NULL,updated_at=clock_timestamp()
 		WHERE tenant_id=$1 AND query_id=$2 AND state='planning' AND coordinator_owner=$3 AND coordinator_fence=$4`,
 		command.Authority.TenantID, command.Authority.QueryID, command.Authority.Owner, command.Authority.Fence,
-		command.PlanSHA256, planFileCount(command.Tasks), command.ScanCount, command.ManifestBytes)
+		command.PlanSHA256, planFileCount(command.Tasks), command.ScanCount, command.ManifestBytes, planInputBytes(command.Tasks, operationKind == "detail"))
 	if err != nil || result.RowsAffected() != 1 {
 		return errors.Join(ErrQueryFenceStale, err)
 	}
@@ -273,6 +273,31 @@ func planFileCount(tasks []model.QueryPlannedTask) int {
 		}
 		if json.Unmarshal(task.Manifest, &manifest) == nil {
 			total += len(manifest.Files)
+		}
+	}
+	return total
+}
+
+func planInputBytes(tasks []model.QueryPlannedTask, includePayload bool) int64 {
+	var total int64
+	for _, task := range tasks {
+		if task.Key.Stage != model.QueryTaskScan {
+			continue
+		}
+		var manifest struct {
+			Files []struct {
+				Bytes        int64
+				PayloadBytes int64
+			} `json:"files"`
+		}
+		if json.Unmarshal(task.Manifest, &manifest) != nil {
+			continue
+		}
+		for _, file := range manifest.Files {
+			total += file.Bytes
+			if includePayload {
+				total += file.PayloadBytes
+			}
 		}
 	}
 	return total

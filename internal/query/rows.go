@@ -52,6 +52,7 @@ func BuildRowOperation(spec RowOperationSpec) (engine.QueryOperation, error) {
 	reduceArguments, _ := encodeQueryArguments([]any{fetch})
 	return engine.QueryOperation{
 		Version: engine.QueryExecutionProtocolVersion, Kind: "rows", MaxRows: int64(fetch),
+		Result:    engine.QueryResultPlan{Kind: "rows", Limit: spec.Limit, Sort: spec.Sort},
 		ScanSQL:   `SELECT ` + listProjection + ` FROM input_rows r WHERE ` + where + ` ORDER BY ` + order + ` LIMIT ?`,
 		ReduceSQL: `SELECT ` + listProjection + ` FROM input_rows r ORDER BY ` + order + ` LIMIT ?`,
 		EmptySQL: `SELECT CAST('' AS VARCHAR) record_id,CAST(0 AS BIGINT) project_id,CAST('error' AS VARCHAR) kind,

@@ -4,7 +4,7 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00 engine/storage/isolation contracts, G01 SDK fixture/normalization contracts, all G02 packets I1–I5 (durable ingestion, bounded runtime, lease fencing, and the Linux ARM64 crash/resource gate), all G03 packets P1–P4 (publication catalog, isolated paired-Parquet conversion, fenced Prepare/Publish workers, Issue lifecycle, and publication crash evidence), and G04 packets Q1–Q4 (recoverable setup and auth, generated v1 wire contracts, typed query compilation, authorized snapshots and signed tokens, plus fenced deterministic query execution and exact aggregation) are complete. Q5 is the first incomplete packet; G04–G08 remain incomplete overall, so the repository does not yet advertise a deployable Go release. See [`DESIGN.md`](DESIGN.md), [`SDK-SUPPORT.md`](SDK-SUPPORT.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the normative contract, verified SDK scope, and commands.
+Current status: G00 engine/storage/isolation contracts, G01 SDK fixture/normalization contracts, all G02 packets I1–I5 (durable ingestion, bounded runtime, lease fencing, and the Linux ARM64 crash/resource gate), all G03 packets P1–P4 (publication catalog, isolated paired-Parquet conversion, fenced Prepare/Publish workers, Issue lifecycle, and publication crash evidence), and all G04 packets Q1–Q5 (recoverable setup and auth, generated v1 wire contracts, typed query compilation, authorized snapshots and signed tokens, fenced deterministic query execution and exact aggregation, and public rows/aggregate/detail APIs) are complete. U1 is the first incomplete packet; G05–G08 remain incomplete overall, so the repository does not yet advertise a deployable Go release. See [`DESIGN.md`](DESIGN.md), [`SDK-SUPPORT.md`](SDK-SUPPORT.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the normative contract, verified SDK scope, and commands.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
@@ -26,8 +26,11 @@ scope composition, and pinned DuckDB 2.0 semantic contracts. Q3 adds atomic
 snapshot admission, revision-bound catalog manifests, monotonic retention floors,
 and purpose-separated signed read/cursor tokens. Q4 adds durable fenced query
 tasks, deterministic fan-in reduction, isolated native execution, bounded global
-Top-K, exact integer aggregation, and histogram completion. Public query/detail
-routes, operator surfaces, and backup/PITR recovery remain later gates.
+Top-K, exact integer aggregation, and histogram completion. Q5 exposes strict
+rows, aggregate, detail, snapshot and async-job routes; sync and background work
+share durable claims/fences and one native-child gate, while result decoding is
+bounded and token-authorized. Operator surfaces, Live, alerts, and backup/PITR
+recovery remain later gates.
 Pure-Go checks do not rebuild DuckDB.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)

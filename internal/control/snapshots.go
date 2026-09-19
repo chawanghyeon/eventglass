@@ -89,6 +89,38 @@ func (operations *QueryOperations) CreateSnapshot(ctx context.Context, command C
 	return model.QuerySnapshot{}, lastErr
 }
 
+func (operations *QueryOperations) LoadSnapshot(ctx context.Context, tokenHash [32]byte, tenantID int64, snapshotID, datasetHash string) (model.QuerySnapshot, error) {
+	if tokenHash == ([32]byte{}) || tenantID <= 0 || uuid.Validate(snapshotID) != nil || !validSHA(datasetHash) {
+		return model.QuerySnapshot{}, ErrSnapshotMismatch
+	}
+	tx, err := operations.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
+	if err != nil {
+		return model.QuerySnapshot{}, err
+	}
+	defer tx.Rollback(ctx)
+	authority, err := lockQueryAuthority(ctx, tx, tokenHash, tenantID, false, false)
+	if err != nil {
+		return model.QuerySnapshot{}, err
+	}
+	snapshot, revisions, err := loadSnapshotForUpdate(ctx, tx, tenantID, snapshotID)
+	if err != nil {
+		return model.QuerySnapshot{}, err
+	}
+	if snapshot.UserID != authority.userID || snapshot.PrincipalHash != authority.principalHash || snapshot.DatasetSHA256 != datasetHash || snapshot.StorageGeneration != authority.generation || snapshot.AuthRevision != authority.authRevision || snapshot.TenantAuthRevision != authority.tenantAuthRevision {
+		return model.QuerySnapshot{}, ErrSnapshotMismatch
+	}
+	if snapshot.ExpiresAtUS <= authority.now.UnixMicro() {
+		return model.QuerySnapshot{}, ErrSnapshotExpired
+	}
+	if _, err := authorizeSnapshotProjects(ctx, tx, authority, tenantID, snapshot.ProjectIDs, revisions); err != nil {
+		return model.QuerySnapshot{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return model.QuerySnapshot{}, err
+	}
+	return snapshot, nil
+}
+
 func (operations *QueryOperations) createSnapshotOnce(ctx context.Context, command CreateSnapshotCommand) (model.QuerySnapshot, error) {
 	connection, err := operations.pool.Acquire(ctx)
 	if err != nil {

@@ -289,11 +289,17 @@ func insertCatalogFixture(t *testing.T, fixture *acceptFixture, generation int64
 	t.Helper()
 	ctx := context.Background()
 	intentID := snapshotUUID(fixture.tenantID, 500)
+	payloadIntentID := snapshotUUID(fixture.tenantID, 503)
 	bundleID := snapshotUUID(fixture.tenantID, 501)
 	fileID := snapshotUUID(fixture.tenantID, 502)
+	payloadFileID := snapshotUUID(fixture.tenantID, 504)
 	checksum := hex.EncodeToString(sha256.New().Sum(nil))
 	if _, err := fixture.pool.Exec(ctx, `INSERT INTO object_intents(intent_id,installation_id,tenant_id,storage_generation,object_key,kind,state,owner,fence,expires_at,expected_bytes,expected_sha256,uploaded_bytes,uploaded_sha256)
 		VALUES($1,$2,$3,1,'v1/query/analytics.parquet','analytics','referenced','fixture',1,clock_timestamp()+interval '1 hour',4,$4,4,$4)`, intentID, acceptInstallationID, fixture.tenantID, checksum); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `INSERT INTO object_intents(intent_id,installation_id,tenant_id,storage_generation,object_key,kind,state,owner,fence,expires_at,expected_bytes,expected_sha256,uploaded_bytes,uploaded_sha256)
+		VALUES($1,$2,$3,1,'v1/query/payload.parquet','payload','referenced','fixture',1,clock_timestamp()+interval '1 hour',4,$4,4,$4)`, payloadIntentID, acceptInstallationID, fixture.tenantID, checksum); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.pool.Exec(ctx, `INSERT INTO bundles(bundle_id,tenant_id,lane_id,schema_version,grouping_version,event_day,kind,input_seq_min,input_seq_max,row_count,identity_sha256,valid_from_generation)
@@ -304,7 +310,14 @@ func insertCatalogFixture(t *testing.T, fixture *acceptFixture, generation int64
 		VALUES($1,$2,$3,$4,'analytics',4,$5,1,110,110,110,110,1,5)`, fileID, fixture.tenantID, bundleID, intentID, checksum); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := fixture.pool.Exec(ctx, `INSERT INTO files(file_id,tenant_id,bundle_id,intent_id,role,bytes,full_sha256,row_count,min_event_time_us,max_event_time_us,min_received_time_us,max_received_time_us,min_batch_seq,max_batch_seq)
+		VALUES($1,$2,$3,$4,'payload',4,$5,1,110,110,110,110,1,5)`, payloadFileID, fixture.tenantID, bundleID, payloadIntentID, checksum); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := fixture.pool.Exec(ctx, `INSERT INTO file_blocks(file_id,block_index,sha256) VALUES($1,0,$2)`, fileID, checksum); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `INSERT INTO file_blocks(file_id,block_index,sha256) VALUES($1,0,$2)`, payloadFileID, checksum); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.pool.Exec(ctx, `INSERT INTO bundle_projects(tenant_id,bundle_id,project_id) VALUES($1,$2,$3)`, fixture.tenantID, bundleID, fixture.projectID); err != nil {
