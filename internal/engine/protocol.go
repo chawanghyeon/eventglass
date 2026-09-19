@@ -9,10 +9,11 @@ import (
 )
 
 const (
-	ConversionProtocolVersion = 1
-	DefaultNativeMemoryBytes  = int64(256 << 20)
-	DefaultNativeSpillBytes   = int64(2 << 30)
-	MaxBundleFileBytes        = int64(128 << 20)
+	ConversionProtocolVersion     = 1
+	QueryExecutionProtocolVersion = 1
+	DefaultNativeMemoryBytes      = int64(256 << 20)
+	DefaultNativeSpillBytes       = int64(2 << 30)
+	MaxBundleFileBytes            = int64(128 << 20)
 )
 
 // StageRecord is the private supervisor-to-child format. It is disposable,

@@ -29,6 +29,7 @@ type Runtime struct {
 	batcher      *ingest.Batcher
 	publication  *control.PublicationOperations
 	queryControl *control.QueryOperations
+	queryWorker  *DurableQueryWorkflow
 	converter    *DurableConversionWorkflow
 	publisher    *DurablePublicationWorkflow
 	workerOwner  string
@@ -195,12 +196,18 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		runtime.converter = &DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
 		runtime.publisher = &DurablePublicationWorkflow{Control: operations, Store: store}
 	}
-	if config.Roles[RoleScheduler] {
+	if config.Roles[RoleScheduler] || config.Roles[RoleWorker] {
 		operations, err := database.QueryOperations()
 		if err != nil {
 			return fail(err)
 		}
 		runtime.queryControl = operations
+	}
+	if config.Roles[RoleWorker] {
+		runtime.queryWorker = &DurableQueryWorkflow{
+			Control: runtime.queryControl, Store: store, Runner: ProcessQueryRunner{},
+			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "query-worker"),
+		}
 	}
 	mux.HandleFunc("/livez", runtime.livez)
 	mux.HandleFunc("/readyz", runtime.readyz)

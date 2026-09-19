@@ -99,7 +99,7 @@ func (operations *QueryOperations) createSnapshotOnce(ctx context.Context, comma
 		connection.Release()
 		return model.QuerySnapshot{}, err
 	}
-	defer releaseSnapshotAdmission(connection, admissionKey)
+	defer releaseTenantAdmission(connection, admissionKey)
 
 	tx, err := connection.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
 	if err != nil {
@@ -157,7 +157,7 @@ func (operations *QueryOperations) createSnapshotOnce(ctx context.Context, comma
 	return snapshotResult(command, authority, projectRevisions, lanes, expiresAt, maxUntil), nil
 }
 
-func releaseSnapshotAdmission(connection *pgxpool.Conn, key int64) {
+func releaseTenantAdmission(connection *pgxpool.Conn, key int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	var unlocked bool

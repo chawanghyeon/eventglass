@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/chawanghyeon/eventglass/internal/control"
+	"github.com/chawanghyeon/eventglass/internal/engine"
+	"github.com/chawanghyeon/eventglass/internal/query"
 )
 
 const (
@@ -19,6 +21,9 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 		progressed, err := runtime.runOnePublication(ctx)
 		if err == nil && !progressed {
 			progressed, err = runtime.runOneConversion(ctx)
+		}
+		if err == nil && !progressed {
+			progressed, err = runtime.runOneQuery(ctx)
 		}
 		if ctx.Err() != nil {
 			break
@@ -40,6 +45,59 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (runtime *Runtime) runOneQuery(ctx context.Context) (bool, error) {
+	if runtime.queryControl == nil || runtime.queryWorker == nil {
+		return false, nil
+	}
+	task, err := runtime.queryControl.ClaimQueryTask(ctx, runtime.installation.InstallationID, runtime.installation.StorageGeneration, runtime.workerOwner)
+	if err != nil || task == nil {
+		return false, err
+	}
+	err = runtime.withQueryHeartbeat(ctx, task.Authority, func(taskContext context.Context) error {
+		return runtime.queryWorker.Execute(taskContext, *task)
+	})
+	if err != nil && ctx.Err() == nil {
+		transient := !errors.Is(err, engine.ErrQueryExecutionInvalid) && !errors.Is(err, engine.ErrQueryExecutionLimit) && !errors.Is(err, query.ErrQueryLimit)
+		failErr := runtime.queryControl.FailQueryTask(ctx, task.Authority, queryFailureCode(err), transient)
+		return true, errors.Join(err, failErr)
+	}
+	return true, err
+}
+
+func (runtime *Runtime) withQueryHeartbeat(ctx context.Context, authority control.QueryTaskAuthority, task func(context.Context) error) error {
+	taskContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- task(taskContext) }()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-result:
+			return err
+		case <-ctx.Done():
+			cancel()
+			return errors.Join(ctx.Err(), <-result)
+		case <-ticker.C:
+			if _, err := runtime.queryControl.HeartbeatQueryTask(ctx, authority); err != nil {
+				cancel()
+				return errors.Join(err, <-result)
+			}
+		}
+	}
+}
+
+func queryFailureCode(err error) string {
+	switch {
+	case errors.Is(err, engine.ErrQueryExecutionLimit), errors.Is(err, query.ErrQueryLimit):
+		return "query_limit_exceeded"
+	case errors.Is(err, engine.ErrQueryExecutionInvalid):
+		return "invalid_query_plan"
+	default:
+		return "query_worker_failed"
+	}
 }
 
 func (runtime *Runtime) runOneConversion(ctx context.Context) (bool, error) {

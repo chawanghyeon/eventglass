@@ -16,6 +16,7 @@ import (
 type ChildRequest struct {
 	Operation  string             `json:"operation"`
 	Conversion *ConversionRequest `json:"conversion,omitempty"`
+	Query      *QueryRequest      `json:"query,omitempty"`
 }
 
 type ChildResponse struct {
@@ -23,7 +24,7 @@ type ChildResponse struct {
 }
 
 func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
-	decoder := json.NewDecoder(io.LimitReader(input, 64<<10))
+	decoder := json.NewDecoder(io.LimitReader(input, (1<<20)+1))
 	decoder.DisallowUnknownFields()
 	var request ChildRequest
 	if err := decoder.Decode(&request); err != nil {
@@ -34,7 +35,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 	}
 	switch request.Operation {
 	case "probe":
-		if request.Conversion != nil {
+		if request.Conversion != nil || request.Query != nil {
 			return errors.New("probe request cannot contain conversion input")
 		}
 		db, err := Open(ctx, "")
@@ -48,7 +49,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(response)
 	case "convert":
-		if request.Conversion == nil {
+		if request.Conversion == nil || request.Query != nil {
 			return errors.New("convert request requires conversion input")
 		}
 		encoder := json.NewEncoder(output)
@@ -59,6 +60,15 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 			return err
 		}
 		return encoder.Encode(ConversionMessage{Version: ConversionProtocolVersion, Type: "summary", Summary: &summary})
+	case "query":
+		if request.Query == nil || request.Conversion != nil {
+			return errors.New("query operation requires only query input")
+		}
+		summary, err := ExecuteQuery(ctx, *request.Query)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(QueryMessage{Version: QueryExecutionProtocolVersion, Type: "summary", Summary: summary})
 	default:
 		return fmt.Errorf("unsupported internal operation %q", request.Operation)
 	}
