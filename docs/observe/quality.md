@@ -44,6 +44,28 @@ cold HEAD=3, full GET=3, 8,348 bytes, 401ms and warm HEAD=3, full GET=3, 8,348
 bytes, 86ms. These are correctness-fixture observations, not sustained SLO or
 production-cache claims; G07 retains the representative load/resource gate.
 
+Query/Live hardening evidence is split deliberately: pure tests cover fixed
+catchup bounds, per-lane advancement, burst/backlog resync and token rules;
+real localhost HTTP tests cover pre/post-header forbidden behavior, 32-slot
+admission, disconnect cleanup, idle intervals longer than write deadlines and
+slow-reader termination. ARM64 `TestPublicQueryEndToEnd` executes search/detail/
+aggregate with an independent worker and no API-local executor.
+`TestPublicQueryEndToEndHTTPResumeWithIndependentWorker` reconnects real SSE
+with issued IDs inside a 205-row batch in five consecutive replay cycles,
+includes records received over 15 minutes
+ago, and revokes an idle stream's project access.
+Idle polls assert zero additional query jobs/S3 calls; a separate export barrier
+revokes permission after result export and verifies that no row is emitted.
+`TestLogoutReleasesOnlyTheRevokedSessionSnapshots` checks atomic pin cleanup
+without releasing another browser session's snapshot.
+The query-job integration test also blocks a status reader on a completion row
+lock, then commits the result; artifact lookup must observe the winning result
+instead of combining a rechecked job row with a stale outer-join NULL.
+Vitest tests resource-owner
+teardown/late submission/heartbeat/StrictMode, operation token reuse and actual
+reconnect headers. These are not Playwright ingestion-to-browser evidence or a
+multi-process sustained-load benchmark; U3/G07 still own those gates.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

@@ -24,7 +24,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("operator flows", () => {
+// Component contract tests with mocked APIs, not connected browser E2E evidence.
+describe("operator component contracts", () => {
   it("signs in with a local password form and stores the generated session DTO", async () => {
     vi.spyOn(api, "login").mockResolvedValue(session);
     render(<Providers><MemoryRouter initialEntries={["/login"]}><Routes>

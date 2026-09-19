@@ -52,3 +52,14 @@ func TestInitialLivePositionsStartsAfterCurrentCutWithoutCatchup(t *testing.T) {
 		t.Fatalf("positions=%#v", positions)
 	}
 }
+
+func TestLiveCatalogBoundsKeepPartialBatchAndSkipOnlyCompletedSequences(t *testing.T) {
+	var positions [model.LaneCount]LivePosition
+	positions[0] = LivePosition{BatchSeq: 5, Ordinal: 99}
+	positions[1] = LivePosition{BatchSeq: 5, Ordinal: math.MaxInt32}
+	positions[2] = LivePosition{BatchSeq: math.MaxInt64, Ordinal: math.MaxInt32}
+	minimum := LiveMinimumSequences(positions)
+	if minimum[0] != 5 || minimum[1] != 6 || minimum[2] != math.MaxInt64 {
+		t.Fatal(minimum)
+	}
+}

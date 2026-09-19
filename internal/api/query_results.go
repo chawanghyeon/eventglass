@@ -1,4 +1,4 @@
-package app
+package api
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"strconv"
 
 	generated "github.com/chawanghyeon/eventglass/api/generated"
-	"github.com/chawanghyeon/eventglass/internal/api"
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/model"
@@ -19,6 +18,7 @@ import (
 )
 
 type publicSearchResult struct {
+	SnapshotID string               `json:"snapshot_id"`
 	Rows       []generated.ListRow  `json:"rows"`
 	ReadToken  string               `json:"read_token"`
 	NextCursor *string              `json:"next_cursor"`
@@ -28,25 +28,27 @@ type publicSearchResult struct {
 }
 
 type publicAggregateResult struct {
-	Groups    []generated.AggregateGroup `json:"groups"`
-	ReadToken string                     `json:"read_token"`
-	Complete  bool                       `json:"complete"`
-	Stats     generated.QueryStats       `json:"stats"`
-	Warnings  []string                   `json:"warnings"`
+	SnapshotID string                     `json:"snapshot_id"`
+	Groups     []generated.AggregateGroup `json:"groups"`
+	ReadToken  string                     `json:"read_token"`
+	Complete   bool                       `json:"complete"`
+	Stats      generated.QueryStats       `json:"stats"`
+	Warnings   []string                   `json:"warnings"`
 }
 
 type publicRecordDetail struct {
+	SnapshotID  string         `json:"snapshot_id"`
 	Record      map[string]any `json:"record"`
 	Raw         map[string]any `json:"raw"`
 	EnvelopeSDK any            `json:"envelope_sdk"`
 	ReadToken   string         `json:"read_token"`
 }
 
-func (service *PublicQueryService) finalizeQueryResult(ctx context.Context, tokenHash [32]byte, status control.QueryStatus) (any, error) {
+func (service *QueryAdapter) finalizeQueryResult(ctx context.Context, tokenHash [32]byte, status control.QueryStatus) (any, error) {
 	if status.Result == nil || service.Exporter == nil {
 		return nil, errors.New("query result artifact is unavailable")
 	}
-	if err := ensurePrivateDirectory(service.ScratchDir); err != nil {
+	if err := ensureResultDirectory(service.ScratchDir); err != nil {
 		return nil, err
 	}
 	directory, err := os.MkdirTemp(service.ScratchDir, "public-")
@@ -63,7 +65,7 @@ func (service *PublicQueryService) finalizeQueryResult(ctx context.Context, toke
 		return nil, err
 	}
 	var operation engine.QueryOperation
-	if err := strictAppJSON(status.Operation, &operation); err != nil || operation.Version != engine.QueryExecutionProtocolVersion || !operationMatchesPublicKind(status.OperationKind, operation.Kind) || operation.Result.Kind != operation.Kind {
+	if err := strictResultJSON(status.Operation, &operation); err != nil || operation.Version != engine.QueryExecutionProtocolVersion || !operationMatchesPublicKind(status.OperationKind, operation.Kind) || operation.Result.Kind != operation.Kind {
 		return nil, errors.Join(engine.ErrQueryExecutionInvalid, err)
 	}
 	snapshot, err := service.Control.LoadSnapshot(ctx, tokenHash, status.TenantID, status.SnapshotID, status.DatasetHash)
@@ -89,6 +91,22 @@ func (service *PublicQueryService) finalizeQueryResult(ctx context.Context, toke
 	if err != nil {
 		return nil, err
 	}
+	switch value := final.(type) {
+	case publicSearchResult:
+		value.SnapshotID = snapshot.SnapshotID
+		final = value
+	case publicAggregateResult:
+		value.SnapshotID = snapshot.SnapshotID
+		final = value
+	case publicRecordDetail:
+		value.SnapshotID = snapshot.SnapshotID
+		final = value
+	}
+	// Export can perform slow I/O. Revalidate authority immediately before handing
+	// the complete result to the transport, not only before starting the export.
+	if _, err := service.Control.GetQueryStatus(ctx, tokenHash, status.TenantID, status.QueryID); err != nil {
+		return nil, err
+	}
 	encoded, err := json.Marshal(final)
 	if err != nil || int64(len(encoded)+1) > engine.MaxPublicQueryResultBytes {
 		return nil, errors.Join(engine.ErrQueryExecutionLimit, err)
@@ -110,7 +128,7 @@ func finalizeDetail(path string, plan engine.QueryResultPlan, readToken string) 
 		if err := lines.Err(); err != nil {
 			return publicRecordDetail{}, err
 		}
-		return publicRecordDetail{}, api.ErrPublicQueryNotFound
+		return publicRecordDetail{}, ErrPublicQueryNotFound
 	}
 	object, err := decodeJSONLine(lines.Bytes())
 	if err != nil {
@@ -187,7 +205,7 @@ func finalizeDetail(path string, plan engine.QueryResultPlan, readToken string) 
 	return publicRecordDetail{Record: record, Raw: raw, EnvelopeSDK: envelope, ReadToken: readToken}, nil
 }
 
-func (service *PublicQueryService) finalizeRows(path string, plan engine.QueryResultPlan, snapshot model.QuerySnapshot, readToken string, stats generated.QueryStats) (publicSearchResult, error) {
+func (service *QueryAdapter) finalizeRows(path string, plan engine.QueryResultPlan, snapshot model.QuerySnapshot, readToken string, stats generated.QueryStats) (publicSearchResult, error) {
 	lines, closeLines, err := openJSONLines(path)
 	if err != nil {
 		return publicSearchResult{}, err
@@ -227,7 +245,7 @@ func (service *PublicQueryService) finalizeRows(path string, plan engine.QueryRe
 	return result, nil
 }
 
-func (service *PublicQueryService) finalizeAggregate(path string, plan engine.QueryResultPlan, readToken string, stats generated.QueryStats) (publicAggregateResult, error) {
+func (service *QueryAdapter) finalizeAggregate(path string, plan engine.QueryResultPlan, readToken string, stats generated.QueryStats) (publicAggregateResult, error) {
 	lines, closeLines, err := openJSONLines(path)
 	if err != nil {
 		return publicAggregateResult{}, err

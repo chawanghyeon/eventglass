@@ -8,6 +8,13 @@ tool locks, and prove deterministic regeneration produces no diff. Route/field
 changes require updating this contract, schema, generated code and contract tests
 in one commit. Existing Sentry ingestion routes remain compatible.
 
+Actual registered management routes are enumerated in
+`api/implemented-routes.json` and checked against Go registrations. OpenAPI is
+the complete target contract, not a list of enabled capabilities. Project list,
+Issue list/detail and the remaining operator APIs are U3 work; their component
+fixtures are not backend evidence. The router shows explicit planned screens
+instead of issuing requests to absent endpoints.
+
 ## Common wire rules
 
 HTTPS public origin; JSON UTF-8, management request body<=64KiB (setup/login8KiB),
@@ -243,6 +250,15 @@ this **display** truncation never changes stored searchable values. Detail keeps
 full allowed canonical content. No raw/attrs in list rows; limits100/1,000 remain
 bounded by8MiB serialized result cap. Exceed result cap422, no silently short page.
 SearchResult: rows[],read_token,next_cursor(nullable),complete(true),stats,warnings[].
+
+SearchResult, AggregateResult, RecordDetail and QueryJob responses additionally
+include `snapshot_id` (UUID). This is the explicit lifetime handle; clients must
+not decode opaque read tokens to find it. It is additive/optional in the wire
+schema for compatibility, but current responses always supply it. Dataset and
+detail owners heartbeat every 30s and DELETE on teardown; they also observe and
+release identities arriving after cancellation. New-snapshot submission failures
+are cleaned up by the API. A read token is reused across sort changes; sort,
+limit, projection and cursor belong in the operation cache key.
 Stats: scanned_bytes,objects,cache_bytes,elapsed_ms,cut[{lane_id,seq}],
 visibility_lag_ms nullable. All counter/time quantities here decimal strings.
 

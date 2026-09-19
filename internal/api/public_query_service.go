@@ -1,16 +1,15 @@
-package app
+package api
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
+	"time"
 
 	generated "github.com/chawanghyeon/eventglass/api/generated"
-	"github.com/chawanghyeon/eventglass/internal/api"
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/model"
@@ -18,7 +17,7 @@ import (
 	"github.com/google/uuid"
 )
 
-type PublicQueryService struct {
+type QueryAdapter struct {
 	Control           *control.QueryOperations
 	Store             PublicQueryStore
 	Tokens            *query.TokenCodec
@@ -34,9 +33,9 @@ type PublicQueryStore interface {
 	DownloadToFile(context.Context, string, string, int64, string) error
 }
 
-func (service *PublicQueryService) Search(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, request query.PublicSearchRequest) (api.SearchSubmission, error) {
+func (service *QueryAdapter) Search(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, request query.PublicSearchRequest) (_ SearchSubmission, resultErr error) {
 	if err := service.validate(); err != nil {
-		return api.SearchSubmission{}, err
+		return SearchSubmission{}, err
 	}
 	baseHash := searchCursorHash(request)
 	var cursor *query.CursorTuple
@@ -47,71 +46,81 @@ func (service *PublicQueryService) Search(ctx context.Context, principal control
 			DatasetHash: request.Dataset.SHA256, OperationHash: baseHash, Sort: request.Sort, Limit: request.Limit,
 		})
 		if err != nil {
-			return api.SearchSubmission{}, err
+			return SearchSubmission{}, err
 		}
 		cursor, cursorSnapshot = &claims.Last, claims.SnapshotID
 	}
 	snapshot, _, err := service.resolveSnapshot(ctx, principal, tokenHash, request.Dataset, request.ReadToken, cursorSnapshot)
 	if err != nil {
-		return api.SearchSubmission{}, err
+		return SearchSubmission{}, err
 	}
 	plan, err := query.BuildPlan(request.Dataset.Spec, snapshotScope(snapshot), request.Dataset.Filter)
+	defer func() {
+		if resultErr != nil && request.ReadToken == "" && cursorSnapshot == "" {
+			service.releaseSnapshot(ctx, tokenHash, snapshot)
+		}
+	}()
 	if err != nil {
-		return api.SearchSubmission{}, errors.Join(api.ErrPublicQueryInvalid, err)
+		return SearchSubmission{}, errors.Join(ErrPublicQueryInvalid, err)
 	}
 	operation, err := query.BuildRowOperation(query.RowOperationSpec{Plan: plan, Sort: request.Sort, Limit: request.Limit, Cursor: cursor})
 	if err != nil {
-		return api.SearchSubmission{}, errors.Join(api.ErrPublicQueryInvalid, err)
+		return SearchSubmission{}, errors.Join(ErrPublicQueryInvalid, err)
 	}
 	operation.Result.CursorHash = baseHash
 	job, synchronous, err := service.createAndPlan(ctx, tokenHash, snapshot, "search", operation, request.Mode)
 	if err != nil {
-		return api.SearchSubmission{}, err
+		return SearchSubmission{}, err
 	}
 	if synchronous {
 		result, err := service.executeSynchronous(ctx, tokenHash, snapshot.TenantID, job.QueryId.String())
 		if err != nil {
-			return api.SearchSubmission{}, err
+			return SearchSubmission{}, err
 		}
-		return api.SearchSubmission{Result: result}, nil
+		return SearchSubmission{Result: result}, nil
 	}
-	return api.SearchSubmission{Job: &job}, nil
+	return SearchSubmission{Job: &job}, nil
 }
 
-func (service *PublicQueryService) Aggregate(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, request query.PublicAggregateRequest) (api.AggregateSubmission, error) {
+func (service *QueryAdapter) Aggregate(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, request query.PublicAggregateRequest) (_ AggregateSubmission, resultErr error) {
 	if err := service.validate(); err != nil {
-		return api.AggregateSubmission{}, err
+		return AggregateSubmission{}, err
 	}
 	snapshot, _, err := service.resolveSnapshot(ctx, principal, tokenHash, request.Dataset, request.ReadToken, "")
 	if err != nil {
-		return api.AggregateSubmission{}, err
+		return AggregateSubmission{}, err
 	}
+	defer func() {
+		if resultErr != nil && request.ReadToken == "" {
+			service.releaseSnapshot(ctx, tokenHash, snapshot)
+		}
+	}()
 	plan, err := query.BuildPlan(request.Dataset.Spec, snapshotScope(snapshot), request.Dataset.Filter)
 	if err != nil {
-		return api.AggregateSubmission{}, errors.Join(api.ErrPublicQueryInvalid, err)
+		return AggregateSubmission{}, errors.Join(ErrPublicQueryInvalid, err)
 	}
 	operation, err := query.BuildAggregateOperation(query.AggregateOperationSpec{
 		Plan: plan, GroupBy: request.GroupBy, Metrics: request.Metrics, Histogram: request.Histogram,
 		Top: request.Top, Order: request.Order,
 	})
 	if err != nil {
-		return api.AggregateSubmission{}, errors.Join(api.ErrPublicQueryInvalid, err)
+		return AggregateSubmission{}, errors.Join(ErrPublicQueryInvalid, err)
 	}
 	job, synchronous, err := service.createAndPlan(ctx, tokenHash, snapshot, "aggregate", operation, request.Mode)
 	if err != nil {
-		return api.AggregateSubmission{}, err
+		return AggregateSubmission{}, err
 	}
 	if synchronous {
 		result, err := service.executeSynchronous(ctx, tokenHash, snapshot.TenantID, job.QueryId.String())
 		if err != nil {
-			return api.AggregateSubmission{}, err
+			return AggregateSubmission{}, err
 		}
-		return api.AggregateSubmission{Result: result}, nil
+		return AggregateSubmission{Result: result}, nil
 	}
-	return api.AggregateSubmission{Job: &job}, nil
+	return AggregateSubmission{Job: &job}, nil
 }
 
-func (service *PublicQueryService) Job(ctx context.Context, _ control.SessionPrincipal, tokenHash [32]byte, tenantID int64, queryID string) (generated.QueryJob, error) {
+func (service *QueryAdapter) Job(ctx context.Context, _ control.SessionPrincipal, tokenHash [32]byte, tenantID int64, queryID string) (generated.QueryJob, error) {
 	status, err := service.Control.GetQueryStatus(ctx, tokenHash, tenantID, queryID)
 	if err != nil {
 		return generated.QueryJob{}, publicStatusError(err)
@@ -135,11 +144,11 @@ func (service *PublicQueryService) Job(ctx context.Context, _ control.SessionPri
 	return result, nil
 }
 
-func (service *PublicQueryService) Cancel(ctx context.Context, _ control.SessionPrincipal, tokenHash [32]byte, tenantID int64, queryID string) error {
+func (service *QueryAdapter) Cancel(ctx context.Context, _ control.SessionPrincipal, tokenHash [32]byte, tenantID int64, queryID string) error {
 	return publicStatusError(service.Control.CancelQuery(ctx, tokenHash, tenantID, queryID))
 }
 
-func (service *PublicQueryService) RenewSnapshot(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, tenantID int64, snapshotID, readToken string) (string, error) {
+func (service *QueryAdapter) RenewSnapshot(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, tenantID int64, snapshotID, readToken string) (string, error) {
 	claims, err := service.Tokens.VerifyRead(readToken, query.TokenExpectation{Generation: service.StorageGeneration, PrincipalHash: query.PrincipalHash(principal.UserID, tokenHash)})
 	if err != nil || claims.SnapshotID != snapshotID {
 		return "", errors.Join(query.ErrTokenMismatch, err)
@@ -151,11 +160,11 @@ func (service *PublicQueryService) RenewSnapshot(ctx context.Context, principal 
 	return service.Tokens.SignRead(snapshot)
 }
 
-func (service *PublicQueryService) ReleaseSnapshot(ctx context.Context, _ control.SessionPrincipal, tokenHash [32]byte, tenantID int64, snapshotID string) error {
+func (service *QueryAdapter) ReleaseSnapshot(ctx context.Context, _ control.SessionPrincipal, tokenHash [32]byte, tenantID int64, snapshotID string) error {
 	return service.Control.ReleaseSnapshot(ctx, tokenHash, tenantID, snapshotID)
 }
 
-func (service *PublicQueryService) Record(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, tenantID, projectID int64, recordID, readToken string) (any, error) {
+func (service *QueryAdapter) Record(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, tenantID, projectID int64, recordID, readToken string) (_ any, resultErr error) {
 	if err := service.validate(); err != nil {
 		return nil, err
 	}
@@ -178,7 +187,7 @@ func (service *PublicQueryService) Record(ctx context.Context, principal control
 			return nil, err
 		}
 		if dataset.TenantID != tenantID || !containsProject(dataset.ProjectIDs, projectID) {
-			return nil, api.ErrPublicQueryNotFound
+			return nil, ErrPublicQueryNotFound
 		}
 		filter, err = query.DecodeCanonicalFilter(dataset.Filter)
 		if err != nil {
@@ -207,12 +216,17 @@ func (service *PublicQueryService) Record(ctx context.Context, principal control
 		}
 	}
 	plan, err := query.BuildPlan(dataset, snapshotScope(snapshot), filter)
+	defer func() {
+		if resultErr != nil && readToken == "" {
+			service.releaseSnapshot(ctx, tokenHash, snapshot)
+		}
+	}()
 	if err != nil {
-		return nil, errors.Join(api.ErrPublicQueryInvalid, err)
+		return nil, errors.Join(ErrPublicQueryInvalid, err)
 	}
 	operation, err := query.BuildDetailOperation(plan, recordID)
 	if err != nil {
-		return nil, errors.Join(api.ErrPublicQueryInvalid, err)
+		return nil, errors.Join(ErrPublicQueryInvalid, err)
 	}
 	job, synchronous, err := service.createAndPlan(ctx, tokenHash, snapshot, "detail", operation, query.ModeSync)
 	if err != nil {
@@ -222,13 +236,13 @@ func (service *PublicQueryService) Record(ctx context.Context, principal control
 		return nil, errors.New("detail query was not admitted synchronously")
 	}
 	result, err := service.executeSynchronous(ctx, tokenHash, tenantID, job.QueryId.String())
-	if errors.Is(err, api.ErrPublicQueryNotFound) && readToken == "" {
+	if errors.Is(err, ErrPublicQueryNotFound) && readToken == "" {
 		expired, lookupErr := service.Control.RecordKnownExpired(ctx, tokenHash, tenantID, projectID, recordID)
 		if lookupErr != nil {
 			return nil, lookupErr
 		}
 		if expired {
-			return nil, api.ErrPublicQueryGone
+			return nil, ErrPublicQueryGone
 		}
 	}
 	return result, err
@@ -243,7 +257,13 @@ func containsProject(projects []int64, projectID int64) bool {
 	return false
 }
 
-func (service *PublicQueryService) resolveSnapshot(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, dataset query.PublicDataset, readToken, cursorSnapshot string) (model.QuerySnapshot, string, error) {
+func (service *QueryAdapter) releaseSnapshot(ctx context.Context, token [32]byte, snapshot model.QuerySnapshot) {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_ = service.Control.ReleaseSnapshot(cleanup, token, snapshot.TenantID, snapshot.SnapshotID)
+}
+
+func (service *QueryAdapter) resolveSnapshot(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, dataset query.PublicDataset, readToken, cursorSnapshot string) (model.QuerySnapshot, string, error) {
 	principalHash := query.PrincipalHash(principal.UserID, tokenHash)
 	var snapshot model.QuerySnapshot
 	if readToken == "" && cursorSnapshot == "" {
@@ -277,88 +297,33 @@ func (service *PublicQueryService) resolveSnapshot(ctx context.Context, principa
 	return snapshot, signed, err
 }
 
-func (service *PublicQueryService) createAndPlan(ctx context.Context, tokenHash [32]byte, snapshot model.QuerySnapshot, kind string, operation engine.QueryOperation, mode query.RequestMode) (generated.QueryJob, bool, error) {
-	operationBytes, err := canonicalQueryOperation(operation)
+func (service *QueryAdapter) createAndPlan(ctx context.Context, tokenHash [32]byte, snapshot model.QuerySnapshot, kind string, operation engine.QueryOperation, mode query.RequestMode, minimum ...[model.LaneCount]int64) (generated.QueryJob, bool, error) {
+	submission := query.Submission{Control: service.Control, Objects: service.Store, Generation: service.StorageGeneration}
+	if len(minimum) > 0 {
+		submission.MinimumBatchSeq = minimum[0]
+	}
+	job, synchronous, err := submission.Submit(ctx, tokenHash, snapshot, kind, operation, mode)
 	if err != nil {
 		return generated.QueryJob{}, false, err
 	}
-	digest := sha256.Sum256(operationBytes)
-	operationHash := hex.EncodeToString(digest[:])
-	dataset, err := query.DecodeDatasetIdentity(snapshot.DatasetBytes)
-	if err != nil {
-		return generated.QueryJob{}, false, err
-	}
-	files, err := query.LoadVerifiedCatalog(ctx, service.Control, service.Store, control.CatalogCommand{
-		SessionTokenHash: tokenHash, TenantID: snapshot.TenantID, SnapshotID: snapshot.SnapshotID,
-		DatasetSHA256: snapshot.DatasetSHA256, DatasetBytes: snapshot.DatasetBytes,
-		TimeBasis: dataset.TimeBasis, StartUS: dataset.StartUS, EndUS: dataset.EndUS, Kinds: dataset.Kinds,
-	})
-	if err != nil {
-		return generated.QueryJob{}, false, err
-	}
-	inputBytes := int64(0)
-	for _, file := range files {
-		if file.Bytes > 0 && inputBytes <= math.MaxInt64-file.Bytes {
-			inputBytes += file.Bytes
-		} else {
-			inputBytes = math.MaxInt64
-		}
-	}
-	synchronous := mode == query.ModeSync || mode == query.ModeAuto && len(files) <= query.MaxFilesPerScan && inputBytes <= query.TargetScanBytes && service.Sync != nil
-	if mode == query.ModeSync && service.Sync == nil {
-		return generated.QueryJob{}, false, errors.New("synchronous query execution is unavailable")
-	}
-	owner := uuid.NewString()
-	timeout := control.QueryMaximumTimeout
-	if synchronous {
-		timeout = control.QuerySyncTimeout
-	}
-	job, err := service.Control.CreateQuery(ctx, control.CreateQueryCommand{
-		QueryID: uuid.NewString(), SessionTokenHash: tokenHash, TenantID: snapshot.TenantID, SnapshotID: snapshot.SnapshotID,
-		OperationKind: kind, OperationHash: operationHash, OperationBytes: operationBytes, Owner: owner, Timeout: timeout,
-	})
-	if err != nil {
-		return generated.QueryJob{}, false, err
-	}
-	execution, err := query.BuildExecutionPlan(query.PlanScope{
-		QueryID: job.Authority.QueryID, TenantID: snapshot.TenantID, SnapshotID: snapshot.SnapshotID,
-		Generation: service.StorageGeneration, OperationHash: operationHash, Operation: operationBytes, DeadlineUS: job.Deadline.UnixMicro(),
-	}, files)
-	if err != nil {
-		_ = service.Control.FailQueryPlanning(ctx, job.Authority, planningFailureCode(err))
-		return generated.QueryJob{}, false, err
-	}
-	if err := service.Control.SealQueryPlan(ctx, control.SealQueryPlanCommand{
-		Authority: job.Authority, PlanSHA256: execution.SHA256, Tasks: execution.Tasks,
-		ScanCount: execution.ScanCount, ManifestBytes: execution.ManifestBytes,
-	}); err != nil {
-		return generated.QueryJob{}, false, err
-	}
-	job.State = "queued"
-	return generated.QueryJob{QueryId: uuid.MustParse(job.Authority.QueryID), State: generated.QueryJobState(job.State), ExpiresAt: job.ExpiresAt, PollAfterMs: 500}, synchronous, nil
+	snapshotID := uuid.MustParse(snapshot.SnapshotID)
+	return generated.QueryJob{SnapshotId: &snapshotID, QueryId: uuid.MustParse(job.Authority.QueryID), State: generated.QueryJobState(job.State), ExpiresAt: job.ExpiresAt, PollAfterMs: 500}, synchronous, nil
 }
 
-func canonicalQueryOperation(operation engine.QueryOperation) ([]byte, error) {
-	encoded, err := json.Marshal(operation)
-	if err != nil {
-		return nil, err
+func (service *QueryAdapter) executor() QuerySyncExecutor {
+	if service.Sync != nil {
+		return service.Sync
 	}
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	decoder.UseNumber()
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, err
-	}
-	return json.Marshal(value)
+	return query.Awaiter{Control: service.Control}
 }
 
-func (service *PublicQueryService) executeSynchronous(ctx context.Context, tokenHash [32]byte, tenantID int64, queryID string) (any, error) {
+func (service *QueryAdapter) executeSynchronous(ctx context.Context, tokenHash [32]byte, tenantID int64, queryID string) (any, error) {
 	syncContext, cancel := context.WithTimeout(ctx, control.QuerySyncTimeout)
 	defer cancel()
-	if err := service.Sync.Execute(syncContext, tokenHash, tenantID, queryID); err != nil {
+	if err := service.executor().Execute(syncContext, tokenHash, tenantID, queryID); err != nil {
 		_ = service.Control.CancelQuery(context.WithoutCancel(ctx), tokenHash, tenantID, queryID)
 		if errors.Is(err, engine.ErrQueryExecutionLimit) || errors.Is(err, query.ErrQueryLimit) {
-			return nil, errors.Join(api.ErrPublicQueryLimit, err)
+			return nil, errors.Join(ErrPublicQueryLimit, err)
 		}
 		return nil, err
 	}
@@ -370,16 +335,16 @@ func (service *PublicQueryService) executeSynchronous(ctx context.Context, token
 		return nil, control.ErrQueryTerminal
 	}
 	result, err := service.finalizeQueryResult(ctx, tokenHash, status)
-	if err != nil && !errors.Is(err, api.ErrPublicQueryNotFound) {
+	if err != nil && !errors.Is(err, ErrPublicQueryNotFound) {
 		_ = service.Control.FailSucceededQueryResult(context.WithoutCancel(ctx), tokenHash, tenantID, queryID, queryResultFailureCode(err))
 	}
 	if errors.Is(err, engine.ErrQueryExecutionLimit) {
-		return nil, errors.Join(api.ErrPublicQueryLimit, err)
+		return nil, errors.Join(ErrPublicQueryLimit, err)
 	}
 	return result, err
 }
 
-func (service *PublicQueryService) validate() error {
+func (service *QueryAdapter) validate() error {
 	if service == nil || service.Control == nil || service.Store == nil || service.Tokens == nil || service.Exporter == nil || service.ScratchDir == "" || service.InstallationID == "" || service.StorageGeneration <= 0 {
 		return errors.New("public query service is incomplete")
 	}
@@ -406,6 +371,8 @@ func searchCursorHash(request query.PublicSearchRequest) string {
 
 func queryJobDTO(status control.QueryStatus) generated.QueryJob {
 	result := generated.QueryJob{QueryId: uuid.MustParse(status.QueryID), State: generated.QueryJobState(status.State), ExpiresAt: status.ExpiresAt, PollAfterMs: 500}
+	snapshotID := uuid.MustParse(status.SnapshotID)
+	result.SnapshotId = &snapshotID
 	if status.ErrorCode != "" {
 		result.Error = &generated.Error{Code: status.ErrorCode, Message: "query failed", Retryable: false, RequestId: uuid.New()}
 	}
@@ -415,19 +382,12 @@ func queryJobDTO(status control.QueryStatus) generated.QueryJob {
 func publicStatusError(err error) error {
 	switch {
 	case errors.Is(err, control.ErrQueryNotFound):
-		return api.ErrPublicQueryNotFound
+		return ErrPublicQueryNotFound
 	case errors.Is(err, control.ErrQueryGone):
-		return api.ErrPublicQueryGone
+		return ErrPublicQueryGone
 	default:
 		return err
 	}
-}
-
-func planningFailureCode(err error) string {
-	if errors.Is(err, query.ErrQueryLimit) || errors.Is(err, query.ErrCatalogLimit) {
-		return "query_limit_exceeded"
-	}
-	return "query_planning_failed"
 }
 
 func queryResultFailureCode(err error) string {

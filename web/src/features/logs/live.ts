@@ -1,4 +1,5 @@
 import type { Kind, SearchResult } from "../../api/types";
+import { abortableDelay } from "../../shared/search/execute";
 
 export type LiveRow = SearchResult["rows"][number];
 
@@ -26,20 +27,38 @@ export async function streamLive(request: LiveRequest, signal: AbortSignal, rece
     for (const kind of request.kinds) params.append("kinds", kind);
     if (request.expression.trim()) params.set("expression", request.expression.trim());
     if (request.catchupStartUS && !resume) params.set("catchup_start_us", request.catchupStartUS);
-    const response = await fetch(`/v1/live?${params}`, {
-      credentials: "include",
-      headers: resume ? { "Last-Event-ID": resume } : undefined,
-      signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(`/v1/live?${params}`, {
+        credentials: "include",
+        headers: resume ? { "Last-Event-ID": resume } : undefined,
+        signal,
+      });
+    } catch (error) {
+      if (signal.aborted || !(error instanceof TypeError)) throw error;
+      await abortableDelay(1000, signal);
+      continue;
+    }
+    if (response.status === 429 || response.status >= 500) {
+      await response.body?.cancel();
+      await abortableDelay(1000, signal);
+      continue;
+    }
     if (!response.ok || !response.body) throw new Error(`Live stream failed (${response.status})`);
     let terminal = false;
-    for await (const event of parseSSE(response.body, signal)) {
-      if (event.id) resume = event.id;
-      receive(event);
-      if (terminalEvents.has(event.type)) {
-        terminal = true;
-        break;
+    try {
+      for await (const event of parseSSE(response.body, signal)) {
+        if (event.id) resume = event.id;
+        receive(event);
+        if (terminalEvents.has(event.type)) {
+          terminal = true;
+          break;
+        }
       }
+    } catch (error) {
+      if (signal.aborted || !(error instanceof TypeError)) throw error;
+      // Transport failure resumes the last complete SSE checkpoint; malformed
+      // JSON/buffer violations remain terminal rather than looping forever.
     }
     if (terminal || signal.aborted) return;
     await abortableDelay(250, signal);
@@ -50,6 +69,9 @@ export async function* parseSSE(stream: ReadableStream<Uint8Array>, signal?: Abo
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  const bounded = (value: string) => { if (new TextEncoder().encode(value).byteLength > 256 * 1024) throw new Error("Live frame exceeds buffer limit"); };
+  const abort = () => { void reader.cancel().catch(() => undefined); };
+  signal?.addEventListener("abort", abort, { once: true });
   try {
     while (!signal?.aborted) {
       const { done, value } = await reader.read();
@@ -57,13 +79,16 @@ export async function* parseSSE(stream: ReadableStream<Uint8Array>, signal?: Abo
       let boundary: number;
       while ((boundary = buffer.indexOf("\n\n")) >= 0) {
         const block = buffer.slice(0, boundary);
+        bounded(block);
         buffer = buffer.slice(boundary + 2);
         const event = decodeSSEBlock(block);
         if (event) yield event;
       }
+      bounded(buffer);
       if (done) return;
     }
   } finally {
+    signal?.removeEventListener("abort", abort);
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
@@ -104,14 +129,4 @@ export function mergeLiveRows(current: LiveRow[], incoming: LiveRow[], limit = 1
     if (leftTime !== rightTime) return leftTime > rightTime ? -1 : 1;
     return left.record_id < right.record_id ? -1 : left.record_id > right.record_id ? 1 : 0;
   }).slice(0, limit);
-}
-
-function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(resolve, milliseconds);
-    signal.addEventListener("abort", () => {
-      window.clearTimeout(timer);
-      reject(new DOMException("Aborted", "AbortError"));
-    }, { once: true });
-  });
 }

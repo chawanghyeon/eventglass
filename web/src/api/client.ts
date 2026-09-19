@@ -59,4 +59,12 @@ export const api = {
   async record(tenantID: string, projectID: string, recordID: string, readToken?: string): Promise<RecordDetail> {
     return unwrap(await transport.GET("/v1/records/{id}", { params: { path: { id: recordID }, query: { tenant_id: tenantID, project_id: projectID, read_token: readToken } } }));
   },
+  async releaseSnapshot(tenantID: string, snapshotID: string, csrf: string): Promise<void> {
+    const result = await transport.DELETE("/v1/snapshots/{id}", { params: { path: { id: snapshotID }, query: { tenant_id: tenantID }, header: { "X-CSRF-Token": csrf } } });
+    if (result.response.status !== 204) unwrap(result);
+  },
+  async renewSnapshot(tenantID: string, snapshotID: string, readToken: string, csrf: string): Promise<string> {
+    const result = unwrap(await transport.POST("/v1/snapshots/{id}/heartbeat", { params: { path: { id: snapshotID }, header: { "X-CSRF-Token": csrf } }, body: { tenant_id: tenantID, read_token: readToken } }));
+    return result.read_token;
+  },
 };

@@ -30,7 +30,7 @@ native spill are disposable and never sufficient to authorize an ACK.
 | Package | Owns | Permitted internal dependencies |
 |---|---|---|
 | app | Role assembly, process budgets, task lifetimes, shutdown | All production packages |
-| api | HTTP validation, wire decoding, current auth snapshot, response mapping | ingest, sdk, query, alerts, control, model, resource |
+| api | HTTP validation, wire decoding, current auth snapshot, public result/SSE mapping | ingest, sdk, query, alerts, control, model, resource, engine (protocol values only) |
 | ingest | Normalization/scrub and concrete ingestion workflow | sdk, model, resource, control, storage |
 | sdk | SDK wire parsing/version adapters | None |
 | model | Canonical values, identities/topology DTOs | None |
@@ -48,6 +48,18 @@ The architecture test parses all production imports, rejects undeclared
 packages/dependencies and prevents testkit or SQL/native drivers leaking into
 pure packages. Add packages only when they have a concrete owner. Do not add
 generic Service/Repository/Manager layers or package-global mutable clients.
+
+Generated HTTP DTOs may be imported only by api, never by app/query/control.
+`api.QueryAdapter` owns public result decoding and token/HTTP translation;
+`query.Submission` owns catalog verification and durable plan submission, and
+`query.Awaiter` waits for authoritative completion without running tasks.
+`app.DurableQuerySyncExecutor` is an optional colocated helper, not a requirement
+for sync/detail/Live. API-only and combined roles use the same durable protocol.
+The api export interface accepts engine protocol values; app injects the
+shared-budget child runner. No native driver or process launching moves into api.
+Frontend guards reject shared/api dependencies on features/app. The executable
+route inventory is `api/implemented-routes.json`; OpenAPI includes future routes
+and is not a capability claim.
 
 ingest owns the upload-before-Accept workflow; control.Accept owns its entire
 SQL transaction. control.Publish owns its complete SQL transaction. Handlers
@@ -151,6 +163,27 @@ Generate OpenAPI DTOs when G04/G05 introduce the management/query surface;
 U1 implements the generated-contract React/Vite pipeline and its deterministic
 typecheck/test/build gate. Live and later operator features extend the same
 state boundaries rather than adding a second frontend store.
+
+`web/src/shared/search/session.ts` owns snapshot/job lifetimes for one mounted
+dataset. It retains only resource identities/tokens, never a duplicate record
+store. Sort/projection belong in operation query keys, not dataset identity.
+Rows, histogram and heartbeat reuse the snapshot; teardown releases it and
+cancels owned jobs, including late submission responses. A mount-specific key
+prevents cached tokens from surviving their owner. Detail has its own bounded
+owner when opened without a parent snapshot. Failed newly-created snapshots
+are released by the API; existing caller-owned snapshots are not.
+Session revocation atomically releases that session's pins, including pins whose
+late response the browser never received. Other browser sessions keep theirs.
+
+Live fixes its received-time lower bound in the signed checkpoint. Ordinary
+current-cut streams use sequence positions, not a moving 15-minute filter.
+Each incomplete drain retains a captured upper cut and immediately reads its
+next bounded page; new publications cannot starve later lanes in that drain.
+An unchanged authorized cut skips query/native/S3 work. Authorization still
+runs on every poll and after result export. Per-write deadlines are cleared
+between writes; they do not limit the heartbeat interval.
+Conservative per-lane minimum sequence pruning avoids scanning completed files;
+partial batches and compacted files spanning the boundary remain eligible.
 
 ## Compatibility and operations
 

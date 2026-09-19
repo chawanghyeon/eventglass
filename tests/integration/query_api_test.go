@@ -26,7 +26,7 @@ import (
 func TestPublicQueryEndToEnd(t *testing.T) {
 	environment := requiredEnvironment(t, "EVENTGLASS_DATABASE_URL", "EVENTGLASS_S3_ENDPOINT", "EVENTGLASS_S3_BUCKET", "EVENTGLASS_TEST_BINARY")
 	fixture := setupAcceptFixture(t, 980)
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	operations, tokenHash := setupQueryPrincipal(t, fixture)
 	store := integrationStore(t, "query-api-980")
@@ -39,12 +39,11 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 		Control: operations, Store: store, Runner: app.ProcessQueryRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"]},
 		InstallationID: acceptInstallationID, ScratchDir: filepath.Join(t.TempDir(), "worker"),
 	}
-	syncExecutor := &app.DurableQuerySyncExecutor{
-		Control: operations, Workflow: worker, InstallationID: acceptInstallationID, StorageGeneration: 1, Owner: "sync-integration",
-	}
-	service := &app.PublicQueryService{
+	startIndependentQueryWorker(t, ctx, operations, worker)
+	syncExecutor := query.Awaiter{Control: operations}
+	service := &api.QueryAdapter{
 		Control: operations, Store: store, Tokens: codec, Exporter: app.ProcessQueryExportRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"]},
-		Sync: syncExecutor, ScratchDir: filepath.Join(t.TempDir(), "results"), InstallationID: acceptInstallationID, StorageGeneration: 1,
+		ScratchDir: filepath.Join(t.TempDir(), "results"), InstallationID: acceptInstallationID, StorageGeneration: 1,
 	}
 	principal := control.SessionPrincipal{UserID: fixture.tenantID*100 + 1}
 	filter := &query.Node{Op: "constant", Constant: true}
@@ -217,16 +216,24 @@ func (limitExportRunner) Export(context.Context, engine.QueryExportRequest) (eng
 	return engine.QueryExportSummary{}, engine.ErrQueryExecutionLimit
 }
 
-func insertPublicQueryBundle(t *testing.T, ctx context.Context, fixture *acceptFixture, store *storage.S3Store) {
+func insertPublicQueryBundle(t *testing.T, ctx context.Context, fixture *acceptFixture, store *storage.S3Store, extraRows ...int) {
 	t.Helper()
 	root := t.TempDir()
 	analyticsPath, payloadPath := filepath.Join(root, "analytics.parquet"), filepath.Join(root, "payload.parquet")
 	recordA, recordB, recordC := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
 	liveEventUS := time.Now().Add(-time.Minute).UnixMicro()
 	message := strings.Repeat("가", 1100)
+	extra := ""
+	count := 0
+	if len(extraRows) > 0 {
+		count = extraRows[0]
+	}
+	for i := range count {
+		extra += ",(" + wireAnalyticsRowTimes(fixture, fmt.Sprintf("%064x", i+1), 1_150_000, time.Now().Add(-20*time.Minute).UnixMicro(), "delayed publication", i+3) + ")"
+	}
 	writeIntegrationParquet(t, ctx, analyticsPath, `SELECT * FROM (VALUES
 		(`+wireAnalyticsRow(fixture, recordA, 1_200_000, message, 0)+`),(`+wireAnalyticsRow(fixture, recordB, 1_100_000, "short", 1)+`),
-		(`+wireAnalyticsRowTimes(fixture, recordC, 1_050_000, liveEventUS, "live", 2)+`))
+		(`+wireAnalyticsRowTimes(fixture, recordC, 1_050_000, liveEventUS, "live", 2)+`)`+extra+`)
 		t(tenant_id,project_id,record_id,kind,event_time_us,event_time_ns_remainder,arrival_time_us,received_time_us,lane_id,batch_seq,record_ordinal,level,severity_number,message,service,environment,release,trace_id,issue_id,grouping_version)`)
 	metadata := func(id, value string, event int64) string {
 		object := map[string]any{"tenant_id": fixture.tenantID, "project_id": fixture.projectID, "record_id": id, "kind": "log", "event_time_us": event, "event_time_ns_remainder": 0, "arrival_time_us": event, "level": "info", "message": value, "attrs": []any{}, "search_values": []string{value}, "warnings": []string{}, "schema_version": 1, "normalizer_version": 1, "scrub_version": 1}
@@ -236,24 +243,85 @@ func insertPublicQueryBundle(t *testing.T, ctx context.Context, fixture *acceptF
 	rawA, _ := json.Marshal(map[string]any{"message": message})
 	rawB, _ := json.Marshal(map[string]any{"message": "short"})
 	rawC, _ := json.Marshal(map[string]any{"message": "live"})
+	extraPayload := ""
+	for i := range count {
+		id := fmt.Sprintf("%064x", i+1)
+		extraPayload += ",('" + id + "','{\"message\":\"delayed publication\"}',NULL,'[]','" + metadata(id, "delayed publication", 1_150_000) + "')"
+	}
 	writeIntegrationParquet(t, ctx, payloadPath, `SELECT * FROM (VALUES
 		('`+recordA+`','`+strings.ReplaceAll(string(rawA), "'", "''")+`',NULL,'[]','`+metadata(recordA, message, 1_200_000)+`'),
 		('`+recordB+`','`+strings.ReplaceAll(string(rawB), "'", "''")+`',NULL,'[]','`+metadata(recordB, "short", 1_100_000)+`'),
-		('`+recordC+`','`+strings.ReplaceAll(string(rawC), "'", "''")+`',NULL,'[]','`+metadata(recordC, "live", 1_050_000)+`'))
+		('`+recordC+`','`+strings.ReplaceAll(string(rawC), "'", "''")+`',NULL,'[]','`+metadata(recordC, "live", 1_050_000)+`')`+extraPayload+`)
 		t(record_id,raw_json,envelope_sdk_json,normalization_warnings_json,canonical_metadata_json)`)
 	analyticsBytes, _ := os.ReadFile(analyticsPath)
 	payloadBytes, _ := os.ReadFile(payloadPath)
-	analyticsInfo, err := store.Put(ctx, "bundles/analytics.parquet", analyticsBytes)
+	analyticsInfo, err := store.Put(ctx, fmt.Sprintf("bundles/%d/analytics.parquet", fixture.tenantID), analyticsBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payloadInfo, err := store.Put(ctx, "bundles/payload.parquet", payloadBytes)
+	payloadInfo, err := store.Put(ctx, fmt.Sprintf("bundles/%d/payload.parquet", fixture.tenantID), payloadBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 	analyticsEvidence, _ := storage.InspectFile(analyticsPath)
 	payloadEvidence, _ := storage.InspectFile(payloadPath)
 	insertCatalogObjects(t, ctx, fixture, analyticsInfo, payloadInfo, analyticsEvidence, payloadEvidence, liveEventUS)
+	if count > 0 {
+		if _, err := fixture.pool.Exec(ctx, `UPDATE bundles SET row_count=$2 WHERE tenant_id=$1;`, fixture.tenantID, count+3); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.pool.Exec(ctx, `UPDATE files SET row_count=$2 WHERE tenant_id=$1`, fixture.tenantID, count+3); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Separate ownership and execution loop: the API adapter has no local helper.
+func startIndependentQueryWorker(t *testing.T, parent context.Context, operations *control.QueryOperations, worker *app.DurableQueryWorkflow) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan error, 1)
+	go func() {
+		for {
+			if ctx.Err() != nil {
+				done <- nil
+				return
+			}
+			task, err := operations.ClaimQueryTask(ctx, acceptInstallationID, 1, "independent-worker")
+			if err != nil {
+				if ctx.Err() != nil {
+					err = nil
+				}
+				done <- err
+				return
+			}
+			if task != nil {
+				if err := worker.Execute(ctx, *task); err != nil {
+					if errors.Is(err, control.ErrQueryTerminal) || errors.Is(err, control.ErrQueryFenceStale) || errors.Is(err, control.ErrSnapshotExpired) {
+						continue
+					}
+					if ctx.Err() != nil {
+						err = nil
+					}
+					done <- err
+					return
+				}
+				continue
+			}
+			select {
+			case <-ctx.Done():
+				done <- nil
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Errorf("independent worker: %v", err)
+		}
+	})
 }
 
 func wireAnalyticsRow(fixture *acceptFixture, id string, event int64, message string, ordinal int) string {

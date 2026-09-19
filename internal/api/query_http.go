@@ -70,6 +70,10 @@ func (handler *ManagementHandler) getLive(writer http.ResponseWriter, request *h
 		handler.error(writer, request, http.StatusBadRequest, "invalid_input", false)
 		return
 	}
+	handler.streamLive(writer, request, principal, tokenHash, spec, resume)
+}
+
+func (handler *ManagementHandler) streamLive(writer http.ResponseWriter, request *http.Request, principal control.SessionPrincipal, tokenHash [32]byte, spec query.PublicLiveRequest, resume string) {
 	select {
 	case handler.liveSlots <- struct{}{}:
 		defer func() { <-handler.liveSlots }()
@@ -99,10 +103,12 @@ func (handler *ManagementHandler) getLive(writer http.ResponseWriter, request *h
 		if err := controller.Flush(); err != nil {
 			return err
 		}
+		// The deadline bounds this write, not the idle interval before heartbeat.
+		_ = controller.SetWriteDeadline(time.Time{})
 		return nil
 	}
-	err = handler.config.Queries.Live(request.Context(), principal, tokenHash, spec, resume, emit)
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	err := handler.config.Queries.Live(request.Context(), principal, tokenHash, spec, resume, emit)
+	if err == nil || errors.Is(err, context.Canceled) {
 		return
 	}
 	if !started {
@@ -224,7 +230,7 @@ func encodeSSE(event query.LiveEvent) ([]byte, error) {
 	}
 	fmt.Fprintf(&encoded, "event: %s\ndata: %s\n\n", event.Type, data)
 	if encoded.Len() > query.LiveMaximumPending {
-		return nil, errors.New("live event exceeds pending byte limit")
+		return nil, errLivePendingLimit
 	}
 	return encoded.Bytes(), nil
 }

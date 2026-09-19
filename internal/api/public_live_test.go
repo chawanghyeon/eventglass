@@ -1,7 +1,8 @@
-package app
+package api
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,19 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/query"
 )
+
+func TestLiveDatasetDoesNotSlidePastUnpublishedOrUnsentRows(t *testing.T) {
+	now := time.Now()
+	request := query.PublicLiveRequest{}
+	if dataset := liveDataset(request, now); dataset.Spec.StartUS != math.MinInt64 || dataset.Spec.EndUS != math.MaxInt64 {
+		t.Fatal("current-cut Live must use sequence positions, not a moving time filter")
+	}
+	start := now.Add(-5 * time.Minute)
+	request.CatchupStart = &start
+	if dataset := liveDataset(request, now.Add(time.Hour)); dataset.Spec.StartUS != start.UnixMicro() {
+		t.Fatal("catchup lower bound moved past untransmitted rows")
+	}
+}
 
 func TestValidateLiveRequestBoundsCatchupWindow(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)

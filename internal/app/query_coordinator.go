@@ -57,7 +57,10 @@ func (coordinator DurableQueryCoordinator) Execute(ctx context.Context, authorit
 }
 
 func (coordinator DurableQueryCoordinator) fail(ctx context.Context, authority control.QueryCoordinatorAuthority, cause error) error {
-	code := planningFailureCode(cause)
+	code := "query_planning_failed"
+	if errors.Is(cause, query.ErrQueryLimit) || errors.Is(cause, query.ErrCatalogLimit) {
+		code = "query_limit_exceeded"
+	}
 	return errors.Join(cause, coordinator.Control.FailQueryPlanning(ctx, authority, code))
 }
 

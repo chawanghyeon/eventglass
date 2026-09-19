@@ -749,6 +749,7 @@ export interface components {
             visibility_lag_ms: components["schemas"]["Int64"] | null;
         };
         SearchResult: {
+            snapshot_id?: components["schemas"]["UUID"];
             rows: components["schemas"]["ListRow"][];
             read_token: string;
             next_cursor: string | null;
@@ -790,6 +791,7 @@ export interface components {
             direction: "asc" | "desc";
         };
         AggregateResult: {
+            snapshot_id?: components["schemas"]["UUID"];
             groups: components["schemas"]["AggregateGroup"][];
             read_token: string;
             /** @constant */
@@ -815,6 +817,7 @@ export interface components {
             excluded_count: components["schemas"]["Int64"];
         };
         RecordDetail: {
+            snapshot_id?: components["schemas"]["UUID"];
             record: {
                 [key: string]: unknown;
             };
@@ -981,6 +984,7 @@ export interface components {
             revision: components["schemas"]["Int64"];
         };
         QueryJob: {
+            snapshot_id?: components["schemas"]["UUID"];
             query_id: components["schemas"]["UUID"];
             /** @enum {string} */
             state: "planning" | "queued" | "running" | "succeeded" | "failed" | "canceled";

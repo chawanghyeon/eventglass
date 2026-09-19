@@ -92,6 +92,40 @@ func TestSnapshotAdmissionRenewalRevocationAndRetentionClock(t *testing.T) {
 	}
 }
 
+func TestLogoutReleasesOnlyTheRevokedSessionSnapshots(t *testing.T) {
+	f := setupAcceptFixture(t, 982)
+	ops, token := setupQueryPrincipal(t, f)
+	ctx := context.Background()
+	first, err := ops.CreateSnapshot(ctx, snapshotCommand(t, f, token, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := sha256.Sum256([]byte("other browser session"))
+	csrf := sha256.Sum256([]byte("other browser csrf"))
+	if _, err := f.pool.Exec(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_hash,credential_revision,storage_generation,expires_at)
+		VALUES($1,$2,$3,1,1,clock_timestamp()+interval '2 hours')`, other[:], first.UserID, csrf[:]); err != nil {
+		t.Fatal(err)
+	}
+	second, err := ops.CreateSnapshot(ctx, snapshotCommand(t, f, other, 2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth, err := control.NewAuthOperations(f.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := auth.RevokeSession(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := f.pool.QueryRow(ctx, `SELECT state FROM query_snapshots WHERE snapshot_id=$1`, first.SnapshotID).Scan(&state); err != nil || state != "released" {
+		t.Fatalf("state=%s err=%v", state, err)
+	}
+	if _, err := ops.LoadSnapshot(ctx, other, f.tenantID, second.SnapshotID, second.DatasetSHA256); err != nil {
+		t.Fatalf("other session lost pin: %v", err)
+	}
+}
+
 func TestConcurrentSnapshotAdmissionIsSharedAcrossOperations(t *testing.T) {
 	fixture := setupAcceptFixture(t, 962)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

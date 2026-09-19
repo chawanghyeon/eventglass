@@ -128,7 +128,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	}
 	nativeTasks := NewNativeTaskGate()
 	mux := http.NewServeMux()
-	var publicQueries *PublicQueryService
+	var publicQueries *api.QueryAdapter
 	if config.Roles[RoleAPI] {
 		authHashKey, err := readHexSecret(config.AuthHashKeyFile)
 		if err != nil {
@@ -152,7 +152,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			return fail(err)
 		}
 		runtime.queryControl = queryOperations
-		publicQueries = &PublicQueryService{
+		publicQueries = &api.QueryAdapter{
 			Control: queryOperations, Store: store, Tokens: tokens, Exporter: ProcessQueryExportRunner{Gate: nativeTasks},
 			ScratchDir: filepath.Join(config.ScratchDir, "query-results"), InstallationID: installation.InstallationID,
 			StorageGeneration: installation.StorageGeneration,

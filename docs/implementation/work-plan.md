@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, and G05 packets U1–U2 are complete; A1 is the first pending packet. Do not mark a packet complete until
+G03 packets P1–P4, G04 packets Q1–Q5, and G05 packets U1 (foundation/component scope) and U2 are complete; A1 is the first pending packet. Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
 in the implementation commit, not by making per-packet diary files.
 
@@ -61,7 +61,7 @@ using isolated fixtures, never automatic production seed accounts.
 | Q2 / Q1 — complete | query IR/compiler | query/filter.go,cel.go,sql.go,hash.go; model plan types | AST/CEL equivalence, missing!=false, negation, wildcard literals, namespaces/dotted pointers, invalid macros/regex, 38digit integers, Unicode, SQL injection/OR escape; independent Go oracle distinct from compiler |
 | Q3 / Q2 — complete | query snapshots/tokens | control/snapshots.go,catalog.go; query/snapshot.go,token.go | Reader/GC lane lock race, RR retry, dataset shared rows/histogram, token purpose/MAC/owner/revision/generation/TTL, empty authorized catalog vs missing object, cursor equal-time ties |
 | Q4 / Q3 — complete | query tasks/merges, child protocol | control/query_jobs.go; query/execute.go,merge.go; engine/query.go,reduce.go; app query-worker | Disjoint partitions, same winning attempt twice ignored, coordinator restart/cancel, topK global winner outside all local topK, weighted average, overflow,20k/20k+1 groups,64MiB total cap, empty histogram/negative epoch |
-| Q5 / Q4 — complete | api-ui search/detail | api/query_http.go,query_parse.go; app/public_query_service.go,query_results.go,query_sync.go; tests/integration/query_api_test.go | Rows+hist+detail same token, compaction-compatible catalog fixture, no unauthorized trace/detail,202 polling, expired result, whole-result failure; cold/warm bytes/GET/latency report; **G04 complete** |
+| Q5 / Q4 — complete | api-ui search/detail | api/query_http.go,query_parse.go; api/public_query_service.go,query_results.go; query/submission.go; app/query_sync.go; tests/integration/query_api_test.go | Rows+hist+detail same token, compaction-compatible catalog fixture, no unauthorized trace/detail,202 polling, expired result, whole-result failure; cold/warm bytes/GET/latency report; **G04 complete** |
 
 Use real DuckDB for compiler semantic tests in Q2/Q4; pure compiler goldens alone
 cannot prove SQL NULL/decimal/regex behavior. Reuse cached ARM64 native layer.
@@ -71,8 +71,8 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 
 | ID / depends on | Read | Files | Required tests and done condition |
 |---|---|---|---|
-| U1 / Q5 — complete | api-ui routes/UI ownership | web package/tool locks, app/router/providers, generated client, shared search/format; scripts/check web | Login/project/Issue/log/explore flows, BigInt display, URL codec,401/403/409/410 states, dataset switch cancels queries; no handwritten generated DTOs |
-| U2 / U1 — complete | query Live | query/live.go; api/live.go; web/features/logs | Zero-match checkpoint advances, resume within partly emitted batch, late event-time received now, reconnect duplicates deduped, slow client/revoke/resync; bounded memory |
+| U1 / Q5 — complete | api-ui routes/UI ownership | web package/tool locks, app/router/providers, generated client, shared search/format; scripts/check web | Login/log/explore component contracts; project/Issue mock components only (connected APIs and browser E2E are U3), BigInt display, URL codec,401/403/409/410 states, dataset switch cancels queries; no handwritten generated DTOs |
+| U2 / U1 — complete | query Live | query/live.go,live_budget.go; api/public_live.go,query_http.go; web/features/logs | Zero-match checkpoint advances, resume within partly emitted batch, late event-time received now, reconnect duplicates deduped, slow client/revoke/resync; bounded frames/list, HTTP 32-slot/slow-write/disconnect tests; independent worker + real HTTP 205-row partial resume; sustained cgroup load remains G07 |
 | A1 / Q5 | api-ui alerts, control G05 | migrations/0009_alerts.sql; alerts/evaluate.go; control/alerts.go; api rules/destinations | Cut barrier concurrent Accept, pending batch not zero, delayed complete window, revision/disable/cooldown/retention-expired window, issue transition exactly one outbox row |
 | A2 / A1 | api-ui delivery | alerts/deliver.go,destination.go; control/deliveries.go | Local receiver only: duplicate after lost send reply, signature stable body, retries12, permanent4xx, DNS rebinding/private IPv6/redirects denied, no secret logs, credential rotation fail-closed |
 | U3 / U2,A2 | UI routes/system | remaining features and Playwright flows; sdk outcomes API | Real SDK->ACK->publication->UI, error-level log not Issue, breadcrumbs not rows, frame/raw XSS, role enforcement, no external alerts; **G05 complete** |

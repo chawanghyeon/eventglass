@@ -1,0 +1,19 @@
+[
+  "GET /v1/setup",
+  "POST /v1/setup",
+  "POST /v1/sessions",
+  "GET /v1/session",
+  "DELETE /v1/session",
+  "POST /v1/session/password",
+  "GET /v1/projects/{id}/keys",
+  "POST /v1/projects/{id}/keys",
+  "DELETE /v1/projects/{id}/keys/{key_id}",
+  "POST /v1/search",
+  "POST /v1/aggregate",
+  "GET /v1/records/{id}",
+  "GET /v1/query-jobs/{id}",
+  "DELETE /v1/query-jobs/{id}",
+  "POST /v1/snapshots/{id}/heartbeat",
+  "DELETE /v1/snapshots/{id}",
+  "GET /v1/live"
+]

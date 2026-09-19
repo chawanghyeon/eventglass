@@ -6,6 +6,14 @@ implementation and release gates are not complete. Product baseline inspected:
 for an implementing agent, including GPT Luna, without conversation history.
 Do not start by redesigning the system or implementing every gate at once.
 
+Current handoff: architecture/query/Live lifetime hardening is implemented;
+continue with A1 in work-plan.md, not a new architecture rewrite. U1 means the
+UI foundation and component contracts, not working project/Issue backend routes.
+Those remain U3. Check `api/implemented-routes.json` before wiring a feature.
+Reuse `query.Submission`/`query.Awaiter` for the existing session-authorized
+query path; A1 must implement its specified rule-principal authorization rather
+than borrowing an operator session. Keep HTTP DTOs and result mapping in api.
+
 ## Reading and authority
 
 1. Read [AGENTS.md](../../AGENTS.md), [DESIGN.md](../../DESIGN.md), and

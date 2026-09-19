@@ -10,10 +10,6 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/query"
 )
 
-type QuerySyncExecutor interface {
-	Execute(context.Context, [32]byte, int64, string) error
-}
-
 // DurableQuerySyncExecutor helps only the calling query. All claims, leases,
 // attempts, outputs, and terminal transitions still go through the same durable
 // control-plane path used by background workers.

@@ -176,6 +176,12 @@ Partial results are not public success. TTL reclamation includes query temporary
 outputs and native spill; result artifact missing means query_failed, not rerun
 against a new snapshot.
 
+Status reads lock the job row before separately resolving its result artifact.
+Under READ COMMITTED, a locking SELECT can recheck a concurrently updated job
+while retaining an older outer-join input. Do not join nullable result pointers
+in that same locking statement: it can misreport a succeeded job as missing its
+artifact. A deterministic PostgreSQL completion-lock regression covers this.
+
 ## Exact merge contracts
 
 Rows: fan-in8 tree of bounded k-way merges of sorted local limit+1 results, identical tuple
@@ -247,3 +253,19 @@ generation or slow client buffer limit. On revoked auth return403 before headers
 otherwise emit forbidden error event and close before another data batch.
 Release each polling snapshot after transmission; never keep an
 unbounded persistent snapshot just because SSE stays open.
+
+Implementation clarification: the 15-minute limit constrains initial catchup
+and checkpoint expiry, not a sliding received-time predicate on every poll.
+The signed Live token also carries `start_us`: the original catchup bound, or
+MinInt64 for current-cut mode. Resume restores this bound; legacy tokens without
+it require resync. Published cuts and retention still bound the scan. A retained
+record published more than 15 minutes after acceptance must not silently vanish.
+Use MaxInt64 as the received-time upper bound and the captured lane cuts as the
+authoritative upper positions (a clamped DB clock can be ahead of API time).
+Drain an incomplete captured cut immediately, keeping that cut across pages;
+only a complete drain captures a newer cut. More than 10,000 delivered rows in
+10 seconds, or an incomplete drain lasting 15 minutes, requires explicit resync
+before another checkpoint. Unchanged cuts still check current authorization but
+skip job creation, object I/O and native work. Revalidate after export before
+emitting a page. A slow socket that cannot accept even a terminal SSE event is
+closed on its write deadline; never claim that event was delivered.

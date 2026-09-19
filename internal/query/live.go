@@ -111,3 +111,16 @@ func compareLivePosition(left, right LivePosition) int {
 	}
 	return 1
 }
+
+// A partial batch remains eligible; only a fully emitted batch can be pruned.
+// Compacted files spanning both old and new sequences must remain eligible too.
+func LiveMinimumSequences(positions [model.LaneCount]LivePosition) [model.LaneCount]int64 {
+	var result [model.LaneCount]int64
+	for lane, position := range positions {
+		result[lane] = position.BatchSeq
+		if position.Ordinal == math.MaxInt32 && position.BatchSeq < math.MaxInt64 {
+			result[lane]++
+		}
+	}
+	return result
+}

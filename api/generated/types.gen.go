@@ -864,11 +864,12 @@ type AggregateRequestTimeBasis string
 
 // AggregateResult defines model for AggregateResult.
 type AggregateResult struct {
-	Complete  AggregateResultComplete `json:"complete"`
-	Groups    []AggregateGroup        `json:"groups"`
-	ReadToken string                  `json:"read_token"`
-	Stats     QueryStats              `json:"stats"`
-	Warnings  []string                `json:"warnings"`
+	Complete   AggregateResultComplete `json:"complete"`
+	Groups     []AggregateGroup        `json:"groups"`
+	ReadToken  string                  `json:"read_token"`
+	SnapshotId *UUID                   `json:"snapshot_id,omitempty"`
+	Stats      QueryStats              `json:"stats"`
+	Warnings   []string                `json:"warnings"`
 }
 
 // AggregateResultComplete defines model for AggregateResult.Complete.
@@ -1288,6 +1289,7 @@ type QueryJob struct {
 	PollAfterMs int           `json:"poll_after_ms"`
 	QueryId     UUID          `json:"query_id"`
 	Result      interface{}   `json:"result,omitempty"`
+	SnapshotId  *UUID         `json:"snapshot_id,omitempty"`
 	State       QueryJobState `json:"state"`
 }
 
@@ -1315,6 +1317,7 @@ type RecordDetail struct {
 	Raw         map[string]interface{} `json:"raw"`
 	ReadToken   string                 `json:"read_token"`
 	Record      map[string]interface{} `json:"record"`
+	SnapshotId  *UUID                  `json:"snapshot_id,omitempty"`
 }
 
 // RelatedRequest defines model for RelatedRequest.
@@ -1499,6 +1502,7 @@ type SearchResult struct {
 	NextCursor string               `json:"next_cursor"`
 	ReadToken  string               `json:"read_token"`
 	Rows       []ListRow            `json:"rows"`
+	SnapshotId *UUID                `json:"snapshot_id,omitempty"`
 	Stats      QueryStats           `json:"stats"`
 	Warnings   []string             `json:"warnings"`
 }

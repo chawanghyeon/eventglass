@@ -65,14 +65,13 @@ func (operations *QueryOperations) GetQueryStatus(ctx context.Context, tokenHash
 	err = tx.QueryRow(ctx, `SELECT q.query_id::text,q.tenant_id,q.snapshot_id::text,q.operation_kind,q.state,q.error_code,
 		q.deadline,q.expires_at,q.created_at,q.updated_at,q.plan_file_count,q.plan_scan_count,q.plan_bytes,q.plan_input_bytes,
 		q.operation_hash,q.operation_bytes,s.dataset_hash,
-		q.user_id,q.principal_ref,q.result_intent_id::text,oi.object_key,q.result_sha256,q.result_bytes,clock_timestamp()
+		q.user_id,q.principal_ref,q.result_intent_id::text,q.result_sha256,q.result_bytes,clock_timestamp()
 		FROM query_jobs q JOIN query_snapshots s ON s.tenant_id=q.tenant_id AND s.snapshot_id=q.snapshot_id
-		LEFT JOIN object_intents oi ON oi.tenant_id=q.tenant_id AND oi.intent_id=q.result_intent_id
 		WHERE q.tenant_id=$1 AND q.query_id=$2 FOR SHARE OF q`, tenantID, queryID).Scan(
 		&result.QueryID, &result.TenantID, &result.SnapshotID, &result.OperationKind, &result.State, &errorCode,
 		&result.Deadline, &result.ExpiresAt, &result.CreatedAt, &result.UpdatedAt, &result.PlanFiles, &result.PlanScans, &result.PlanBytes, &result.PlanInputBytes,
 		&result.OperationHash, &result.Operation, &result.DatasetHash,
-		&userID, &principal, &intentID, &objectKey, &resultSHA, &resultBytes, &now)
+		&userID, &principal, &intentID, &resultSHA, &resultBytes, &now)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return QueryStatus{}, ErrQueryNotFound
 	}
@@ -92,8 +91,14 @@ func (operations *QueryOperations) GetQueryStatus(ctx context.Context, tokenHash
 		result.ErrorCode = *errorCode
 	}
 	if result.State == "succeeded" {
-		if intentID == nil || objectKey == nil || resultSHA == nil || resultBytes == nil || *resultBytes <= 0 {
+		if intentID == nil || resultSHA == nil || resultBytes == nil || *resultBytes <= 0 {
 			return QueryStatus{}, errors.New("succeeded query result is incomplete")
+		}
+		// READ COMMITTED can recheck a concurrently updated locked job row while
+		// retaining an older outer-join input (whose result_intent_id was NULL).
+		// Resolve the artifact in a fresh statement after locking the winning job.
+		if err := tx.QueryRow(ctx, `SELECT object_key FROM object_intents WHERE tenant_id=$1 AND intent_id=$2 AND state='referenced'`, tenantID, *intentID).Scan(&objectKey); err != nil || objectKey == nil {
+			return QueryStatus{}, errors.Join(errors.New("succeeded query artifact is unavailable"), err)
 		}
 		result.Result = &QueryResultArtifact{IntentID: *intentID, ObjectKey: *objectKey, Bytes: *resultBytes, SHA256: *resultSHA}
 	}

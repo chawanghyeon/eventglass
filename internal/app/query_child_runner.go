@@ -23,10 +23,6 @@ type ProcessQueryRunner struct {
 	Gate       *NativeTaskGate
 }
 
-type QueryExportRunner interface {
-	Export(context.Context, engine.QueryExportRequest) (engine.QueryExportSummary, error)
-}
-
 type ProcessQueryExportRunner struct {
 	BinaryPath string
 	Gate       *NativeTaskGate

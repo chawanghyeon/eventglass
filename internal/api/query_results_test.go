@@ -1,4 +1,4 @@
-package app
+package api
 
 import (
 	"os"
@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/chawanghyeon/eventglass/internal/api"
 	"github.com/chawanghyeon/eventglass/internal/engine"
 )
 
@@ -33,7 +32,7 @@ func TestFinalizeDetailRejectsMissingDuplicateAndRestoresTypedPayload(t *testing
 	if err := os.WriteFile(empty, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := finalizeDetail(empty, engine.QueryResultPlan{RecordID: recordID}, "token"); err != api.ErrPublicQueryNotFound {
+	if _, err := finalizeDetail(empty, engine.QueryResultPlan{RecordID: recordID}, "token"); err != ErrPublicQueryNotFound {
 		t.Fatalf("empty err=%v", err)
 	}
 	if err := os.WriteFile(path, []byte(line+"\n"+line+"\n"), 0o600); err != nil {

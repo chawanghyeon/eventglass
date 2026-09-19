@@ -91,6 +91,7 @@ func TestQueryPlanTasksWinningAttemptsAndFixedReduction(t *testing.T) {
 	if err != nil || status.State != "succeeded" || status.Result == nil || status.PlanFiles != 9 || status.PlanInputBytes != 9*(8<<20) {
 		t.Fatalf("status=%#v err=%v", status, err)
 	}
+	assertStatusSeesConcurrentCompletion(t, ctx, fixture, operations, tokenHash, status)
 	_, otherToken := addQueryPrincipal(t, fixture, 99)
 	if err := operations.FailSucceededQueryResult(ctx, otherToken, fixture.tenantID, queryID, "query_result_invalid"); !errors.Is(err, control.ErrQueryNotFound) {
 		t.Fatalf("other session failed result: %v", err)
@@ -101,6 +102,56 @@ func TestQueryPlanTasksWinningAttemptsAndFixedReduction(t *testing.T) {
 	status, err = operations.GetQueryStatus(ctx, tokenHash, fixture.tenantID, queryID)
 	if err != nil || status.State != "failed" || status.ErrorCode != "query_result_invalid" {
 		t.Fatalf("failed status=%#v err=%v", status, err)
+	}
+}
+
+// Force the status SELECT to begin before a completion commit, then wait on the
+// job row. READ COMMITTED's row recheck must not leave an old outer-join NULL.
+func assertStatusSeesConcurrentCompletion(t *testing.T, ctx context.Context, f *acceptFixture, ops *control.QueryOperations, token [32]byte, completed control.QueryStatus) {
+	t.Helper()
+	if _, err := f.pool.Exec(ctx, `UPDATE query_jobs SET state='running',result_intent_id=NULL,result_sha256=NULL,result_bytes=NULL WHERE query_id=$1`, completed.QueryID); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	var writerPID int
+	if err := tx.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&writerPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE query_jobs SET state='succeeded',result_intent_id=$2,result_sha256=$3,result_bytes=$4 WHERE query_id=$1`, completed.QueryID, completed.Result.IntentID, completed.Result.SHA256, completed.Result.Bytes); err != nil {
+		t.Fatal(err)
+	}
+	type answer struct {
+		status control.QueryStatus
+		err    error
+	}
+	done := make(chan answer, 1)
+	go func() { s, e := ops.GetQueryStatus(ctx, token, f.tenantID, completed.QueryID); done <- answer{s, e} }()
+	waitCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	for {
+		var blocked bool
+		if err := f.pool.QueryRow(waitCtx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))`, writerPID).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		select {
+		case <-waitCtx.Done():
+			t.Fatal("status reader did not reach row lock")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := <-done
+	if got.err != nil || got.status.Result == nil || *got.status.Result != *completed.Result {
+		t.Fatalf("concurrent completion status=%#v err=%v", got.status, got.err)
 	}
 }
 

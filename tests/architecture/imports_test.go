@@ -13,7 +13,7 @@ import (
 func TestProductionDependencyBoundaries(t *testing.T) {
 	allowed := map[string]string{
 		"app":         "*",
-		"api":         "ingest sdk query alerts control model resource",
+		"api":         "ingest sdk query alerts control model resource engine",
 		"ingest":      "sdk model resource control storage",
 		"sdk":         "",
 		"model":       "",
@@ -62,6 +62,9 @@ func TestProductionDependencyBoundaries(t *testing.T) {
 				} else if dependencies != "*" && !strings.Contains(" "+dependencies+" ", " "+target+" ") {
 					t.Errorf("%s: forbidden %s -> %s dependency", path, owner, target)
 				}
+			}
+			if imported == "github.com/chawanghyeon/eventglass/api/generated" && owner != "api" {
+				t.Errorf("%s: generated HTTP DTOs outside api", path)
 			}
 			if (strings.Contains(imported, "duckdb") && owner != "engine") ||
 				(strings.Contains(imported, "jackc/pgx") && owner != "control") ||

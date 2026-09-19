@@ -24,6 +24,8 @@ type CatalogCommand struct {
 	Kinds            []model.Kind
 	AfterFileID      string
 	Limit            int
+	// Internal conservative pruning hint; mandatory snapshot/row scope remains.
+	MinimumBatchSeq [model.LaneCount]int64
 }
 
 func (operations *QueryOperations) CatalogPage(ctx context.Context, command CatalogCommand) ([]model.CatalogFile, error) {
@@ -118,12 +120,13 @@ func catalogPageRows(ctx context.Context, tx pgx.Tx, command CatalogCommand, ret
 		AND b.input_seq_max<=sl.cut_seq AND b.kind=ANY($3::text[])
 		AND ` + timeMax + `>=$4 AND ` + timeMin + `<$5 AND f.max_received_time_us>=$6
 		AND ($7::uuid IS NULL OR f.file_id>$7::uuid)
+		AND f.max_batch_seq >= ($9::bigint[])[sl.lane_id+1]
 		AND EXISTS (SELECT 1 FROM bundle_projects bp JOIN snapshot_projects sp
 			ON sp.tenant_id=bp.tenant_id AND sp.project_id=bp.project_id AND sp.snapshot_id=$2
 			WHERE bp.tenant_id=b.tenant_id AND bp.bundle_id=b.bundle_id)
 		GROUP BY f.file_id,b.bundle_id,oi.object_key,b.lane_id,b.kind,pf.file_id,poi.object_key
 		ORDER BY f.file_id LIMIT $8`
-	rows, err := tx.Query(ctx, statement, command.TenantID, command.SnapshotID, kindValues, command.StartUS, command.EndUS, retentionFloorUS, after, command.Limit)
+	rows, err := tx.Query(ctx, statement, command.TenantID, command.SnapshotID, kindValues, command.StartUS, command.EndUS, retentionFloorUS, after, command.Limit, command.MinimumBatchSeq[:])
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +161,11 @@ func catalogPageRows(ctx context.Context, tx pgx.Tx, command CatalogCommand, ret
 }
 
 func validateCatalogCommand(command CatalogCommand) error {
+	for _, seq := range command.MinimumBatchSeq {
+		if seq < 0 {
+			return errors.New("invalid catalog sequence bound")
+		}
+	}
 	if command.SessionTokenHash == ([32]byte{}) || command.TenantID <= 0 || uuid.Validate(command.SnapshotID) != nil || !validSHA(command.DatasetSHA256) || len(command.DatasetBytes) < 2 || len(command.DatasetBytes) > 32768 || command.StartUS >= command.EndUS || command.Limit < 1 || command.Limit > MaxCatalogPageFiles {
 		return errors.New("invalid catalog command")
 	}

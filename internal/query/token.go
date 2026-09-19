@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"time"
 
@@ -86,6 +87,7 @@ type LivePosition struct {
 }
 
 type LiveTokenClaims struct {
+	StartUS       *int64                        `json:"start_us,omitempty"`
 	Version       int                           `json:"version"`
 	Purpose       string                        `json:"purpose"`
 	KeyID         string                        `json:"key_id"`
@@ -178,7 +180,12 @@ func (codec *TokenCodec) VerifyCursor(token string, expected TokenExpectation) (
 }
 
 func (codec *TokenCodec) SignLive(generation int64, principalHash, scopeHash string, positions [model.LaneCount]LivePosition, expiresAtUS int64) (string, error) {
+	return codec.SignLiveFrom(generation, principalHash, scopeHash, positions, expiresAtUS, math.MinInt64)
+}
+
+func (codec *TokenCodec) SignLiveFrom(generation int64, principalHash, scopeHash string, positions [model.LaneCount]LivePosition, expiresAtUS, startUS int64) (string, error) {
 	claims := LiveTokenClaims{
+		StartUS: &startUS,
 		Version: TokenVersion, Purpose: LiveTokenPurpose, KeyID: codec.current.ID,
 		Generation: generation, PrincipalHash: principalHash, ScopeHash: scopeHash,
 		Positions: positions, ExpiresAtUS: expiresAtUS,

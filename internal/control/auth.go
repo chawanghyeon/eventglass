@@ -489,14 +489,26 @@ func loadPrincipal(ctx context.Context, queryer authQueryer, tokenHash []byte, l
 }
 
 func (operations *AuthOperations) RevokeSession(ctx context.Context, tokenHash [32]byte) error {
-	result, err := operations.pool.Exec(ctx, `UPDATE sessions SET revoked_at=coalesce(revoked_at,clock_timestamp()) WHERE token_hash=$1`, tokenHash[:])
+	tx, err := operations.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return err
 	}
-	if result.RowsAffected() == 0 {
+	defer tx.Rollback(ctx)
+	var userID int64
+	err = tx.QueryRow(ctx, `UPDATE sessions SET revoked_at=coalesce(revoked_at,clock_timestamp()) WHERE token_hash=$1 RETURNING user_id`, tokenHash[:]).Scan(&userID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrUnauthenticated
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	// Logout invalidates the cookie before a browser can send subsequent DELETEs.
+	// Release this session's pins atomically, without touching other sessions.
+	if _, err := tx.Exec(ctx, `UPDATE query_snapshots SET state='released',expires_at=LEAST(expires_at,clock_timestamp())
+		WHERE principal_kind='user' AND user_id=$1 AND principal_ref=$2 AND state='active'`, userID, model.QueryPrincipalHash(userID, tokenHash)); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 type ProjectScope struct {
