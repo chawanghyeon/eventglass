@@ -4,7 +4,7 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00 engine/storage/isolation contracts, G01 SDK fixture/normalization contracts, all G02 packets I1–I5 (durable ingestion, bounded runtime, lease fencing, and the Linux ARM64 crash/resource gate), all G03 packets P1–P4 (publication catalog, isolated paired-Parquet conversion, fenced Prepare/Publish workers, Issue lifecycle, and publication crash evidence), all G04 packets Q1–Q5 (recoverable setup and auth, generated v1 wire contracts, typed query compilation, authorized snapshots and signed tokens, fenced deterministic query execution and exact aggregation, and public rows/aggregate/detail APIs), and G05 packet U1 (operator UI foundation and state ownership) are complete. U2 is the first incomplete packet; G05–G08 remain incomplete overall, so the repository does not yet advertise a deployable Go release. See [`DESIGN.md`](DESIGN.md), [`SDK-SUPPORT.md`](SDK-SUPPORT.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the normative contract, verified SDK scope, and commands.
+Current status: G00 engine/storage/isolation contracts, G01 SDK fixture/normalization contracts, all G02 packets I1–I5 (durable ingestion, bounded runtime, lease fencing, and the Linux ARM64 crash/resource gate), all G03 packets P1–P4 (publication catalog, isolated paired-Parquet conversion, fenced Prepare/Publish workers, Issue lifecycle, and publication crash evidence), all G04 packets Q1–Q5 (recoverable setup and auth, generated v1 wire contracts, typed query compilation, authorized snapshots and signed tokens, fenced deterministic query execution and exact aggregation, and public rows/aggregate/detail APIs), and G05 packets U1–U2 (operator UI state ownership and resumable bounded Live) are complete. A1 is the first incomplete packet; G05–G08 remain incomplete overall, so the repository does not yet advertise a deployable Go release. See [`DESIGN.md`](DESIGN.md), [`SDK-SUPPORT.md`](SDK-SUPPORT.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the normative contract, verified SDK scope, and commands.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
@@ -31,15 +31,17 @@ rows, aggregate, detail, snapshot and async-job routes; sync and background work
 share durable claims/fences and one native-child gate, while result decoding is
 bounded and token-authorized. U1 adds the generated-contract React operator
 shell, login/setup, projects, Issues, logs/detail and Explore rows+histogram,
-with URL/server/form state separated and exact Int64 display. Live, alerts,
-real end-to-end UI flows, and backup/PITR recovery remain later gates.
+with URL/server/form state separated and exact Int64 display. U2 adds received-time
+Live polling over fresh snapshots, signed per-lane resume checkpoints, bounded
+SSE admission, and a reconnecting deduplicating operator view. Alerts, real
+end-to-end UI flows, and backup/PITR recovery remain later gates.
 Pure-Go checks do not rebuild DuckDB.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the
 [`work plan`](docs/implementation/work-plan.md) breaks remaining work into ordered
 packets with files, prerequisites, negative tests and completion gates. These are
-design contracts, not evidence that U2–G08 have been implemented or verified.
+design contracts, not evidence that A1–G08 have been implemented or verified.
 
 The handoff also includes [cross-boundary correctness contracts](docs/implementation/correctness.md)
 and [fixed machine-readable examples](docs/implementation/contract-cases.json)
