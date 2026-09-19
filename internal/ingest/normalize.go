@@ -1,6 +1,8 @@
 package ingest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/sdk"
@@ -80,7 +83,7 @@ func NormalizeEnvelope(envelope sdk.Envelope, options NormalizeOptions) (model.N
 		default:
 			batch.Unsupported++
 			batch.UnsupportedItems = append(batch.UnsupportedItems, model.UnsupportedItem{
-				ItemOrdinal: item.Ordinal, Type: item.Type, Bytes: len(item.Payload),
+				ItemOrdinal: item.Ordinal, Type: normalizeUnsupportedType(item.Type), Bytes: len(item.Payload),
 			})
 		}
 		if len(batch.Records) > MaxCanonicalRecords {
@@ -114,6 +117,18 @@ func NormalizeEnvelope(envelope sdk.Envelope, options NormalizeOptions) (model.N
 		return batch, fmt.Errorf("%w: request exceeds %d canonical bytes", ErrLimitExceeded, MaxCanonicalBytes)
 	}
 	return batch, nil
+}
+
+func normalizeUnsupportedType(value string) string {
+	if len(value) <= 128 {
+		return value
+	}
+	prefix := value[:100]
+	for len(prefix) > 0 && !utf8.ValidString(prefix) {
+		prefix = prefix[:len(prefix)-1]
+	}
+	digest := sha256.Sum256([]byte(value))
+	return prefix + "#" + hex.EncodeToString(digest[:8])
 }
 
 func logItems(item sdk.Item) ([]map[string]any, error) {

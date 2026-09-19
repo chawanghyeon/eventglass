@@ -12,6 +12,8 @@ require (
 	github.com/jackc/pgx/v5 v5.7.6
 )
 
+require github.com/jackc/puddle/v2 v2.2.2 // indirect
+
 require (
 	github.com/apache/arrow-go/v18 v18.5.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.20 // indirect

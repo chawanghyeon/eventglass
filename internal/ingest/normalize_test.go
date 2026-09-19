@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/sdk"
@@ -192,6 +193,17 @@ func TestNormalizeRejectsUnknownLogVersionAtomically(t *testing.T) {
 	}}, NormalizeOptions{TenantID: 1, ProjectID: 1, AcceptanceID: "atomic", ArrivalTime: time.Now()})
 	if err == nil || !strings.Contains(err.Error(), "unsupported log version") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUnsupportedTypeDiagnosticIsBoundedAndStable(t *testing.T) {
+	longType := strings.Repeat("가", 45)
+	got := normalizeUnsupportedType(longType)
+	if !strings.HasPrefix(got, strings.Repeat("가", 33)+"#") || len(got) != 116 || !utf8.ValidString(got) {
+		t.Fatalf("unexpected diagnostic %q bytes=%d", got, len(got))
+	}
+	if got != normalizeUnsupportedType(longType) || normalizeUnsupportedType(strings.Repeat("x", 128)) != strings.Repeat("x", 128) {
+		t.Fatal("unsupported type normalization is not stable at the boundary")
 	}
 }
 

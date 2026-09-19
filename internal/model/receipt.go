@@ -26,6 +26,19 @@ type ReceiptSelection struct {
 	Conflict  []ReceiptRange `json:"conflict"`
 }
 
+// JournalRequestIndex is trusted only after the complete journal write or
+// replay succeeds. Ordinals are global positions in that physical journal.
+type JournalRequestIndex struct {
+	AcceptanceID     string
+	ProjectID        int64
+	OrdinalFirst     int
+	OrdinalLast      int
+	RecordCount      int
+	ContentSHA256    string
+	Outcomes         []Outcome
+	UnsupportedItems []UnsupportedItem
+}
+
 // NewReceiptSelection converts one class per request-local record position
 // into the exact, maximally coalesced v1 receipt representation.
 func NewReceiptSelection(classes []ReceiptClass) (ReceiptSelection, error) {

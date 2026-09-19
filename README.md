@@ -4,15 +4,15 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00 engine/storage/isolation contracts, G01 SDK fixture/normalization contracts, and G02 packet I1 (ingest policy schema, receipt selection, dedupe hash, journal request index) are complete for Linux ARM64. G02 durable Accept/upload/ACK still requires I2–I5, so the repository does not yet advertise a deployable Go release. See [`DESIGN.md`](DESIGN.md), [`SDK-SUPPORT.md`](SDK-SUPPORT.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the normative contract, verified SDK scope, and commands.
+Current status: G00 engine/storage/isolation contracts, G01 SDK fixture/normalization contracts, and G02 packets I1–I2 (ingest policy plus the atomic PostgreSQL Accept operation) are complete for Linux ARM64. G02 durable upload/ACK runtime still requires I3–I5, so the repository does not yet advertise a deployable Go release. See [`DESIGN.md`](DESIGN.md), [`SDK-SUPPORT.md`](SDK-SUPPORT.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the normative contract, verified SDK scope, and commands.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
 Read [`ARCHITECTURE.md`](ARCHITECTURE.md) for package ownership, request/batch/file
 boundaries, resource lifetimes, fencing and upgrade rules. Architecture checks,
 multi-request streaming journals, shared byte permits and the ingestion schema
-and I1 receipt/index policy are implemented foundations; the G02
-Accept/upload/ACK operation, job execution and crash recovery are still pending.
+receipt/index policy and the I2 Accept transaction are implemented foundations;
+the G02 upload/ACK runtime, job execution and crash recovery are still pending.
 Pure-Go checks do not rebuild DuckDB.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)

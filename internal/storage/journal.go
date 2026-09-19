@@ -50,16 +50,9 @@ type JournalInfo struct {
 	Index  JournalIndex
 }
 
-type JournalRequestIndex struct {
-	Request          JournalRequest
-	SHA256           string
-	Outcomes         []model.Outcome
-	UnsupportedItems []model.UnsupportedItem
-}
-
 type JournalIndex struct {
 	Header   JournalHeader
-	Requests []JournalRequestIndex
+	Requests []model.JournalRequestIndex
 }
 
 type journalLine struct {
@@ -126,7 +119,7 @@ func WriteJournal(output io.Writer, batch model.JournalBatch) (JournalInfo, erro
 		return JournalInfo{}, err
 	}
 	seen := make(map[string]bool)
-	index := JournalIndex{Header: header, Requests: make([]JournalRequestIndex, 0, len(batch.Requests))}
+	index := JournalIndex{Header: header, Requests: make([]model.JournalRequestIndex, 0, len(batch.Requests))}
 	position := 0
 	for _, request := range batch.Requests {
 		meta := JournalRequest{request.AcceptanceID, request.ProjectID, position, position + len(request.Records) - 1, len(request.Records), len(request.Outcomes), len(request.UnsupportedItems)}
@@ -169,8 +162,9 @@ func WriteJournal(output io.Writer, batch model.JournalBatch) (JournalInfo, erro
 		if err := write("end_request", footer, nil); err != nil {
 			return JournalInfo{}, err
 		}
-		index.Requests = append(index.Requests, JournalRequestIndex{
-			Request: meta, SHA256: footer.SHA256,
+		index.Requests = append(index.Requests, model.JournalRequestIndex{
+			AcceptanceID: meta.AcceptanceID, ProjectID: meta.ProjectID, OrdinalFirst: meta.First, OrdinalLast: meta.Last,
+			RecordCount: meta.Records, ContentSHA256: footer.SHA256,
 			Outcomes:         append(make([]model.Outcome, 0, len(request.Outcomes)), request.Outcomes...),
 			UnsupportedItems: append(make([]model.UnsupportedItem, 0, len(request.UnsupportedItems)), request.UnsupportedItems...),
 		})
@@ -224,7 +218,7 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 	var meta JournalRequest
 	var counts journalCount
 	var requestHash hash.Hash
-	index := JournalIndex{Requests: make([]JournalRequestIndex, 0)}
+	index := JournalIndex{Requests: make([]model.JournalRequestIndex, 0)}
 	var outcomes []model.Outcome
 	var unsupportedItems []model.UnsupportedItem
 	seen := make(map[string]bool)
@@ -257,7 +251,7 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 			}
 			headerSeen = true
 			index.Header = header
-			index.Requests = make([]JournalRequestIndex, 0, header.RequestCount)
+			index.Requests = make([]model.JournalRequestIndex, 0, header.RequestCount)
 		case "request":
 			if requestHash != nil || requests >= header.RequestCount {
 				return fail(errors.New("request framing mismatch"))
@@ -329,8 +323,9 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 			if footer != counts || counts.Records != meta.Records || counts.Outcomes != meta.Outcomes || counts.Unsupported != meta.Unsupported {
 				return fail(errors.New("request checksum or counts mismatch"))
 			}
-			index.Requests = append(index.Requests, JournalRequestIndex{
-				Request: meta, SHA256: counts.SHA256,
+			index.Requests = append(index.Requests, model.JournalRequestIndex{
+				AcceptanceID: meta.AcceptanceID, ProjectID: meta.ProjectID, OrdinalFirst: meta.First, OrdinalLast: meta.Last,
+				RecordCount: meta.Records, ContentSHA256: counts.SHA256,
 				Outcomes: outcomes, UnsupportedItems: unsupportedItems,
 			})
 			requestHash = nil

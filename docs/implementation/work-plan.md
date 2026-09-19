@@ -1,8 +1,8 @@
 # Ordered implementation packets and verification
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
-to rebuild native dependencies every packet. G02 packet I1 is complete, but
-**Accept, production runtime and crash recovery are not complete**. I2 is the
+to rebuild native dependencies every packet. G02 packets I1–I2 are complete,
+but **the upload/ACK runtime and crash recovery are not complete**. I3 is the
 first pending packet. Do not mark a packet complete until its listed
 tests execute successfully. Update this status and README gate status in the
 implementation commit, not by making per-packet diary files.
@@ -34,7 +34,7 @@ and methods over generic abstractions; one SQL transaction per named operation.
 | ID / depends on | Read | Files to create/extend | Required tests and done condition |
 |---|---|---|---|
 | I1 / G01 — complete | control-plane G02, ingest hashes | control/migrations/0003_ingest_policy.sql; storage/journal.go; ingest/dedupe.go; model receipt/index DTOs | `TestReceiptSelectionPartition`, `TestDedupeHashIgnoresArrival`, rebatch hash/index/outcome equality, existing journal bytes unchanged; migration prefix/upgrade and tenant FK negatives |
-| I2 / I1 | control-plane locks, ingest Accept | control/accept.go, intents.go, receipts.go | Real PG two concurrent same source IDs, cross-lane conflict, source expiry, missing-source no dedupe, empty receipt, whole-batch rollback, seq no holes, stale tenant/key/scrub/config, partial existing receipt subset; no S3 work in tx |
+| I2 / I1 — complete | control-plane locks, ingest Accept | control/accept.go, intents.go, receipts.go | Real PG two concurrent same source IDs, cross-lane conflict, source expiry, missing-source no dedupe, empty receipt, whole-batch rollback, seq no holes, stale tenant/key/scrub/config, partial existing receipt subset; no S3 work in tx |
 | I3 / I2 | ingest lifetime/intents | ingest/batcher.go, workflow.go; api/ingest.go dynamic auth/result; control/project_auth.go | Real PG+S3 verified upload before commit, duplicate-only/unsupported-only,100ms flush,1000/request/byte thresholds, canceled caller retains permit, upload failure/late PUT/revoke rebatch; exact counters and zero stale ACK |
 | I4 / I3 | operations runtime | app/config.go, run.go, resources.go; cmd main; control/jobs.go | Startup fail-closed schema/storage, combined budget, drain30s, lease reclaim/fence, dependency503; fixture handler stays test-only; run starts actual durable ingress |
 | I5 / I4 | quality.md, failure matrix below | tests/crash/ingest_test.go; tests/resource/ingest_test.go; scripts/check crash initial cases | Parent ACK oracle survives SIGKILL/restart/empty local disk; max legal and admission-rejected inputs measured; request/PUT/tx/batch counts recorded. **G02 complete only here** |

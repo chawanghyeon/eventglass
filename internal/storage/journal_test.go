@@ -137,7 +137,7 @@ func TestJournalRejectsMixedTenantLaneDuplicateAndHugeLine(t *testing.T) {
 }
 
 func TestRequestChecksumSurvivesRebatching(t *testing.T) {
-	indexes := func(batch model.JournalBatch) map[string]JournalRequestIndex {
+	indexes := func(batch model.JournalBatch) map[string]model.JournalRequestIndex {
 		t.Helper()
 		var buffer bytes.Buffer
 		info, err := WriteJournal(&buffer, batch)
@@ -151,9 +151,9 @@ func TestRequestChecksumSurvivesRebatching(t *testing.T) {
 		if !reflect.DeepEqual(info.Index, replayed) {
 			t.Fatal("write and replay indexes differ")
 		}
-		result := make(map[string]JournalRequestIndex, len(replayed.Requests))
+		result := make(map[string]model.JournalRequestIndex, len(replayed.Requests))
 		for _, request := range replayed.Requests {
-			result[request.Request.AcceptanceID] = request
+			result[request.AcceptanceID] = request
 		}
 		return result
 	}
@@ -164,14 +164,14 @@ func TestRequestChecksumSurvivesRebatching(t *testing.T) {
 	batch.BatchID = "00000000-0000-4000-8000-000000000099"
 	rebatched := indexes(batch)[lastID]
 	baseline := original[lastID]
-	if rebatched.SHA256 != baseline.SHA256 || !reflect.DeepEqual(rebatched.Outcomes, baseline.Outcomes) || !reflect.DeepEqual(rebatched.UnsupportedItems, baseline.UnsupportedItems) {
+	if rebatched.ContentSHA256 != baseline.ContentSHA256 || !reflect.DeepEqual(rebatched.Outcomes, baseline.Outcomes) || !reflect.DeepEqual(rebatched.UnsupportedItems, baseline.UnsupportedItems) {
 		t.Fatal("physical batch placement changed receipt identity")
 	}
-	if rebatched.Request.First == baseline.Request.First {
+	if rebatched.OrdinalFirst == baseline.OrdinalFirst {
 		t.Fatal("fixture did not exercise physical index movement")
 	}
 	batch.Requests[0].Records[0].Message = "different payload"
-	if indexes(batch)[lastID].SHA256 == original[lastID].SHA256 {
+	if indexes(batch)[lastID].ContentSHA256 == original[lastID].ContentSHA256 {
 		t.Fatal("content mutation retained receipt hash")
 	}
 }

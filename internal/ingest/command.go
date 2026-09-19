@@ -8,9 +8,11 @@ type Authorization struct {
 	TenantID        int64
 	ProjectID       int64
 	KeyHash         [32]byte
+	TenantRevision  int64
 	ProjectRevision int64
 	KeyRevision     int64
 	ScrubRevision   int
+	ConfigRevision  int64
 }
 
 type Command struct {
