@@ -56,6 +56,9 @@ func (database *RuntimeDatabase) LoadInstallation(ctx context.Context) (RuntimeI
 func (database *RuntimeDatabase) IngestOperations() (*IngestOperations, error) {
 	return NewIngestOperations(database.pool)
 }
+func (database *RuntimeDatabase) PublicationOperations() (*PublicationOperations, error) {
+	return NewPublicationOperations(database.pool)
+}
 
 // VerifyRuntimeSchema is read-only. Runtime never races migrations into a live
 // deployment: its ledger must exactly match this binary's embedded manifest.

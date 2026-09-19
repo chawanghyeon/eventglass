@@ -4,7 +4,7 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00 engine/storage/isolation contracts, G01 SDK fixture/normalization contracts, all G02 packets I1–I5 (durable ingestion, bounded runtime, lease fencing, and the Linux ARM64 crash/resource gate), and G03 packets P1–P2 (publication catalog and Issue foundations plus isolated paired-Parquet conversion) are complete. G03 packets P3–P4 through G08 release evidence remain incomplete, so the repository does not yet advertise a deployable Go release. See [`DESIGN.md`](DESIGN.md), [`SDK-SUPPORT.md`](SDK-SUPPORT.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the normative contract, verified SDK scope, and commands.
+Current status: G00 engine/storage/isolation contracts, G01 SDK fixture/normalization contracts, all G02 packets I1–I5 (durable ingestion, bounded runtime, lease fencing, and the Linux ARM64 crash/resource gate), and G03 packets P1–P3 (publication catalog and Issue foundations, isolated paired-Parquet conversion, and fenced Prepare/Publish workers) are complete. G03 packet P4 through G08 release evidence remain incomplete, so the repository does not yet advertise a deployable Go release. See [`DESIGN.md`](DESIGN.md), [`SDK-SUPPORT.md`](SDK-SUPPORT.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the normative contract, verified SDK scope, and commands.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
@@ -14,8 +14,10 @@ multi-request streaming journals, shared byte permits and the ingestion schema
 receipt/index policy, the I2 Accept transaction, the I3 verified upload and
 rebatching path, and the I4 durable API runtime/lease primitives are implemented
 foundations. I5 proves process-crash ACK recovery with empty local scratch; P2
-adds verified staging and the isolated DuckDB 2.0 paired-Parquet child. Durable
-Prepare/Publish execution and backup/PITR recovery remain later gates.
+adds verified staging and the isolated DuckDB 2.0 paired-Parquet child. P3 adds
+durable output intents, paged Prepare metadata, ordered fenced Publish, Issue
+application, and API/worker runtime execution. Publication crash/lifecycle
+evidence and backup/PITR recovery remain later gates.
 Pure-Go checks do not rebuild DuckDB.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)

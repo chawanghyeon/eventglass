@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -197,6 +199,50 @@ func (s *S3Store) VerifyObject(ctx context.Context, key string, size int64, chec
 		return errors.New("stored S3 object checksum mismatch")
 	}
 	return nil
+}
+
+// DownloadToFile materializes one supervisor-owned private input and verifies
+// the actual object bytes. Callers must provide a new path in a private task
+// directory; partial data is removed on every failure.
+func (s *S3Store) DownloadToFile(ctx context.Context, key, path string, size int64, checksum string) (retErr error) {
+	if !filepath.IsAbs(path) || size <= 0 || size > MaxJournalBytes {
+		return errors.New("invalid verified download target")
+	}
+	if _, err := decodeHash(checksum); err != nil {
+		return err
+	}
+	objectKey, err := s.objectKey(key)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = file.Close()
+		if retErr != nil {
+			_ = os.Remove(path)
+		}
+	}()
+	s.fullGetRequests.Add(1)
+	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(objectKey)})
+	if err != nil {
+		return fmt.Errorf("get verified object: %w", err)
+	}
+	defer output.Body.Close()
+	hash := sha256.New()
+	written, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(output.Body, size+1))
+	if written > 0 {
+		s.fullGetBytes.Add(uint64(written))
+	}
+	if err != nil || written != size || hex.EncodeToString(hash.Sum(nil)) != checksum {
+		return errors.Join(errors.New("downloaded object checksum mismatch"), err)
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	return file.Close()
 }
 
 func (s *S3Store) Head(ctx context.Context, key string) (ObjectInfo, error) {

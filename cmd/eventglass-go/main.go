@@ -16,7 +16,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/engine"
 )
 
-const version = "0.0.0-g03-p2"
+const version = "0.0.0-g03-p3"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

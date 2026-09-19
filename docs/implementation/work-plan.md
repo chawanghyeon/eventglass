@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P2 are complete; P3 is the first pending packet. Do not mark a packet complete until
+G03 packets P1–P3 are complete; P4 is the first pending packet. Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
 in the implementation commit, not by making per-packet diary files.
 
@@ -50,7 +50,7 @@ using isolated fixtures, never automatic production seed accounts.
 |---|---|---|---|
 | P1 / I5 — complete | control-plane G03, grouping | migrations/0004_publication.sql; issues/group.go,lifecycle.go; model manifest types | Exact fingerprint bytes/slashes/in_app/empty/custom markers/chain; occurrence uniqueness, nullable first/last release; FK negatives |
 | P2 / P1 — complete | ingest conversion, operations child | engine/protocol.go,convert.go; app/worker.go; storage verified output manifests | Actual pinned2.0 bulk append/paired schema/identity/hash/bounds, corrupted final journal line discards staged work, wide-date/max-size, zero selected no files, deadline/spill cleanup; no bundled engine execution |
-| P3 / P2 | ingest Prepare/Publish | control/prepare.go,publish.go,issues.go; ingest worker workflow | N+1 prepared first, takeover prepared fences, lost Prepare/Publish commit reply, revoked project still publishes, mismatch file pairs fail, generation stale worker, multi-lane Issue count exactly once |
+| P3 / P2 — complete | ingest Prepare/Publish | control/prepare.go,publish.go,issues.go; ingest worker workflow | N+1 prepared first, takeover prepared fences, lost Prepare/Publish commit reply, revoked project still publishes, mismatch file pairs fail, generation stale worker, multi-lane Issue count exactly once |
 | P4 / P3 | grouping transitions, crash matrix | tests/crash/publication_test.go; tests/integration/issues_test.go | Resolve cut vs ACK backlog vs new accept, ignored no regress, simultaneous lane regress once, all local files removed recovery, ACK-to-visible p95/file-size distribution; **G03 complete** |
 
 ## Packets G04: secure query engine

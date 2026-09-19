@@ -152,3 +152,90 @@ func TestRuntimeStartsDurableIngressAndDrains(t *testing.T) {
 		t.Fatalf("runtime drain=%v", err)
 	}
 }
+
+func TestRuntimeWorkerPublishesEmptyAckedBatch(t *testing.T) {
+	fixture := setupAcceptFixture(t, 606)
+	environment := requiredEnvironment(t, "EVENTGLASS_DATABASE_URL", "EVENTGLASS_S3_ENDPOINT", "EVENTGLASS_S3_BUCKET")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	if _, err := fixture.pool.Exec(ctx, `UPDATE jobs SET state='completed',owner=NULL,lease_until=NULL WHERE state IN ('queued','running')`); err != nil {
+		t.Fatal(err)
+	}
+	s3Config := storage.S3Config{
+		Endpoint: environment["EVENTGLASS_S3_ENDPOINT"], Region: "us-east-1", Bucket: environment["EVENTGLASS_S3_BUCKET"],
+		Prefix: "runtime-worker-606", PathStyle: true,
+	}
+	identity, err := app.StorageIdentity(s3Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `UPDATE installations SET storage_identity=$1 WHERE singleton`, identity); err != nil {
+		t.Fatal(err)
+	}
+	store := integrationStore(t, s3Config.Prefix)
+	marker, markerKey, _, err := app.InstallationMarker(acceptInstallationID, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(ctx, markerKey, marker); err != nil {
+		t.Fatal(err)
+	}
+	config := app.Config{
+		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
+		ScratchDir: filepath.Join(t.TempDir(), "runtime-worker"), Roles: map[app.Role]bool{app.RoleAPI: true, app.RoleWorker: true}, S3: s3Config, DrainTimeout: 3 * time.Second,
+	}
+	runtime, err := app.NewRuntime(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, stop := context.WithCancel(context.Background())
+	runResult := make(chan error, 1)
+	go func() { runResult <- runtime.Run(runContext) }()
+	select {
+	case <-runtime.Started():
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker runtime did not start")
+	}
+	body := []byte("{}\n{\"type\":\"attachment\",\"length\":4}\n\x00\n\xff\x01")
+	request, err := http.NewRequest(http.MethodPost, fmt.Sprintf("http://%s/api/%d/envelope/?sentry_key=key-%d", runtime.Addr(), fixture.projectID, fixture.tenantID), bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptID := response.Header.Get("X-Eventglass-Receipt")
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || receiptID == "" {
+		t.Fatalf("empty ingest status=%d receipt=%q", response.StatusCode, receiptID)
+	}
+	var laneID int
+	var batchSeq int64
+	if err := fixture.pool.QueryRow(ctx, `SELECT lane_id,batch_seq FROM receipts WHERE acceptance_id=$1`, receiptID).Scan(&laneID, &batchSeq); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var publishedSeq, generation int64
+		var bundles int
+		if err := fixture.pool.QueryRow(ctx, `SELECT published_seq,catalog_generation,(SELECT count(*) FROM bundles WHERE tenant_id=$1) FROM lanes WHERE tenant_id=$1 AND lane_id=$2`, fixture.tenantID, laneID).Scan(&publishedSeq, &generation, &bundles); err != nil {
+			t.Fatal(err)
+		}
+		if publishedSeq == batchSeq {
+			if generation != 1 || bundles != 0 {
+				t.Fatalf("empty publication generation=%d bundles=%d", generation, bundles)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("worker did not publish batch %d", batchSeq)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	stop()
+	if err := <-runResult; err != nil {
+		t.Fatalf("worker runtime drain=%v", err)
+	}
+}

@@ -25,6 +25,10 @@ type Runtime struct {
 	database     *control.RuntimeDatabase
 	store        *storage.S3Store
 	batcher      *ingest.Batcher
+	publication  *control.PublicationOperations
+	converter    *DurableConversionWorkflow
+	publisher    *DurablePublicationWorkflow
+	workerOwner  string
 	handler      http.Handler
 	installation control.RuntimeInstallation
 	markerKey    string
@@ -41,11 +45,11 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	if !config.Roles[RoleAPI] {
-		return nil, errors.New("the current runtime requires the api role")
+	if !config.Roles[RoleAPI] && !config.Roles[RoleWorker] {
+		return nil, errors.New("api or worker role is required")
 	}
-	if config.Roles[RoleWorker] || config.Roles[RoleScheduler] {
-		return nil, errors.New("worker and scheduler roles remain unavailable until their durable loops are implemented")
+	if config.Roles[RoleScheduler] {
+		return nil, errors.New("scheduler role remains unavailable until its durable loop is implemented")
 	}
 	resources, err := ResourcesForRoles(config.Roles)
 	if err != nil {
@@ -93,40 +97,55 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	if err := store.VerifyObject(ctx, markerKey, int64(len(marker)), markerSHA); err != nil {
 		return fail(fmt.Errorf("verify installation marker: %w", err))
 	}
-	operations, err := database.IngestOperations()
-	if err != nil {
-		return fail(err)
-	}
-	processID, err := ingest.NewAcceptanceID()
-	if err != nil {
-		return fail(err)
-	}
-	workflow, err := ingest.NewWorkflow(ingest.WorkflowConfig{
-		Control: operations, Store: store, InstallationID: installation.InstallationID, StorageGeneration: installation.StorageGeneration,
-		ProcessID: processID, TempDir: filepath.Join(config.ScratchDir, "ingest-"+processID), SpoolBudget: resources.Disk,
-	})
-	if err != nil {
-		return fail(err)
-	}
-	batcher, err := ingest.NewBatcher(ingest.BatcherConfig{Processor: workflow})
-	if err != nil {
-		return fail(err)
-	}
-	ingestHandler, err := api.NewIngestHandler(api.Config{
-		Sink: batcher, ResolveProject: operations.LoadProjectTenant,
-		ResolveAuthorization: operations.LoadProjectAuthorization, ResolveOrigins: operations.LoadProjectOrigins,
-		IngressBudget: resources.Ingress, WorkingBudget: resources.Working,
-	})
-	if err != nil {
-		_ = batcher.Drain(context.Background())
-		return fail(err)
-	}
 	runtime := &Runtime{
-		config: config, resources: resources, database: database, store: store, batcher: batcher, installation: installation,
+		config: config, resources: resources, database: database, store: store, installation: installation,
 		markerKey: markerKey, markerBytes: int64(len(marker)), markerSHA: markerSHA, started: make(chan struct{}),
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/api/", ingestHandler)
+	if config.Roles[RoleAPI] {
+		operations, err := database.IngestOperations()
+		if err != nil {
+			return fail(err)
+		}
+		processID, err := ingest.NewAcceptanceID()
+		if err != nil {
+			return fail(err)
+		}
+		workflow, err := ingest.NewWorkflow(ingest.WorkflowConfig{
+			Control: operations, Store: store, InstallationID: installation.InstallationID, StorageGeneration: installation.StorageGeneration,
+			ProcessID: processID, TempDir: filepath.Join(config.ScratchDir, "ingest-"+processID), SpoolBudget: resources.Disk,
+		})
+		if err != nil {
+			return fail(err)
+		}
+		runtime.batcher, err = ingest.NewBatcher(ingest.BatcherConfig{Processor: workflow})
+		if err != nil {
+			return fail(err)
+		}
+		ingestHandler, err := api.NewIngestHandler(api.Config{
+			Sink: runtime.batcher, ResolveProject: operations.LoadProjectTenant,
+			ResolveAuthorization: operations.LoadProjectAuthorization, ResolveOrigins: operations.LoadProjectOrigins,
+			IngressBudget: resources.Ingress, WorkingBudget: resources.Working,
+		})
+		if err != nil {
+			_ = runtime.batcher.Drain(context.Background())
+			return fail(err)
+		}
+		mux.Handle("/api/", ingestHandler)
+	}
+	if config.Roles[RoleWorker] {
+		operations, err := database.PublicationOperations()
+		if err != nil {
+			return fail(err)
+		}
+		owner, err := randomUUID()
+		if err != nil {
+			return fail(err)
+		}
+		runtime.publication, runtime.workerOwner = operations, owner
+		runtime.converter = &DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
+		runtime.publisher = &DurablePublicationWorkflow{Control: operations, Store: store}
+	}
 	mux.HandleFunc("/livez", runtime.livez)
 	mux.HandleFunc("/readyz", runtime.readyz)
 	runtime.handler = mux
@@ -155,7 +174,9 @@ func (runtime *Runtime) Addr() string {
 func (runtime *Runtime) Run(ctx context.Context) error {
 	listener, err := net.Listen("tcp", runtime.config.HTTPAddr)
 	if err != nil {
-		_ = runtime.batcher.Drain(context.Background())
+		if runtime.batcher != nil {
+			_ = runtime.batcher.Drain(context.Background())
+		}
 		runtime.database.Close()
 		return err
 	}
@@ -169,6 +190,12 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	}
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- server.Serve(listener) }()
+	workerResult := make(chan error, 1)
+	workerContext, stopWorker := context.WithCancel(ctx)
+	defer stopWorker()
+	if runtime.publication != nil {
+		go func() { workerResult <- runtime.runWorker(workerContext) }()
+	}
 
 	var cause error
 	select {
@@ -179,10 +206,17 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		}
 	}
 	runtime.ready.Store(false)
+	stopWorker()
 	drainCtx, cancel := context.WithTimeout(context.Background(), runtime.config.DrainTimeout)
 	defer cancel()
 	drainResult := make(chan error, 1)
-	go func() { drainResult <- runtime.batcher.Drain(drainCtx) }()
+	go func() {
+		if runtime.batcher == nil {
+			drainResult <- nil
+			return
+		}
+		drainResult <- runtime.batcher.Drain(drainCtx)
+	}()
 	shutdownErr := server.Shutdown(drainCtx)
 	drainErr := <-drainResult
 	workingErr := runtime.resources.Working.Drain(drainCtx)
@@ -194,6 +228,14 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 			cause = serveErr
 		}
 	default:
+	}
+	if runtime.publication != nil {
+		select {
+		case workerErr := <-workerResult:
+			cause = errors.Join(cause, workerErr)
+		case <-drainCtx.Done():
+			cause = errors.Join(cause, drainCtx.Err())
+		}
 	}
 	runtime.database.Close()
 	return errors.Join(cause, shutdownErr, drainErr, workingErr, ingressErr, diskErr)
