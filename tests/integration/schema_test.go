@@ -88,7 +88,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest) != 5 {
+	if len(manifest) != 6 {
 		t.Fatalf("migration count=%d", len(manifest))
 	}
 	conn, err := pgx.Connect(ctx, env["EVENTGLASS_DATABASE_URL"])
@@ -191,4 +191,64 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 		('00000000-0000-4000-8000-000000003023','convert',302,0,1,'prepared',1)`)
 	exec(`UPDATE object_intents SET conversion_job_id='00000000-0000-4000-8000-000000003013',producer_generation=1,producer_fence=1 WHERE tenant_id=301`)
 	reject(`UPDATE object_intents SET conversion_job_id='00000000-0000-4000-8000-000000003023' WHERE tenant_id=301`, "23503")
+}
+
+func TestMigration0006BackfillsExistingSnapshotAuthority(t *testing.T) {
+	env := requiredEnvironment(t, "EVENTGLASS_DATABASE_URL")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := control.ApplyMigrations(ctx, env["EVENTGLASS_DATABASE_URL"]); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := control.MigrationManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, env["EVENTGLASS_DATABASE_URL"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, manifest[5].DownSQL); err != nil {
+		t.Fatal(err)
+	}
+	const snapshotID = "00000000-0000-4000-8000-000000006006"
+	for _, statement := range []string{
+		`INSERT INTO tenants(tenant_id,auth_revision) VALUES(6006,9)`,
+		`INSERT INTO projects(tenant_id,project_id,scrub_revision,auth_revision) VALUES(6006,60061,1,11)`,
+		`INSERT INTO users(user_id,email_normalized,password_phc,auth_revision)
+		VALUES(6006,'migration-0006@example.invalid','$argon2id$v=19$m=65536,t=3,p=2$ZXZlbnRnbGFzcy1kdW1teQ$3fS7jbTBnU4p8kMPSY1XANFKxf3f6OUt0OXbKsCB9BA',7)`,
+	} {
+		if _, err := tx.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO query_snapshots(snapshot_id,tenant_id,user_id,principal_kind,principal_ref,auth_revision,
+			storage_generation,dataset_hash,dataset_bytes,retention_floor_us,expires_at,max_until)
+		VALUES($1,6006,6006,'user','migration-principal',7,1,repeat('a',64),decode('7b7d','hex'),0,
+			clock_timestamp()+interval '15 minutes',clock_timestamp()+interval '1 hour')`, snapshotID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO snapshot_projects(snapshot_id,tenant_id,project_id) VALUES($1,6006,60061)`, snapshotID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, manifest[5].UpSQL); err != nil {
+		t.Fatal(err)
+	}
+	var tenantRevision, projectRevision int64
+	var retentionDays int
+	var retentionRevision int64
+	if err := tx.QueryRow(ctx, `SELECT s.tenant_auth_revision,sp.project_auth_revision,i.retention_days,i.retention_revision
+		FROM query_snapshots s JOIN snapshot_projects sp USING(snapshot_id,tenant_id) CROSS JOIN installations i
+		WHERE s.snapshot_id=$1 AND i.singleton`, snapshotID).Scan(&tenantRevision, &projectRevision, &retentionDays, &retentionRevision); err != nil {
+		t.Fatal(err)
+	}
+	if tenantRevision != 9 || projectRevision != 11 || retentionDays != 30 || retentionRevision != 1 {
+		t.Fatalf("backfill tenant=%d project=%d retention=%d/%d", tenantRevision, projectRevision, retentionDays, retentionRevision)
+	}
 }

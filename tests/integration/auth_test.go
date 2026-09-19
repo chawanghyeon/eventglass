@@ -147,6 +147,11 @@ func TestSetupSessionCSRFRateLimitsAndAuthorizationInvariants(t *testing.T) {
 	if success.cookie == nil || conflicts != 1 {
 		t.Fatalf("setup success=%#v conflicts=%d", success, conflicts)
 	}
+	var retentionFloor, retentionRevision int64
+	var retentionDays int
+	if err := fixture.pool.QueryRow(ctx, `SELECT retention_days,retention_revision,retention_floor_us FROM installations WHERE singleton`).Scan(&retentionDays, &retentionRevision, &retentionFloor); err != nil || retentionDays != 30 || retentionRevision != 1 || retentionFloor <= 0 {
+		t.Fatalf("setup retention days=%d revision=%d floor=%d err=%v", retentionDays, retentionRevision, retentionFloor, err)
+	}
 	var session generated.Session
 	if err := json.Unmarshal(success.body, &session); err != nil || session.Email != "admin@example.invalid" || len(session.Tenants) != 1 || session.CsrfToken == "" {
 		t.Fatalf("session=%#v err=%v body=%s", session, err, success.body)

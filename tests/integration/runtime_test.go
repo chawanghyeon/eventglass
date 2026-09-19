@@ -61,6 +61,67 @@ func TestRuntimeSchemaAndConversionJobLeaseFencing(t *testing.T) {
 	}
 }
 
+func TestSchedulerRoleAdvancesPersistedRetentionFloor(t *testing.T) {
+	fixture := setupAcceptFixture(t, 608)
+	environment := requiredEnvironment(t, "EVENTGLASS_DATABASE_URL", "EVENTGLASS_S3_ENDPOINT", "EVENTGLASS_S3_BUCKET")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	s3Config := storage.S3Config{
+		Endpoint: environment["EVENTGLASS_S3_ENDPOINT"], Region: "us-east-1", Bucket: environment["EVENTGLASS_S3_BUCKET"],
+		Prefix: "runtime-scheduler-608", PathStyle: true,
+	}
+	identity, err := app.StorageIdentity(s3Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `UPDATE installations SET storage_identity=$1,retention_floor_us=0,retention_tick_at=clock_timestamp()-interval '10 minutes' WHERE singleton`, identity); err != nil {
+		t.Fatal(err)
+	}
+	store := integrationStore(t, s3Config.Prefix)
+	marker, markerKey, _, err := app.InstallationMarker(acceptInstallationID, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Put(ctx, markerKey, marker); err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := app.NewRuntime(ctx, app.Config{
+		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
+		ScratchDir: filepath.Join(t.TempDir(), "runtime-scheduler"), InsecureCookie: true,
+		Roles: map[app.Role]bool{app.RoleScheduler: true}, S3: s3Config, DrainTimeout: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, stop := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- runtime.Run(runContext) }()
+	select {
+	case <-runtime.Started():
+	case <-ctx.Done():
+		t.Fatal("scheduler runtime did not start")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var floor int64
+		var age float64
+		if err := fixture.pool.QueryRow(ctx, `SELECT retention_floor_us,extract(epoch FROM (clock_timestamp()-retention_tick_at)) FROM installations WHERE singleton`).Scan(&floor, &age); err != nil {
+			t.Fatal(err)
+		}
+		if floor > 0 && age < 5 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("scheduler did not advance floor: floor=%d age=%f", floor, age)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	stop()
+	if err := <-result; err != nil {
+		t.Fatalf("scheduler runtime drain=%v", err)
+	}
+}
+
 func TestRuntimeStartsDurableIngressAndDrains(t *testing.T) {
 	fixture := setupAcceptFixture(t, 605)
 	environment := requiredEnvironment(t, "EVENTGLASS_DATABASE_URL", "EVENTGLASS_S3_ENDPOINT", "EVENTGLASS_S3_BUCKET")

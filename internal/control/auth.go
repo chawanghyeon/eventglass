@@ -286,6 +286,7 @@ func (operations *AuthOperations) FinalizeSetup(ctx context.Context, command Set
 	}
 	if _, err := tx.Exec(ctx, `UPDATE installations SET setup_state='ready',setup_attempt=NULL,setup_request_fingerprint=NULL,
 		setup_owner=NULL,setup_lease_until=NULL,bootstrap_token_hash=NULL,setup_completed_at=clock_timestamp(),
+		retention_floor_us=GREATEST(retention_floor_us,floor(extract(epoch FROM (clock_timestamp()-retention_days*interval '1 day'))*1000000)::bigint),
 		retention_tick_at=clock_timestamp() WHERE singleton`); err != nil {
 		return SessionPrincipal{}, err
 	}
@@ -572,6 +573,11 @@ func (operations *AuthOperations) ReplaceMembership(ctx context.Context, command
 	}
 	defer tx.Rollback(ctx)
 	if _, err := tx.Exec(ctx, `SELECT tenant_id FROM tenants WHERE tenant_id=$1 FOR UPDATE`, command.TenantID); err != nil {
+		return 0, err
+	}
+	// Snapshot admission takes tenant then user locks to serialize shared caps
+	// and permission revisions. Membership replacement follows the same order.
+	if _, err := tx.Exec(ctx, `SELECT user_id FROM users WHERE user_id=$1 FOR UPDATE`, command.TargetUserID); err != nil {
 		return 0, err
 	}
 	var currentRole string

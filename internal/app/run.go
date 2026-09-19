@@ -28,6 +28,7 @@ type Runtime struct {
 	store        *storage.S3Store
 	batcher      *ingest.Batcher
 	publication  *control.PublicationOperations
+	queryControl *control.QueryOperations
 	converter    *DurableConversionWorkflow
 	publisher    *DurablePublicationWorkflow
 	workerOwner  string
@@ -47,11 +48,8 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	if !config.Roles[RoleAPI] && !config.Roles[RoleWorker] {
-		return nil, errors.New("api or worker role is required")
-	}
-	if config.Roles[RoleScheduler] {
-		return nil, errors.New("scheduler role remains unavailable until its durable loop is implemented")
+	if !config.Roles[RoleAPI] && !config.Roles[RoleWorker] && !config.Roles[RoleScheduler] {
+		return nil, errors.New("api, worker, or scheduler role is required")
 	}
 	resources, err := ResourcesForRoles(config.Roles)
 	if err != nil {
@@ -197,6 +195,13 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		runtime.converter = &DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
 		runtime.publisher = &DurablePublicationWorkflow{Control: operations, Store: store}
 	}
+	if config.Roles[RoleScheduler] {
+		operations, err := database.QueryOperations()
+		if err != nil {
+			return fail(err)
+		}
+		runtime.queryControl = operations
+	}
 	mux.HandleFunc("/livez", runtime.livez)
 	mux.HandleFunc("/readyz", runtime.readyz)
 	runtime.handler = mux
@@ -247,6 +252,10 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if runtime.publication != nil {
 		go func() { workerResult <- runtime.runWorker(workerContext) }()
 	}
+	schedulerResult := make(chan error, 1)
+	if runtime.queryControl != nil {
+		go func() { schedulerResult <- runtime.runRetentionScheduler(workerContext) }()
+	}
 
 	var cause error
 	select {
@@ -284,6 +293,14 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		select {
 		case workerErr := <-workerResult:
 			cause = errors.Join(cause, workerErr)
+		case <-drainCtx.Done():
+			cause = errors.Join(cause, drainCtx.Err())
+		}
+	}
+	if runtime.queryControl != nil {
+		select {
+		case schedulerErr := <-schedulerResult:
+			cause = errors.Join(cause, schedulerErr)
 		case <-drainCtx.Done():
 			cause = errors.Join(cause, drainCtx.Err())
 		}

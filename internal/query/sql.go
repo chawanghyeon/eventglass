@@ -34,6 +34,26 @@ func CompilePredicate(root *Node) (SQLPredicate, error) {
 	return SQLPredicate{Text: text, Args: compiler.args}, nil
 }
 
+func CompileCursorPredicate(sortName string, last CursorTuple) (SQLPredicate, error) {
+	if !validCursor(sortName, 1, last) {
+		return SQLPredicate{}, errors.New("invalid cursor tuple")
+	}
+	switch sortName {
+	case "event_desc":
+		return SQLPredicate{
+			Text: `(r.event_time_us,r.event_time_ns_remainder,r.record_id) < (?,?,?)`,
+			Args: []any{*last.EventUS, *last.EventNS, last.RecordID},
+		}, nil
+	case "received_desc":
+		return SQLPredicate{
+			Text: `(r.received_time_us,r.lane_id,r.batch_seq,r.record_ordinal,r.record_id) < (?,?,?,?,?)`,
+			Args: []any{*last.ReceivedUS, *last.LaneID, *last.BatchSeq, *last.RecordOrdinal, last.RecordID},
+		}, nil
+	default:
+		return SQLPredicate{}, errors.New("unsupported cursor sort")
+	}
+}
+
 // BuildPlan is the only public composition point for a row scan. It keeps the
 // authenticated dataset and captured snapshot scope outside the user predicate,
 // so even a constant-true OR expression cannot weaken mandatory predicates.

@@ -43,8 +43,9 @@ sdk_outcomes. Their source is authoritative for current column names.
 | 0003_ingest_policy | G02 | Tenant auth_revision; project name/origins/scrub policy; retention policy; receipt unsupported metadata; intent retirement/protection fields; jobs prepared support |
 | 0004_publication | G03 | job_outputs, bundles, files, file_blocks, bundle_projects, Issues, occurrences, issue_transitions |
 | 0005_auth_queries | G04 | users/memberships/grants/sessions/login limits/audit, snapshots/query tasks, retention/recovery/bootstrap policy fields |
-| 0006_alerts | G05 | destinations, alerts, evaluations, deliveries, audit action additions |
-| 0007_maintenance | G06 | maintenance_tasks, maintenance_inputs, backup_sets |
+| 0006_query_snapshots | G04 | immutable post-Q1 snapshot authority revisions and installation retention policy |
+| 0007_alerts | G05 | destinations, alerts, evaluations, deliveries, audit action additions |
+| 0008_maintenance | G06 | maintenance_tasks, maintenance_inputs, backup_sets |
 
 The sequence is a starting manifest for this tree. If a packet requires an
 additional migration, append the next free version and update this table in
@@ -153,10 +154,12 @@ until then. Benchmark the worst-case metadata transaction in G03.
   safety checks lock the tenant row before user rows.
 - query_snapshots(snapshot_id UUID PK, tenant_id, user_id, principal_kind
   user/alert, principal_ref, auth_revision, storage_generation, dataset_hash,
-  dataset_bytes BYTEA <=32 KiB, retention_floor_us, created_at, expires_at, max_until,
-  state active/released). For alerts user_id is nullable and principal_ref is
-  an alert UUID; user snapshots have user_id nonnull. Unique scoped identity.
-- snapshot_projects PK(snapshot_id,project_id), tenant/project FK.
+  dataset_bytes BYTEA <=32 KiB, retention_floor_us, tenant_auth_revision,
+  created_at, expires_at, max_until, state active/released). For alerts user_id
+  is nullable and principal_ref is an alert UUID; user snapshots have user_id
+  nonnull. Unique scoped identity.
+- snapshot_projects PK(snapshot_id,project_id), tenant/project FK and captured
+  project_auth_revision.
   snapshot_lanes PK(snapshot_id,tenant_id,lane_id), lane FK, cut_seq and
   catalog_generation bigint; indexed (tenant_id,lane_id,catalog_generation).
 - query_jobs(query_id UUID PK, tenant_id, user_id nullable, principal_ref,
@@ -204,10 +207,12 @@ Installation also holds recovery_state ready/restoring/verification_required,
 retention_days (1..3650), retention_revision bigint, retention_floor_us monotonic,
 retention_tick_at timestamptz, encryption key ID,
 and alerts_paused Boolean. Encryption key material is a mounted secret, not PG.
-Retention days/revision are added by0003 because dedupe needs them; snapshot floor,
-recovery state and bootstrap state are added by0005;0007 adds backup/task state.
+Project retention days/revision are added by0003 because dedupe needs them;
+snapshot floor, recovery state and bootstrap state are added by0005;0006 adds
+installation retention policy and immutable snapshot authority revisions;0008
+adds backup/task state.
 G04 management mutations require
-audit_events: create that table in0005 and extend its action enum in0006.
+audit_events: create that table in0005 and extend its action enum in0007.
 G03 Issue mutation operation IDs live in issue_transitions.operation_id with a
 scoped unique index; add the nullable actor FK in0005. Preserve these IDs when
 adding general management auditing; don't erase retry history on upgrade.
@@ -217,7 +222,7 @@ columns per C04; preserve exact decoded values.
 Replace sdk_outcomes string-key PK with category/reason digests per C04 while
 retaining full encoded strings; never index unbounded SDK values directly.
 0005 adds setup attempt/
-state/marker/fingerprint/lease fields per C08.0007 adds batch recovery_state
+state/marker/fingerprint/lease fields per C08.0008 adds batch recovery_state
 live/retired, journal_retired_at, nullable journal FK with retired/published CHECK,
 and compact retirement summaries per C07. No current applied migration changes.
 
@@ -225,7 +230,13 @@ and compact retirement summaries per C07. No current applied migration changes.
 
 All control methods own Begin/Commit/Rollback. No caller receives a pgx.Tx.
 Default READ COMMITTED; snapshot registration REPEATABLE READ. Retry 40001 and
-40P01 at most 3 attempts with 10/30/90 ms randomized delay bounded by deadline.
+40P01 at most 3 times after the initial attempt, with 10/30/90 ms randomized
+delay bounded by deadline.
+User snapshot admission first takes a tenant-scoped PostgreSQL session advisory
+lock, then begins the single REPEATABLE READ registration transaction. This
+prevents a retry storm from exposing serialization failures when several API
+instances submit against the same cap. Always unlock before returning the
+connection to the pool; close the session if unlock cannot be confirmed.
 Network work, password hashing, native execution and webhook sends occur outside
 transactions. statement_timeout 5s and lock_timeout 2s initially, overridable
 per maintenance operation (30s maximum); never disable timeouts globally.

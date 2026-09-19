@@ -118,6 +118,34 @@ func TestScopedPlanExecutesMandatoryPredicatesBeforeConstantOR(t *testing.T) {
 	}
 }
 
+func TestCursorKeysetKeepsEqualTimeRowsExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	db, err := engine.Open(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	a, b, c, z := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("f", 64)
+	for _, statement := range []string{
+		`CREATE TABLE positions(event_time_us BIGINT,event_time_ns_remainder INTEGER,record_id VARCHAR)`,
+		`INSERT INTO positions VALUES (10,5,'` + c + `'),(10,5,'` + b + `'),(10,5,'` + a + `'),(9,999,'` + z + `')`,
+	} {
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := queryIDs(t, ctx, db, `SELECT record_id FROM positions r ORDER BY event_time_us DESC,event_time_ns_remainder DESC,record_id DESC LIMIT 2`)
+	eventUS, eventNS := int64(10), 5
+	predicate, err := query.CompileCursorPredicate("event_desc", query.CursorTuple{EventUS: &eventUS, EventNS: &eventNS, RecordID: first[len(first)-1]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := queryIDs(t, ctx, db, `SELECT record_id FROM positions r WHERE `+predicate.Text+` ORDER BY event_time_us DESC,event_time_ns_remainder DESC,record_id DESC LIMIT 2`, predicate.Args...)
+	if got, want := append(first, second...), []string{c, b, a, z}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pages=%v want=%v", got, want)
+	}
+}
+
 func createQueryFixture(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	_, err := db.ExecContext(ctx, `CREATE TABLE records (
