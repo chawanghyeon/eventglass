@@ -8,6 +8,10 @@ source brief is immutable historical input, not a competing architecture.
 [Implementation contracts](docs/implementation/README.md) specialize this map
 into schema, concrete transactions, APIs, runtime protocols and testable packets.
 They describe planned work, not completed capabilities.
+Cross-boundary correctness contracts make prepared jobs restart-complete, separate
+object provenance from current worker authority, and bound metadata/merge work
+as well as record processing. Reuse standard big-integer arithmetic only for
+bounded aggregate finalization; native DuckDB still owns scans and grouping.
 
 ## Deployment and authority
 

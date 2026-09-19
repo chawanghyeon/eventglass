@@ -5,6 +5,11 @@ table-driven tests before implementing the corresponding operation. SQL/native
 results must agree with hand-calculated values, not an oracle calling the same
 production compiler/reducer/grouping implementation.
 
+Machine-readable [contract-cases.json](contract-cases.json) adds17 arithmetic,
+rounding, retention and string vectors for correctness C03/C04/C07. Load these
+directly in packet tests; do not silently regenerate expected values from the
+production implementation. They are design artifacts, not passing native tests.
+
 ## E1: acceptance selection and rebatching
 
 One tenant/lane journal has requests A with4 records, B with0, C with1. Global
@@ -121,7 +126,7 @@ credentials before activation, since SQL fencing alone cannot prevent late PUT.
 | Accept | acceptance_id + tenant/project + request content SHA |
 | Prepare | job_id + prepare_fence + manifest root SHA |
 | Publish | job_id + prepared_output_id + manifest root SHA, current claimed authority |
-| Query task complete | query_id/stage/partition + live fence + result SHA |
+| Query task complete | query_id/stage/level/partition + live fence + result SHA |
 | Issue mutation | optional scoped operation_id + actor + sanitized action hash; otherwise revision CAS |
 | Threshold evaluation | alert_id/revision/window_end_us |
 | Issue alert decision | alert_id/revision/transition_id |

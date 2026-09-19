@@ -30,7 +30,10 @@ or AWS region, bucket,prefix; `installations.storage_identity` must match. S3
 prefix is server configured, not request-supplied. Startup does read-only HEAD/
 scoped capability checks; missing installation marker on an already initialized
 PG instance fails, never auto-creates a new empty installation. Initial setup
-creates/verifies a small scoped marker and records its SHA before readiness.
+reserves identity, creates/verifies a scoped marker, then finalizes PG authority
+per [correctness C08](correctness.md#c08--initialization-is-a-recoverable-cross-store-operation).
+Setup/status routes stay available while readyz is503; readiness cannot be a
+prerequisite to reach setup. No S3 I/O while holding the installation SQL lock.
 Credentials/default chain run only in supervisor. TLS verification mandatory;
 custom CA allowed, skip-verify not a production option.
 
@@ -138,7 +141,8 @@ generation stayed unchanged (that would starve compaction under ingest). Do not
 advance published_seq. Failure before swap leaves originals current; retries
 never retire unrelated files.
 
-Retention advances monotonic installation floor=max(previous_floor,DBnow-days).
+Retention advances persisted monotonic installation floor every60s; policy changes
+preserve old-policy expiry before installing a new policy (correctness C07).
 This is logical visibility for **new snapshots**; widening retention does not
 resurrect data. Scheduler scans current bundles by received bounds. Fully older
 bundles close their interval without replacement; mixed bundles use same reserve/
@@ -149,7 +153,10 @@ Occurrence detail rows delete only after no snapshot can need them; lifetime
 Issue summary remains. Dedupe/receipts retain at least retention+7days and until
 no pending job/outcome/occurrence FK needs them; expiry is minimum, not automatic
 cascade deletion. Remove referenced child/parent rows explicitly in bounded
-transactions (<=1,000 records) while preserving batch recovery metadata.
+transactions (<=1,000 records) while preserving batch recovery metadata. Follow
+C07's retirement transaction to release the journal FK only for a fully retired
+published batch; a permanent FK/reference cannot coexist with claiming its
+journal is eventually collectible. Pending/failed batches never release it.
 On retention increase, extend existing dedupe/receipt protection to at least
 received_time+new_retention+7days. Accept's expired-dedupe check uses the maximum
 of stored expires_at and that current-policy bound, so it remains safe while

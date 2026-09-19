@@ -97,12 +97,15 @@ is not a PostgreSQL transaction held open for the browser's whole session.
 Scope revision is user's auth_revision plus tenant/project auth revisions in
 dataset authorization state. Disabling any requested project aborts read even
 if files remain. Reuse revalidates all scope, snapshot active/TTL/generation,
-query hash and principal. New snapshot stores absolute retention floor=max of
-installation monotonic floor and DBnow-retention; existing snapshot retains
-its own floor. Extension30s heartbeat up to created+1h, TTL15min. Releasing or
-expiring snapshot invalidates associated tasks and capabilities. A worker must
-finish or be canceled before supervisor releases task pins; no reading after
-successful release. Physical GC handles expired readers by fencing gateway I/O.
+query hash and principal. New snapshot stores the persisted installation floor
+from correctness C07; no unrecorded per-request floor may later be forgotten.
+Existing snapshot retains its own floor. Extension30s heartbeat up to created+1h,
+TTL15min. Releasing/expiring snapshot logically invalidates tasks and results
+immediately. Supervisors revoke capabilities, cancel children and reclaim local
+permits after exit. A network partition cannot recall an already-started S3 read;
+late results must fail the authoritative SQL completion/response checks. GC uses
+durable pin expiry and retirement grace, not a claim that remote I/O stopped
+instantaneously. Do not block DELETE indefinitely waiting for a dead worker.
 
 Catalog: valid_from<=captured_G and (valid_to is null or captured_G<valid_to),
 exact bundle project intersection, event/received range bounds. Never use a
@@ -140,7 +143,8 @@ scope checks; never reveal another tenant's existence.
 
 ## Task partitioning and execution
 
-Coordinator writes immutable partitions before dispatch: sorted file_id lists,
+Coordinator seals immutable partitions before dispatch, with planning state,
+catalog paging and metadata quotas specified in [correctness C06](correctness.md#c06--query-planning-and-merging-are-bounded-including-metadata): sorted file_id lists,
 up to8 files or target64MiB compressed; a larger file is its own task. Each
 analytics file belongs to exactly one scan partition. Payload files are excluded
 except detail. Row-group splitting remains disabled unless independently proven.
@@ -174,7 +178,7 @@ against a new snapshot.
 
 ## Exact merge contracts
 
-Rows: bounded k-way merge of sorted local limit+1 results, identical tuple
+Rows: fan-in8 tree of bounded k-way merges of sorted local limit+1 results, identical tuple
 comparison. Detail: exactly0/1 canonical ID; >1 is data-corruption error. Return
 one record's scrubbed raw and projections, not full payload files to browser.
 
@@ -182,11 +186,13 @@ Aggregates: at most2 dimensions,8 metrics. Each metric names a fixed numeric
 field (severity_number) or typed numeric attr. count counts rows; sum/min/max/avg
 count only matching numeric type. Missing/invalid/other types increment excluded
 count. Each task emits all groups (not local Top-K), and per metric count/sum/
-min/max sufficient state. avg merges sum+valid_count. Integer sum is exact
-DECIMAL(38,0); integer avg result is decimal string with scale9 and half-even
-rounding **after global sum/count**. Double metrics are finite JSON numbers;
-reduce partitions in ascending partition_id and test DESIGN tolerance. Integer
-overflow or nonfinite output422, never coerced string Infinity or float fallback.
+min/max sufficient state. Integer sum/avg use the5 exact signed limbs specified
+in correctness C03 through every reduction level. Only final exposed sum checks
+DECIMAL(38,0) range; avg divides the full numerator with integer half-even scale9
+rounding. Never use native decimal division assuming an exact decimal result.
+Double metrics are finite JSON numbers; reduce in the fixed C06 tree order and
+test DESIGN tolerance. Final integer overflow or nonfinite output422, never
+coerced string Infinity or float fallback.
 
 Group keys encode type tags and canonical values. Missing and explicit null are
 separate tags; integer1/double1.0/string"1" remain separate. Normalize -0 double
@@ -197,9 +203,14 @@ missing. group_attr is not allowed in filter/metric AST. See the independently
 calculated [examples](examples.md) for expected typed groups and global ranks.
 Default rank count DESC then canonical group-key bytes ASC, optional sort by one
 requested metric ASC/DESC with null last and same tie break. top<=1,000 applies
-only after global merge. If union exceeds20,000 groups or total intermediate
-uncompressed bytes exceeds64MiB, fail422 query_limit_exceeded. Track total bytes
-across all tasks, not just each task's cap. Reducer uses isolated native process
+only after exact integer finalization (C03); avg ranks its unrounded rational
+value, not a float cast or rounded display string. A bounded final Top-K heap
+may compare reduced integer states without moving scans/grouping out of DuckDB.
+The final group limit applies
+only after global merge. If union exceeds20,000 groups or a C06 stage's total
+intermediate uncompressed bytes exceeds64MiB, fail422 query_limit_exceeded. Track
+bytes across all tasks in that level, not just each task's cap; repeated reduction
+levels count in actual cost but have separate bounded working sets. Reducer uses isolated native process
 under same worker budget/spill cap; streaming partials never all load into Go.
 
 Histogram chooses interval from 1s,10s,1m,5m,1h,1d; <=2,000 buckets. Start bucket
@@ -224,13 +235,15 @@ and filter, delivers bounded batches. Within a lane ascending(seq,ordinal), UI
 may visually sort across lanes. After *all* results in the scanned interval are
 sent, emit checkpoint to cut including zero-match intervals. If more matches
 than one batch, checkpoint only fully emitted prefix; don't skip unsent rows.
-State advanced only by client-confirmed Last-Event-ID on reconnect. Replays can
-repeat rows; frontend dedupes by record_id in its bounded list.
+Resume uses Last-Event-ID or matching explicit resume_token; if both differ400.
+An SSE ID is a resume checkpoint, not a client rendering ACK (correctness C05).
+Replays can repeat rows; frontend dedupes by record_id in its bounded list.
 
 SSE events: rows, checkpoint, heartbeat, resync_required, error. id is live token
 on rows/checkpoint; max256KiB pending data/connection, max32/API, heartbeat15s.
 Query pages cap100 rows and output bytes; oversized single detail is never sent
 on Live (list projection only). Resync if catchup>15min, >10,000 rows/10s, expired
-generation or slow client buffer limit. Abort with403 on auth recheck before
-next batch. Release each polling snapshot after transmission; never keep an
+generation or slow client buffer limit. On revoked auth return403 before headers,
+otherwise emit forbidden error event and close before another data batch.
+Release each polling snapshot after transmission; never keep an
 unbounded persistent snapshot just because SSE stays open.

@@ -41,6 +41,9 @@ and methods over generic abstractions; one SQL transaction per named operation.
 
 I1 can add prepared enum before G03 table exists; add nullable prepared_output_id
 and FK in P1. Do not run nonexistent later web/scale tests to claim I1 passed.
+I4 exposes durable ingress only for explicitly initialized test/CLI installations;
+it does not advertise public bootstrap/login before Q1. Initialize test tenants
+using isolated fixtures, never automatic production seed accounts.
 
 ## Packets G03: publication and Issue state
 
@@ -133,6 +136,41 @@ D15..D16 G05, D17..D18 G06/G08. Each test records failpoint reached and bounded
 deadline; a timeout without reaching barrier fails, not a skipped race.
 
 ## Traceability and handoff checklist
+
+### Mandatory cross-boundary cases
+
+Read [correctness.md](correctness.md) C sections below before the named packet.
+These add acceptance cases to the existing27 packets, not a parallel backlog.
+Import [contract-cases.json](contract-cases.json) as fixed expected data; do not
+regenerate it from production code. A pure arithmetic model checks design math,
+not native SQL, PG locks, browser behavior or real storage durability.
+
+| ID | Contract / packet | Required result |
+|---|---|---|
+| H01 | C01 / P1,P3,P4 | Prepare then SIGKILL/delete scratch; replacement publisher reconstructs all Issues from durable summaries, no S3 work in SQL transaction |
+| H02 | C01 / I2,P3,M2 | Producer live longer than10min preserves early uploaded parts; expired/stale producer does not; prepared refs survive unleased wait |
+| H03 | C02 / I3,I5,R4 | Correct Head metadata with wrong stored bytes cannot ACK; incorrect provider checksum rejected; explicit readback profile counts full GET |
+| H04 | C03 / Q4 | M+1 in one partition and -1 in another returns M=10^38-1, all partition layouts identical; M+1 final returns422 |
+| H05 | C03 / Q4 | avg(M,M)=M.000000000; exact half-even positive/negative ties; native and independent arbitrary-precision oracle agree |
+| H06 | C04 / I1,P2,Q1,Q2,A2 | NUL and literal backslash-u are distinct through PG/Parquet/driver/UI; long SDK reason avoids B-tree-key failure; signed webhook retries preserve exact bytes |
+| H07 | C05 / Q1,U1 | Reload/multiple tabs get stable CSRF; another session has different token; grant revoke invalidates scope while session can reload current grants |
+| H08 | C05 / Q1 | Password reset between hash verification and login commit rejects stale credentials; auth/credential revisions invalidate old scope/session correctly |
+| H09 | C06 / Q3,Q4 | Crash during planning cannot dispatch half-plan; takeover uses same snapshot; each metadata cap produces422 without silent first-page selection |
+| H10 | C06 / Q3,Q4 | Concurrent submissions across2 APIs respect user/tenant snapshot/query caps atomically; expiry/cancel frees slots exactly once |
+| H11 | C06 / Q4,R1 |4,096 partitions yield585 reducers with fan-in<=8; retries counted once; fixed tree preserves rowTopK/all aggregate groups/limbs and stage byte budgets |
+| H12 | C07 / Q3,M2 | Widen retention between snapshots cannot reveal a hidden row; backward clock never lowers floor; tick stale>120s rejects new snapshot |
+| H13 | C07 / M2,M4 | Retired published batch releases journal FK only after holds; pending batch never does; old backup still protects former journal |
+| H14 | C08 / Q1 | Kill before/after marker and after final setup commit; exactly one installation/admin, token consumed once, no network under DB lock |
+| H15 | C08 / Q1 | Two different bootstrap bodies cannot share attempt; setup routes reachable while readyz503; bad/missing S3 identity cannot become empty installation |
+| H16 | C05 / U2 | Revocation after SSE headers emits forbidden error+close, never attempts late HTTP status; reconnect checkpoint is not misrepresented as rendering ACK |
+| H17 | C06 / Q4,M3 | Partitioned worker finishes read after cancellation/release; late output rejected by SQL, no expired complete result, no local permit release before process exit |
+| H18 | C09 / I5,P4,R3 | Single-record vs real SDK batches,1/2 APIs; measured journal/bundle/checksum-GET amplification and total costs, no invented large-file efficiency |
+
+Q3 includes the60s persisted retention-floor tick in app/scheduler and initial
+floor fields; M2 later adds physical rewrite/GC. Do not defer the logical floor
+to G06 while enabling G04 queries with a different retention rule.
+
+### Product coverage
 
 | Required behavior | Contract | Closing packets |
 |---|---|---|

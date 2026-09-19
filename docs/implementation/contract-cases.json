@@ -1,0 +1,64 @@
+{
+  "format_version": 1,
+  "status": "design_vectors_not_product_test_results",
+  "integer_cases": [
+    {
+      "id": "C03-cancel-after-local-overflow",
+      "metric": "sum",
+      "partitions": [["99999999999999999999999999999999999999", "1"], ["-1"]],
+      "expected": "99999999999999999999999999999999999999"
+    },
+    {
+      "id": "C03-final-sum-overflow",
+      "metric": "sum",
+      "partitions": [["99999999999999999999999999999999999999"], ["1"]],
+      "expected_error": "numeric_overflow"
+    },
+    {
+      "id": "C03-average-with-wide-numerator",
+      "metric": "avg",
+      "partitions": [["99999999999999999999999999999999999999"], ["99999999999999999999999999999999999999"]],
+      "expected": "99999999999999999999999999999999999999.000000000"
+    },
+    {
+      "id": "C03-weighted-average",
+      "metric": "avg",
+      "partitions": [["2", "4"], ["100"]],
+      "expected": "35.333333333"
+    },
+    {
+      "id": "C03-negative-average",
+      "metric": "avg",
+      "partitions": [["-2", "-4"], ["-100"]],
+      "expected": "-35.333333333"
+    },
+    {
+      "id": "C03-empty-sum",
+      "metric": "sum",
+      "partitions": [[], []],
+      "expected": null
+    },
+    {
+      "id": "C03-zero-not-null",
+      "metric": "sum",
+      "partitions": [["-1"], ["1"]],
+      "expected": "0"
+    }
+  ],
+  "average_finalization_cases": [
+    {"id": "C03-half-even-zero", "sum": "1", "count": "2000000000", "expected": "0.000000000"},
+    {"id": "C03-half-even-up", "sum": "3", "count": "2000000000", "expected": "0.000000002"},
+    {"id": "C03-half-even-negative", "sum": "-3", "count": "2000000000", "expected": "-0.000000002"}
+  ],
+  "retention_change_cases": [
+    {"id": "C07-widen-no-resurrection", "now_us": "3456000000000", "old_days": 30, "new_days": 60, "old_floor_us": "0", "expected_floor_us": "864000000000"},
+    {"id": "C07-shorten", "now_us": "3456000000000", "old_days": 60, "new_days": 7, "old_floor_us": "0", "expected_floor_us": "2851200000000"},
+    {"id": "C07-backward-clock", "now_us": "1728000000000", "old_days": 30, "new_days": 60, "old_floor_us": "2592000000000", "expected_floor_us": "2592000000000"}
+  ],
+  "string_cases": [
+    {"id": "C04-nul", "value": "left\u0000right", "pg_json_string": "\"left\\u0000right\""},
+    {"id": "C04-literal-backslash", "value": "left\\u0000right", "pg_json_string": "\"left\\\\u0000right\""},
+    {"id": "C04-null-word", "value": "null", "pg_json_string": "\"null\""},
+    {"id": "C04-empty", "value": "", "pg_json_string": "\"\""}
+  ]
+}

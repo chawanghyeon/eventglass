@@ -78,9 +78,9 @@ source IDs always select a new candidate. No message/trace dedupe.
 Intent registration is a short committed transaction with installation/generation,
 tenant, immutable object key, expected size/SHA, owner random process UUID,
 fence1, state pending, expires_at DBnow+10min. Before upload check authority is
-still live. After PUT, verify Head size+own SHA metadata; local hashing and
-the provider transport establish uploaded bytes, while replay/block verification
-detects later corruption. ETag alone never establishes SHA. Mark uploaded only
+still live. After PUT, verify size and stored content with provider-validated
+full-object SHA or bounded readback per [correctness C02](correctness.md#c02--upload-verification-establishes-bytes-not-user-metadata).
+Own Head metadata and ETag alone do not establish stored-byte SHA. Mark uploaded only
 with matching tuple and pending state and live expiry; failed conditional update
 means orphan, not permission to call Accept.
 
@@ -179,7 +179,8 @@ For one claimed batch:
    grouping version and aggregate accepted counts. Total selected record set
    must match outputs; duplicate ID or missing output is fatal.
 6. `control.Prepare` checks job live authority and all verified intents, inserts
-   immutable job_outputs, references outputs as prepared, sets job prepared and
+   immutable job_outputs/parts and selected error summaries (correctness C01),
+   references outputs as prepared, sets job prepared and
    clears owner/lease. No catalog visibility, Issue changes or cut movement yet.
 
 One batch per conversion is a deliberate v1 simplification. Small outputs are
@@ -207,7 +208,9 @@ Publish transaction (no external I/O):
    evidence/counts and all referenced inputs still agree with receipts. No new
    project/key checks; ACK survives revocation/disable.
 3. Lock/create Issues ordered by issue_id. Insert unique error occurrences;
-   lifecycle deltas count inserted rows only. Apply the transitions below.
+   lifecycle deltas count inserted rows only. Load complete occurrence/Issue
+   inputs from job_output_occurrences, not converter memory or S3 inside the
+   transaction. Apply the transitions below.
 4. At G=catalog_generation+1 insert bundles/files/block hashes/project members.
    Set output published, batch published, job completed+clear lease. Insert
    unique issue_transitions/outbox source events in same tx. Set published_seq

@@ -8,6 +8,10 @@ The detailed [implementation handoff](docs/implementation/README.md) freezes
 schema additions, transaction algorithms, API/UI contracts, operation protocols
 and ordered testable work packets. Read it before continuing G02. It specializes
 this document; it does not claim that the planned system is already implemented.
+Cross-boundary [correctness contracts](docs/implementation/correctness.md) specify
+restart-complete preparation, upload byte verification, exact partial aggregates,
+legal-string storage, session reload, bounded query planning and retention/setup
+races. Their test cases are additional gate requirements, not optional guidance.
 
 ## 0. Decisions and scope
 
@@ -292,7 +296,7 @@ Scope FKs or operation checks must prevent cross-tenant references with negative
 
 ### 7.2 Object intents
 
-Before upload, commit pending intent/key/expiry/fence. Verify uploaded size/checksum. Accept/Publish locks and validates the intent before referencing it. GC locks expired intents and sets deleting before S3 DELETE; deleting objects cannot publish. Retain tombstones/resweep because stale workers may PUT after deletion. Never adopt late uploads or delete live files solely from LIST. Quarantine unknown ownership.
+Before upload, commit pending intent/key/expiry/fence. Verify uploaded size/content checksum using provider-validated full-object SHA or bounded readback; own Head metadata alone is not content verification. Accept/Publish locks and validates the intent before referencing it. GC locks expired intents and sets deleting before S3 DELETE; deleting objects cannot publish. A matching live producer or prepared output reference protects in-progress outputs. Retain tombstones/resweep because stale workers may PUT after deletion. Never adopt late uploads or delete live files solely from LIST. Quarantine unknown ownership.
 
 Every upload attempt has a distinct immutable object key. Job/intent authority includes installation, storage_generation, owner and fence; validate it in every state-changing transaction. Restore quiesces old writers before advancing generation. Incrementing a restored per-job fence alone is insufficient to fence an old worker.
 
@@ -384,9 +388,9 @@ Field/operator/function names come from fixed maps; bind values and validated na
 
 ### 10.1 Tasks
 
-Plan contains snapshot_id/scope/filter hash/schema/projection/sort/aggregate/explicit file manifests/estimated bytes/deadline. Workers cannot rediscover a different file set. Initial task target64MiB compressed or8files, max4 parallel tasks/snapshot; small queries stay single-worker. Unless verified native row-group selection exists, assign each file to exactly one partition. G00 must prove finer splitting before use.
+Plan contains snapshot_id/scope/filter hash/schema/projection/sort/aggregate/explicit file manifests/estimated bytes/deadline. Workers cannot rediscover a different file set. Initial task target64MiB compressed or8files, max4 parallel tasks/query; small queries stay single-worker. Planning seals a bounded manifest before dispatch (32,768 files/4,096 scan partitions/16MiB metadata); exceeding limits fails explicitly. Reduction uses a deterministic fan-in8 tree. Unless verified native row-group selection exists, assign each file to exactly one partition. G00 must prove finer splitting before use.
 
-query_tasks has UNIQUE(query_id,stage,partition_id), attempt/fence/output checksum. Reducer consumes one winning attempt per partition, never sums retries twice or accepts late canceled outputs. Large partials use internal S3 temporary objects under query TTL/GC.
+query_tasks has UNIQUE(query_id,stage,level,partition_id), attempt/fence/output checksum. Reducer consumes one winning attempt per partition, never sums retries twice or accepts late canceled outputs. Large partials use internal S3 temporary objects under query TTL/GC.
 
 ### 10.2 Rows
 
@@ -396,13 +400,13 @@ Each task selects limit+1 using identical scope/filter/cursor/sort; reducer perf
 
 Required count/sum/min/max/avg/histogram, max2 group dimensions and8 metrics. DISTINCT/percentile/join/arbitrary UDF return400 unsupported_operation. Future approximations need explicit names/errors/versions.
 
-- Count: checked BIGINT, empty0. Integer sum: DECIMAL(38,0), overflow422. Double sum/avg must be finite, merge in stable order, oracle tolerance max(1e-9,abs(expected)*1e-9).
+- Count: checked BIGINT, empty0. Final integer sum: DECIMAL(38,0), overflow422. Intermediate sum/avg uses5 signed base-10^9 limbs (correctness C03) so local overflow cannot reject a globally valid sum. Integer avg uses exact numerator/count and half-even scale9; never implicit floating decimal division. Double sum/avg must be finite, merge in fixed tree order, oracle tolerance max(1e-9,abs(expected)*1e-9).
 - Merge avg from sum+valid count, never average partial averages. All-null/missing numeric input yields null sum/min/max/avg. Expose valid numeric and excluded-type counts.
 - Histogram uses UTC microseconds, `[start,end)`, floor(time/interval)*interval, tested negative epochs/boundaries. Declare empty-bucket policy in DTO.
 - Group key includes namespace/path/type/value. String"1", integer1, double1.0, true, null, missing remain distinct.
 - No array grouping in v1; array_contains is filtering only, no hidden Cartesian products.
 - Emit all local groups, merge through DuckDB GROUP BY, then apply final Top-K. Never truncate local groups first.
-- Initial maximum20,000 final groups and64MiB intermediate bytes/query. A task with20,001 distinct groups can fail immediately; shared groups across tasks count only after merging. Spill within budget; fail explicitly, never return partial exact counts.
+- Initial maximum20,000 final groups and64MiB intermediate bytes summed across scan tasks, with a separate64MiB cap per reduction level. A task with20,001 distinct groups can fail immediately; shared groups across tasks count only after merging. Charge all rewritten levels to actual cost. Spill within budget; fail explicitly, never return partial exact counts.
 
 ## 11. S3 reads, cache, native isolation
 
@@ -429,6 +433,9 @@ compute while waiting for a predecessor. Conversion may produce small time-flush
 files; compaction reaches the32–64MiB steady-state target. Do not delay visibility
 to fill a file. Wide-day inputs use bounded streaming output/metadata, not a
 post-ACK partition-count rejection. See the detailed ingestion/IPC contracts.
+Prepared state also persists the verified selected-error/Issue summaries required
+by Publish. A new publisher can finish after converter scratch disappears without
+reading S3 while holding SQL locks.
 
 Preserve record_id/lane/seq. Do not duplicate mutable Issue status/count in Parquet. Derive manifest statistics from actual output, never estimates used for pruning.
 
@@ -469,6 +476,12 @@ Client reports are approximate SDK losses. Dedupe within receipt/item, not unkno
 ## 16. Retention, GC, backup, disaster recovery
 
 Default received-time retention30days; receipts/dedupe retention+7days. Old event-time alone cannot immediately delete fresh ACKed records. Rewrite mixed-retention files into new generations. Pin retention cutoff per snapshot so rows do not disappear midway. Logical retention floor is monotonic; increasing retention cannot resurrect expired data. Issue summary counts are lifetime unique published occurrences, while retained occurrence detail may expire.
+
+New snapshots use the persisted floor, advanced every60s; stale tick>120s blocks
+new snapshots. Retention changes atomically preserve expiry under both old/new
+policy (correctness C07). Journal references release only after published-batch
+retirement and remaining replay/dedupe/reader/backup holds; mere age does not
+delete pending ACKed data or leave every completed journal pinned forever.
 
 Delete objects only if unreferenced by current catalog, active query/detail leases, recoverable PG backup/PITR window, intents/jobs, and past safety grace. Initial7-day PITR requires at least8-day retirement grace, **including journals**. Longer backups extend object protection and cost. Never apply independent S3 lifecycle deletion to live/recovery objects.
 
@@ -512,7 +525,7 @@ Linux arm64 is the supported initial platform; amd64 remains explicitly unverifi
 
 Use verified Argon2id with memory admission, random hash-only sessions, Secure/HttpOnly/SameSite cookies, CSRF, rate-limited login, one-time hash-only setup tokens. Workers are not public; only authenticated internal operations create jobs. Check scope in SQL and gateway allowlists.
 
-Roles: tenant admin changes users/memberships/projects/keys/retention/scrub; project operator reads and changes Issue state/alerts in assigned projects; viewer reads only. Any unauthorized requested project returns403, not silent intersection. Global system diagnostics and alert destination configuration are admin-only. Mutations enforce CSRF and revision; never mix DSN keys with management sessions.
+Roles: tenant admin changes users/memberships/projects/keys/scrub; installation admin controls the installation-wide retention policy. Project operator reads and changes Issue state/alerts in assigned projects; viewer reads only. Any unauthorized requested project returns403, not silent intersection. Global system diagnostics and alert destination configuration are admin-only. Mutations enforce CSRF and revision; never mix DSN keys with management sessions.
 
 Environment: EVENTGLASS_DATABASE_URL, EVENTGLASS_S3_ENDPOINT(optional AWS), EVENTGLASS_S3_REGION, EVENTGLASS_S3_BUCKET, EVENTGLASS_S3_PREFIX, EVENTGLASS_PUBLIC_URL, EVENTGLASS_ROLES, EVENTGLASS_SCRATCH_DIR. Prefer AWS default credential chain/workload identity; self-host secrets via environment/mount. Never put real secrets in CLI/examples. DB owns installation/topology/schema; mismatched storage identity fails startup.
 

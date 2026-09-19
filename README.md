@@ -19,3 +19,7 @@ contains the complete v1 design reading map; the
 [`work plan`](docs/implementation/work-plan.md) breaks remaining work into ordered
 packets with files, prerequisites, negative tests and completion gates. These are
 design contracts, not evidence that G02–G08 have been implemented or verified.
+
+The handoff also includes [cross-boundary correctness contracts](docs/implementation/correctness.md)
+and [fixed machine-readable examples](docs/implementation/contract-cases.json)
+for restart recovery, exact arithmetic, sessions, retention and bounded queries.

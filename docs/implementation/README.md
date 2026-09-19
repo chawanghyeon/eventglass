@@ -1,7 +1,8 @@
 # Go implementation handoff
 
-Status: design complete for the v1 scope; implementation and release gates are
-not complete. Baseline inspected: `75d9f3c` on `main`. This handoff is intended
+Status: v1 implementation contract, subject to its executable acceptance gates;
+implementation and release gates are not complete. Product baseline inspected:
+`75d9f3c`; first detailed handoff: `0aa3559`. This handoff is intended
 for an implementing agent, including GPT Luna, without conversation history.
 Do not start by redesigning the system or implementing every gate at once.
 
@@ -31,6 +32,8 @@ Historical `docs/observe` material cannot override these contracts.
 | [Operations](operations.md) | app, maintenance | Runtime, compaction, retention, backup/restore, resource limits |
 | [Work plan](work-plan.md) | Current implementing agent | Ordered small packets, files, tests, release evidence |
 | [Worked examples](examples.md) | Tests in each packet | Hand-calculated vectors for selection, filters, groups, paging and recovery |
+| [Machine-readable cases](contract-cases.json) | Q1/Q4/M2 tests | Fixed exact arithmetic, rounding, string and retention expectations |
+| [Cross-boundary correctness](correctness.md) | Owners named by C01–C09 | Restart-complete preparation, byte verification, exact arithmetic, sessions, bounded planning and recovery |
 
 ## Decisions closed by this handoff
 
@@ -55,6 +58,9 @@ Historical `docs/observe` material cannot override these contracts.
   although the login UI arrives later. Ingest keys never authorize reads.
 - Documentation specifies all v1 behavior; real-engine resource limits, target
   performance and external-backend recovery remain executable release gates.
+- Integer sums/averages use exact bounded partial state; query manifests and
+  merge fan-in are bounded too. Retention's persisted floor cannot be undone by
+  changing policy. Session reload derives CSRF without rotating another tab.
 
 ## Boundary API map
 

@@ -46,9 +46,10 @@ remote URL fetch, backup download or repair mutation endpoint.
 ## Sessions, setup and permission matrix
 
 Setup bootstrap token32 random bytes, mounted file, compare stored SHA-256;
-not in logs/CLI args. `POST /v1/setup` verifies token and empty setup state under
-installation lock, atomically creates first tenant/admin and16 lanes, consumes
-token. Concurrent second setup409. It never treats PG/S3 auth errors as empty
+not in logs/CLI args. `POST /v1/setup` follows the recoverable reserve-marker-
+finalize protocol in [correctness C08](correctness.md#c08--initialization-is-a-recoverable-cross-store-operation).
+The final SQL transaction creates first tenant/admin/16 lanes and consumes
+token. Conflicting concurrent setup409. It never treats PG/S3 auth errors as empty
 installation. Request `{bootstrap_token,email,password,tenant_name}`; response201
 Session. Setup API disabled after success, even after process restart. New tenant
 creation beyond first tenant is an offline admin CLI operation in v1, not public
@@ -68,8 +69,9 @@ comparison and parameter upper bounds when loading PHC hashes. See official
 
 Session secret32 bytes, SHA only in PG; cookie `__Host-eventglass_session`,
 Secure/HttpOnly/SameSite=Lax/Path=/, no Domain, expires24h with no sliding extension.
-Generate independent CSRF token, hash in session, return token in authenticated
-session DTO; client memory only. Mutations require exact configured Origin and
+Derive stable CSRF token from that session's cookie secret using C05, persist only
+its hash, and return it in authenticated session DTO; client memory only. Session
+reload does not rotate CSRF or invalidate another tab. Mutations require exact configured Origin and
 X-CSRF-Token (including logout); setup/login instead require Origin and JSON
 content type. CLI login may omit Origin only with explicit same-origin API mode
 disabled by default; don't silently bypass CSRF for missing Origin. Local HTTP
@@ -82,7 +84,8 @@ cookie name, never automatically for arbitrary HTTP public URLs.
 | Resolve/ignore/reopen Issue, edit own project's alerts | No | Yes | Yes |
 | Retry failed delivery in project | No | Yes | Yes |
 | Create/disable project; create/revoke key; scrub/origin/service policy | No | No | Yes |
-| Users/memberships/grants, retention, destinations, system/audit | No | No | Yes |
+| Users/memberships/grants, destinations, tenant system/audit | No | No | Yes |
+| Installation retention policy | No | No | Installation admin only |
 
 Each request chooses one tenant membership; no multi-tenant search. Every
 requested project must be allowed;403 instead of silently narrowing. Admin cannot
@@ -94,7 +97,8 @@ user's local membership/grants (role=null in the membership patch). State/passwo
 changes across memberships require installation admin through offline CLI.
 No password appears in responses.
 Membership/grant updates immediately bump user's auth revision and invalidate
-old scope state. Users may change own password with current password; revoke all
+old scope state, not the session credential itself. Session credential_revision
+separately controls password/logout invalidation (C05). Users may change own password with current password; revoke all
 sessions and require login. Destination secrets and DSN key creation return
 secret once; lists never reveal full values. Public SDK keys authorize ingestion
 only. Default project CORS denies browser origins until configured (server SDKs
@@ -127,9 +131,10 @@ that field. Creation returns201 unless noted. Mutation response is full resource
 |---|---|---|
 | GET /livez | none | 200 `{status:"alive"}` even on dependency failure |
 | GET /readyz | none | 200 `{status:"ready"}` or503 sanitized code; no secrets |
+| GET /v1/setup | none | 200 `{state:"required"\|"in_progress"\|"complete"}`; no tenant/user details |
 | POST /v1/setup | setup fields above | Session; bootstrap only |
 | POST /v1/sessions | email,password | 200 Session+cookie |
-| GET /v1/session | none | Session+fresh CSRF;401 absent/expired |
+| GET /v1/session | none | Session+stable CSRF/current grants;401 absent/expired |
 | DELETE /v1/session | CSRF header | 204 revoke current session |
 | POST /v1/session/password | current_password,new_password | 204 revoke all sessions |
 | GET /v1/projects | tenant_id,limit,cursor | Project list, only authorized projects |
@@ -163,7 +168,7 @@ that field. Creation returns201 unless noted. Mutation response is full resource
 | POST /v1/snapshots/{id}/heartbeat | tenant_id,read_token | renewed read_token; same owner |
 | DELETE /v1/snapshots/{id} | tenant_id | 204 release; same owner |
 | GET /v1/system | tenant_id | System DTO below; admin |
-| PATCH /v1/system/retention | tenant_id,revision,retention_days | Policy; admin; installation-wide policy requires installation admin in multi-tenant mode |
+| PATCH /v1/system/retention | tenant_id,revision,retention_days | Policy; installation admin only |
 | GET /v1/audit | tenant_id,limit?,cursor? | AuditEvent list; admin |
 
 First bootstrap user is the installation admin, recorded separately from tenant
