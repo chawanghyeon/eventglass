@@ -372,6 +372,78 @@ func TestACKOracleSurvivesSIGKILLRestartAndEmptyScratch(t *testing.T) {
 	killChild(t, restarted)
 }
 
+func TestPreparedAndPublishedOutputsSurviveWorkerSIGKILL(t *testing.T) {
+	for index, mode := range []string{"after-prepare", "after-publish"} {
+		t.Run(mode, func(t *testing.T) {
+			fixture := setupCrashFixture(t, 730+int64(index))
+			if _, err := fixture.pool.Exec(context.Background(), `UPDATE jobs SET state='completed',owner=NULL,lease_until=NULL WHERE state IN ('queued','running')`); err != nil {
+				t.Fatal(err)
+			}
+			acceptanceID := crashUUID(fixture.tenantID, 10)
+			request, err := ingest.NormalizeEnvelope(sdk.Envelope{Items: []sdk.Item{{Ordinal: 0, Type: "attachment", Payload: []byte("empty")}}}, ingest.NormalizeOptions{
+				TenantID: fixture.tenantID, ProjectID: fixture.projectID, AcceptanceID: acceptanceID, ArrivalTime: time.Unix(2, 0),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			workflow := replacementWorkflow(t, fixture, filepath.Join(t.TempDir(), "producer"))
+			results := workflow.Process(context.Background(), []ingest.Command{{Request: request, Authorization: ingest.Authorization{
+				TenantID: fixture.tenantID, ProjectID: fixture.projectID, KeyHash: fixture.keyHash,
+				TenantRevision: 1, ProjectRevision: 1, KeyRevision: 1, ScrubRevision: 1, ConfigRevision: 1,
+			}}})
+			if len(results) != 1 || results[0].Err != nil || results[0].Receipt.AcceptedCount != 0 {
+				t.Fatalf("empty ACK=%#v", results)
+			}
+			scratch := filepath.Join(t.TempDir(), "publication-worker")
+			child, barrier := startCrashChild(t, fixture, mode, acceptanceID, scratch)
+			if barrier.Name != mode {
+				t.Fatalf("barrier=%#v", barrier)
+			}
+			killChild(t, child)
+			if err := os.RemoveAll(scratch); err != nil {
+				t.Fatal(err)
+			}
+			var jobID, outputID, manifestSHA, state string
+			var laneID int
+			var batchSeq, fence int64
+			if err := fixture.pool.QueryRow(context.Background(), `SELECT j.job_id::text,j.lane_id,j.batch_seq,j.fence,j.state,j.prepared_output_id::text,o.manifest_sha256
+				FROM jobs j JOIN job_outputs o ON o.output_id=j.prepared_output_id WHERE j.tenant_id=$1`, fixture.tenantID).Scan(&jobID, &laneID, &batchSeq, &fence, &state, &outputID, &manifestSHA); err != nil {
+				t.Fatal(err)
+			}
+			if mode == "after-prepare" {
+				if state != "prepared" {
+					t.Fatalf("D09 job state=%s", state)
+				}
+				publication, err := control.ClaimPublicationJob(context.Background(), fixture.pool, crashInstallationID, 1, fixture.tenantID, laneID, "replacement-publisher", time.Minute)
+				if err != nil || publication == nil {
+					t.Fatalf("D09 replacement claim=%#v err=%v", publication, err)
+				}
+				published, err := control.Publish(context.Background(), fixture.pool, control.PublishCommand{Authority: publication.Authority, TenantID: fixture.tenantID, LaneID: laneID, BatchSeq: batchSeq, OutputID: outputID, ManifestSHA: manifestSHA})
+				if err != nil || published.CatalogGeneration != 1 {
+					t.Fatalf("D09 replacement Publish=%#v err=%v", published, err)
+				}
+			} else {
+				if state != "completed" {
+					t.Fatalf("D10 job state=%s", state)
+				}
+				authority := control.JobAuthority{InstallationID: crashInstallationID, StorageGeneration: 1, JobID: jobID, Owner: "crash-publication", Fence: fence}
+				published, err := control.Publish(context.Background(), fixture.pool, control.PublishCommand{Authority: authority, TenantID: fixture.tenantID, LaneID: laneID, BatchSeq: batchSeq, OutputID: outputID, ManifestSHA: manifestSHA})
+				if err != nil || !published.AlreadyPublished {
+					t.Fatalf("D10 retry=%#v err=%v", published, err)
+				}
+			}
+			var publishedSeq, generation, outputs int64
+			if err := fixture.pool.QueryRow(context.Background(), `SELECT published_seq,catalog_generation,(SELECT count(*) FROM job_outputs WHERE job_id=$3 AND state='published')
+				FROM lanes WHERE tenant_id=$1 AND lane_id=$2`, fixture.tenantID, laneID, jobID).Scan(&publishedSeq, &generation, &outputs); err != nil {
+				t.Fatal(err)
+			}
+			if publishedSeq != batchSeq || generation != 1 || outputs != 1 {
+				t.Fatalf("%s published=%d generation=%d outputs=%d", mode, publishedSeq, generation, outputs)
+			}
+		})
+	}
+}
+
 type blockingStore struct {
 	base    *storage.S3Store
 	mode    string
@@ -458,6 +530,10 @@ func TestCrashHelperProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
+	if mode == "after-prepare" || mode == "after-publish" {
+		publicationHelper(t, pool, mode, os.Getenv("EVENTGLASS_SCRATCH_DIR"), emit)
+		return
+	}
 	operations, err := control.NewIngestOperations(pool)
 	if err != nil {
 		t.Fatal(err)
@@ -486,6 +562,66 @@ func TestCrashHelperProcess(t *testing.T) {
 	fixture := &crashFixture{tenantID: tenantID, projectID: projectID, keyHash: sha256.Sum256([]byte(fmt.Sprintf("key-%d", tenantID)))}
 	results := workflow.Process(context.Background(), []ingest.Command{crashCommand(t, fixture, os.Getenv("EVENTGLASS_CRASH_ACCEPTANCE"))})
 	t.Fatalf("helper unexpectedly crossed barrier: %#v", results)
+}
+
+func publicationHelper(t *testing.T, pool *pgxpool.Pool, mode, scratch string, emit func(string, string)) {
+	t.Helper()
+	job, err := control.ClaimConversionJob(context.Background(), pool, crashInstallationID, 1, "crash-publication", time.Minute)
+	if err != nil || job == nil {
+		t.Fatalf("claim conversion=%#v err=%v", job, err)
+	}
+	work, err := control.LoadConversionWork(context.Background(), pool, job.Authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(scratch, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	occurrencePath := filepath.Join(scratch, "occurrences.jsonl")
+	occurrence := []byte("{\"version\":1}\n")
+	if err := os.WriteFile(occurrencePath, occurrence, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	occurrenceDigest := sha256.Sum256(occurrence)
+	receiptHash := sha256.New()
+	groupingVersion := 0
+	for _, item := range work.Receipts {
+		groupingVersion = item.GroupingVersion
+		encoded, _ := json.Marshal(struct {
+			AcceptanceID string `json:"acceptance_id"`
+			SelectionSHA string `json:"selection_sha256"`
+		}{item.Receipt.AcceptanceID, item.Receipt.SelectionSHA256})
+		receiptHash.Write(encoded)
+		receiptHash.Write([]byte{'\n'})
+	}
+	emptyIdentity := sha256.Sum256(nil)
+	outputID := crashUUID(work.TenantID, 700)
+	root := model.OutputManifestRoot{Version: 1, Header: model.OutputManifestHeader{
+		Version: 1, OutputID: outputID, JobID: job.Authority.JobID, TenantID: work.TenantID, LaneID: work.LaneID, BatchSeq: work.BatchSeq,
+		JournalSHA256: work.JournalSHA256, ReceiptSetSHA256: hex.EncodeToString(receiptHash.Sum(nil)), SelectedIdentitySHA256: hex.EncodeToString(emptyIdentity[:]),
+		OccurrenceSummarySHA256: hex.EncodeToString(occurrenceDigest[:]), GroupingVersion: groupingVersion,
+	}, Parts: []model.OutputManifestPartRef{}}
+	if err := control.Prepare(context.Background(), pool, control.PrepareCommand{
+		Authority: job.Authority, TenantID: work.TenantID, LaneID: work.LaneID, BatchSeq: work.BatchSeq, Root: root,
+		Parts: []control.PreparedPartInput{}, OccurrencePath: occurrencePath, OccurrenceBytes: int64(len(occurrence)), OccurrenceSHA: root.Header.OccurrenceSummarySHA256,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if mode == "after-prepare" {
+		emit(mode, "")
+		select {}
+	}
+	publication, err := control.ClaimPublicationJob(context.Background(), pool, crashInstallationID, 1, work.TenantID, work.LaneID, "crash-publication", time.Minute)
+	if err != nil || publication == nil {
+		t.Fatalf("claim publication=%#v err=%v", publication, err)
+	}
+	if _, err := control.Publish(context.Background(), pool, control.PublishCommand{
+		Authority: publication.Authority, TenantID: work.TenantID, LaneID: work.LaneID, BatchSeq: work.BatchSeq, OutputID: publication.OutputID, ManifestSHA: publication.ManifestSHA,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	emit(mode, "")
+	select {}
 }
 
 var _ ingest.JournalObjectStore = (*blockingStore)(nil)

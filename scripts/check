@@ -83,9 +83,12 @@ crash() {
   trap cleanup EXIT INT TERM
   docker compose -p "$project" -f deploy/compose.yaml up -d postgres minio
   docker compose -p "$project" -f deploy/compose.yaml run --rm minio-init
-  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$artifact_dir/crash.test" ./tests/crash
-  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$artifact_dir/ingest-resource.test" ./tests/resource
-  runner_image="postgres:17.11-bookworm@sha256:051f7b7b3abdd564d5d1bd1e8c4b9c1b6e77087d1dd22020ede611c096a272e0"
+  docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:crash-build .
+  docker run --rm --platform linux/arm64 -v "$artifact_dir:/eventglass-tests" eventglass-go:crash-build \
+    go test -tags=duckdb_use_static_lib -c -o /eventglass-tests/crash.test ./tests/crash
+  docker run --rm --platform linux/arm64 -v "$artifact_dir:/eventglass-tests" eventglass-go:crash-build \
+    go test -tags=duckdb_use_static_lib -c -o /eventglass-tests/ingest-resource.test ./tests/resource
+  runner_image="eventglass-go:crash-build"
   docker run --rm --platform linux/arm64 --network "${project}_default" \
     --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 \
     -e EVENTGLASS_CRASH_REQUIRED=1 \
