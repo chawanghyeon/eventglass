@@ -25,8 +25,8 @@ check_go_version() {
 
 unit() {
   check_go_version
-  go test ./tests/architecture ./internal/api ./internal/app ./internal/control ./internal/ingest ./internal/model ./internal/resource ./internal/sdk ./internal/storage ./cmd/eventglass-go
-  go vet ./internal/api ./internal/app ./internal/control ./internal/ingest ./internal/model ./internal/resource ./internal/sdk ./internal/storage ./cmd/eventglass-go
+  go test ./tests/architecture ./internal/api ./internal/app ./internal/control ./internal/ingest ./internal/issues ./internal/model ./internal/resource ./internal/sdk ./internal/storage ./cmd/eventglass-go
+  go vet ./internal/api ./internal/app ./internal/control ./internal/ingest ./internal/issues ./internal/model ./internal/resource ./internal/sdk ./internal/storage ./cmd/eventglass-go
   python3 -m unittest deploy/test_layout.py
   test "$(sha256sum docs/observe/source-design.md | awk '{print $1}')" = "4cccddc98f76d5c38099958587386c55756a08cf366c26ed9e65eeedec0526e5"
 }
@@ -131,12 +131,12 @@ case "${1:-}" in
     check_go_version
     shift
     case "${1:-}" in
-      api|app|control|ingest|model|resource|sdk|storage)
+      api|app|control|ingest|issues|model|resource|sdk|storage)
         package=$1
         shift
         go test "./internal/$package" "$@"
         ;;
-      *) echo "focused requires api|app|control|ingest|model|resource|sdk|storage" >&2; exit 2 ;;
+      *) echo "focused requires api|app|control|ingest|issues|model|resource|sdk|storage" >&2; exit 2 ;;
     esac
     ;;
   journal-bench) check_go_version; go test ./internal/storage -run '^$' -bench BenchmarkJournal -benchmem -count=1 ;;

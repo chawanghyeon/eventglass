@@ -61,7 +61,7 @@ func TestIngestSchemaBatchScopeAndGlobalProjectIdentity(t *testing.T) {
 	('00000000-0000-4000-8000-000000000011',100,11,0,1,repeat('a',64),1,'[]',repeat('a',64),1,0,0,0,0,1,1),
 	('00000000-0000-4000-8000-000000000012',100,11,0,1,repeat('a',64),2,'[1]',repeat('a',64),1,1,1,0,0,0,1)`)
 	reject("UPDATE receipts SET project_id=20 WHERE project_id=10", "23503")
-	reject("UPDATE ingest_batches SET tenant_id=200", "23503")
+	reject("UPDATE ingest_batches SET tenant_id=200 WHERE tenant_id=100", "23503")
 	reject("UPDATE receipts SET accepted_count=2 WHERE request_index=0", "23514")
 	reject("UPDATE receipts SET request_index=0 WHERE request_index=1", "23505")
 	reject("UPDATE object_intents SET object_key='../escape'", "23514")
@@ -88,7 +88,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest) != 3 {
+	if len(manifest) != 4 {
 		t.Fatalf("migration count=%d", len(manifest))
 	}
 	conn, err := pgx.Connect(ctx, env["EVENTGLASS_DATABASE_URL"])
@@ -118,6 +118,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 		exec("ROLLBACK TO SAVEPOINT negative")
 		exec("RELEASE SAVEPOINT negative")
 	}
+	exec(manifest[3].DownSQL)
 	exec(manifest[2].DownSQL)
 	exec("INSERT INTO tenants(tenant_id) VALUES(301),(302)")
 	exec("INSERT INTO projects(tenant_id,project_id,scrub_revision) VALUES(301,3011,1),(302,3021,1)")
