@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -9,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,7 +55,7 @@ func TestJournalMultipleProjectsEmptyRangesAndExactReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	count := 0
-	header, err := ReplayJournal(bytes.NewReader(output.Bytes()), info, func(request JournalRequest, ordinal int, record model.Record) error {
+	index, err := ReplayJournal(bytes.NewReader(output.Bytes()), info, func(request JournalRequest, ordinal int, record model.Record) error {
 		if ordinal != count || request.ProjectID != record.ProjectID || request.AcceptanceID != record.AcceptanceID {
 			t.Fatal("scope/order mismatch")
 		}
@@ -71,8 +71,11 @@ func TestJournalMultipleProjectsEmptyRangesAndExactReplay(t *testing.T) {
 		count++
 		return nil
 	})
-	if err != nil || count != 4 || header.RequestCount != 3 {
-		t.Fatalf("replay: %v records=%d header=%+v", err, count, header)
+	if err != nil || count != 4 || index.Header.RequestCount != 3 {
+		t.Fatalf("replay: %v records=%d index=%+v", err, count, index)
+	}
+	if !reflect.DeepEqual(index, info.Index) {
+		t.Fatalf("replayed index differs from written index:\nwrite=%+v\nreplay=%+v", info.Index, index)
 	}
 }
 
@@ -106,7 +109,7 @@ func TestJournalRejectsCorruptionBeforeCallbacksAndInvalidStructure(t *testing.T
 			data := encoder.EncodeAll(changed, nil)
 			encoder.Close()
 			digest := sha256.Sum256(data)
-			if _, err := ReplayJournal(bytes.NewReader(data), JournalInfo{int64(len(data)), hex.EncodeToString(digest[:])}, nil); err == nil {
+			if _, err := ReplayJournal(bytes.NewReader(data), JournalInfo{Bytes: int64(len(data)), SHA256: hex.EncodeToString(digest[:])}, nil); err == nil {
 				t.Fatal("invalid journal accepted")
 			}
 		})
@@ -134,58 +137,53 @@ func TestJournalRejectsMixedTenantLaneDuplicateAndHugeLine(t *testing.T) {
 }
 
 func TestRequestChecksumSurvivesRebatching(t *testing.T) {
-	digests := func(batch model.JournalBatch) map[string]string {
+	indexes := func(batch model.JournalBatch) map[string]JournalRequestIndex {
 		t.Helper()
 		var buffer bytes.Buffer
 		info, err := WriteJournal(&buffer, batch)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := ReplayJournal(bytes.NewReader(buffer.Bytes()), info, nil); err != nil {
-			t.Fatal(err)
-		}
-		decoder, err := zstd.NewReader(bytes.NewReader(buffer.Bytes()))
+		replayed, err := ReplayJournal(bytes.NewReader(buffer.Bytes()), info, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer decoder.Close()
-		scanner := bufio.NewScanner(decoder)
-		result := map[string]string{}
-		var current JournalRequest
-		for scanner.Scan() {
-			var line journalLine
-			if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
-				t.Fatal(err)
-			}
-			if line.Type == "request" {
-				if err := json.Unmarshal(line.Value, &current); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if line.Type == "end_request" {
-				var footer journalCount
-				if err := json.Unmarshal(line.Value, &footer); err != nil {
-					t.Fatal(err)
-				}
-				result[current.AcceptanceID] = footer.SHA256
-			}
+		if !reflect.DeepEqual(info.Index, replayed) {
+			t.Fatal("write and replay indexes differ")
 		}
-		if err := scanner.Err(); err != nil {
-			t.Fatal(err)
+		result := make(map[string]JournalRequestIndex, len(replayed.Requests))
+		for _, request := range replayed.Requests {
+			result[request.Request.AcceptanceID] = request
 		}
 		return result
 	}
 	batch := journalFixture(2)
-	original := digests(batch)
+	original := indexes(batch)
 	lastID := batch.Requests[2].AcceptanceID
 	batch.Requests = batch.Requests[2:]
 	batch.BatchID = "00000000-0000-4000-8000-000000000099"
-	if digests(batch)[lastID] != original[lastID] {
+	rebatched := indexes(batch)[lastID]
+	baseline := original[lastID]
+	if rebatched.SHA256 != baseline.SHA256 || !reflect.DeepEqual(rebatched.Outcomes, baseline.Outcomes) || !reflect.DeepEqual(rebatched.UnsupportedItems, baseline.UnsupportedItems) {
 		t.Fatal("physical batch placement changed receipt identity")
 	}
+	if rebatched.Request.First == baseline.Request.First {
+		t.Fatal("fixture did not exercise physical index movement")
+	}
 	batch.Requests[0].Records[0].Message = "different payload"
-	if digests(batch)[lastID] == original[lastID] {
+	if indexes(batch)[lastID].SHA256 == original[lastID].SHA256 {
 		t.Fatal("content mutation retained receipt hash")
+	}
+}
+
+func TestJournalV1BytesRemainStable(t *testing.T) {
+	var output bytes.Buffer
+	info, err := WriteJournal(&output, journalFixture(2))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Bytes != 715 || info.SHA256 != "0c5cbee79c0b9b4cfb05df69d0560efcf3b436c6b32dd59e308e3b787127981a" { // pragma: allowlist secret -- fixed journal compatibility digest
+		t.Fatalf("journal v1 bytes changed: bytes=%d sha256=%s", info.Bytes, info.SHA256)
 	}
 }
 

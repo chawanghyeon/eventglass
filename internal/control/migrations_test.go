@@ -17,9 +17,15 @@ func TestMigrationManifestIsOrderedAndComplete(t *testing.T) {
 		if len(migration.SHA256) != 64 || migration.UpSQL == "" || migration.DownSQL == "" {
 			t.Fatalf("invalid migration manifest entry: %+v", migration)
 		}
-		if i > 0 && manifest[i-1].Version >= migration.Version {
-			t.Fatalf("manifest is not strictly ordered: %+v", manifest)
+		if migration.Version != i+1 {
+			t.Fatalf("manifest is not contiguous: %+v", manifest)
 		}
+	}
+}
+
+func TestMigrationManifestRejectsVersionGap(t *testing.T) {
+	if err := validateMigrationManifest([]Migration{{Version: 1}, {Version: 3}}); err == nil {
+		t.Fatal("migration manifest gap was accepted")
 	}
 }
 

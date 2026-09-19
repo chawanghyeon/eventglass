@@ -47,6 +47,19 @@ type JournalRequest struct {
 type JournalInfo struct {
 	Bytes  int64
 	SHA256 string
+	Index  JournalIndex
+}
+
+type JournalRequestIndex struct {
+	Request          JournalRequest
+	SHA256           string
+	Outcomes         []model.Outcome
+	UnsupportedItems []model.UnsupportedItem
+}
+
+type JournalIndex struct {
+	Header   JournalHeader
+	Requests []JournalRequestIndex
 }
 
 type journalLine struct {
@@ -113,6 +126,7 @@ func WriteJournal(output io.Writer, batch model.JournalBatch) (JournalInfo, erro
 		return JournalInfo{}, err
 	}
 	seen := make(map[string]bool)
+	index := JournalIndex{Header: header, Requests: make([]JournalRequestIndex, 0, len(batch.Requests))}
 	position := 0
 	for _, request := range batch.Requests {
 		meta := JournalRequest{request.AcceptanceID, request.ProjectID, position, position + len(request.Records) - 1, len(request.Records), len(request.Outcomes), len(request.UnsupportedItems)}
@@ -155,6 +169,11 @@ func WriteJournal(output io.Writer, batch model.JournalBatch) (JournalInfo, erro
 		if err := write("end_request", footer, nil); err != nil {
 			return JournalInfo{}, err
 		}
+		index.Requests = append(index.Requests, JournalRequestIndex{
+			Request: meta, SHA256: footer.SHA256,
+			Outcomes:         append(make([]model.Outcome, 0, len(request.Outcomes)), request.Outcomes...),
+			UnsupportedItems: append(make([]model.UnsupportedItem, 0, len(request.UnsupportedItems)), request.UnsupportedItems...),
+		})
 		position += len(request.Records)
 	}
 	if err := write("end", len(batch.Requests), nil); err != nil {
@@ -166,7 +185,7 @@ func WriteJournal(output io.Writer, batch model.JournalBatch) (JournalInfo, erro
 	if digest.size > MaxJournalBytes {
 		return JournalInfo{}, errors.New("compressed journal exceeds size limit")
 	}
-	return JournalInfo{digest.size, hex.EncodeToString(digest.hash.Sum(nil))}, nil
+	return JournalInfo{Bytes: digest.size, SHA256: hex.EncodeToString(digest.hash.Sum(nil)), Index: index}, nil
 }
 
 // ReplayJournal verifies the object checksum before invoking callbacks, then
@@ -175,8 +194,8 @@ func WriteJournal(output io.Writer, batch model.JournalBatch) (JournalInfo, erro
 // only a nil return authorizes the caller to prepare outputs. No renormalizing.
 // Outcome/unsupported entries remain in the journal and are counted/validated;
 // their durable SQL representation is owned by Accept.
-func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(JournalRequest, int, model.Record) error) (JournalHeader, error) {
-	fail := func(err error) (JournalHeader, error) { return JournalHeader{}, err }
+func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(JournalRequest, int, model.Record) error) (JournalIndex, error) {
+	fail := func(err error) (JournalIndex, error) { return JournalIndex{}, err }
 	if expected.Bytes <= 0 || expected.Bytes > MaxJournalBytes || len(expected.SHA256) != 64 {
 		return fail(errors.New("invalid journal manifest"))
 	}
@@ -205,6 +224,9 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 	var meta JournalRequest
 	var counts journalCount
 	var requestHash hash.Hash
+	index := JournalIndex{Requests: make([]JournalRequestIndex, 0)}
+	var outcomes []model.Outcome
+	var unsupportedItems []model.UnsupportedItem
 	seen := make(map[string]bool)
 	var ordinals map[[2]int]bool
 	position, requests, plainBytes := 0, 0, 0
@@ -234,6 +256,8 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 				return fail(err)
 			}
 			headerSeen = true
+			index.Header = header
+			index.Requests = make([]JournalRequestIndex, 0, header.RequestCount)
 		case "request":
 			if requestHash != nil || requests >= header.RequestCount {
 				return fail(errors.New("request framing mismatch"))
@@ -247,6 +271,8 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 			requestHash = requestDigest(meta)
 			counts = journalCount{}
 			ordinals = make(map[[2]int]bool)
+			outcomes = make([]model.Outcome, 0, meta.Outcomes)
+			unsupportedItems = make([]model.UnsupportedItem, 0, meta.Unsupported)
 		case "record":
 			if requestHash == nil || counts.Records >= meta.Records || counts.Outcomes != 0 || counts.Unsupported != 0 {
 				return fail(errors.New("record framing mismatch"))
@@ -276,6 +302,7 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 			if outcome.ItemOrdinal < 0 || outcome.Quantity < 0 {
 				return fail(errors.New("invalid outcome"))
 			}
+			outcomes = append(outcomes, outcome)
 			counts.Outcomes++
 		case "unsupported":
 			if requestHash == nil || counts.Records != meta.Records || counts.Outcomes != meta.Outcomes || counts.Unsupported >= meta.Unsupported {
@@ -288,6 +315,7 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 			if item.ItemOrdinal < 0 || item.Bytes < 0 {
 				return fail(errors.New("invalid unsupported item"))
 			}
+			unsupportedItems = append(unsupportedItems, item)
 			counts.Unsupported++
 		case "end_request":
 			if requestHash == nil {
@@ -301,6 +329,10 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 			if footer != counts || counts.Records != meta.Records || counts.Outcomes != meta.Outcomes || counts.Unsupported != meta.Unsupported {
 				return fail(errors.New("request checksum or counts mismatch"))
 			}
+			index.Requests = append(index.Requests, JournalRequestIndex{
+				Request: meta, SHA256: counts.SHA256,
+				Outcomes: outcomes, UnsupportedItems: unsupportedItems,
+			})
 			requestHash = nil
 			requests++
 		case "end":
@@ -326,7 +358,7 @@ func ReplayJournal(input io.ReadSeeker, expected JournalInfo, consume func(Journ
 	if !ended {
 		return fail(errors.New("incomplete journal"))
 	}
-	return header, nil
+	return index, nil
 }
 
 func strictJournalJSON(data []byte, target any) error {

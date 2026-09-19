@@ -56,12 +56,20 @@ func MigrationManifest() ([]Migration, error) {
 		manifest = append(manifest, Migration{Version: version, Name: parts[1], SHA256: hex.EncodeToString(digest[:]), UpSQL: up, DownSQL: down})
 	}
 	sort.Slice(manifest, func(i, j int) bool { return manifest[i].Version < manifest[j].Version })
-	for i := 1; i < len(manifest); i++ {
-		if manifest[i-1].Version == manifest[i].Version {
-			return nil, fmt.Errorf("duplicate migration version %d", manifest[i].Version)
-		}
+	if err := validateMigrationManifest(manifest); err != nil {
+		return nil, err
 	}
 	return manifest, nil
+}
+
+func validateMigrationManifest(manifest []Migration) error {
+	for index, migration := range manifest {
+		expected := index + 1
+		if migration.Version != expected {
+			return fmt.Errorf("migration manifest must be contiguous: position %d has version %d", expected, migration.Version)
+		}
+	}
+	return nil
 }
 
 func splitMigration(contents string) (string, string, error) {
