@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chawanghyeon/eventglass/internal/control"
@@ -193,7 +193,7 @@ func (workflow *Workflow) uploadAttempt(ctx context.Context, commands []Command)
 		return control.VerifiedBatch{}, err
 	}
 	authority := control.IntentAuthority{IntentID: intentID, Owner: workflow.config.ProcessID, Fence: 1, Bytes: journalInfo.Bytes, SHA256: journalInfo.SHA256}
-	objectKey := journalObjectKey(workflow.config.InstallationID, workflow.config.StorageGeneration, tenantID, laneID, batchID)
+	objectKey := journalObjectKey(workflow.config.InstallationID, tenantID, laneID, batchID)
 	registration := control.JournalIntentRegistration{
 		InstallationID: workflow.config.InstallationID, StorageGeneration: workflow.config.StorageGeneration,
 		TenantID: tenantID, ObjectKey: objectKey, Authority: authority,
@@ -268,9 +268,8 @@ func commandScope(commands []Command) (int64, int, error) {
 	return tenantID, laneID, nil
 }
 
-func journalObjectKey(installationID string, generation, tenantID int64, laneID int, batchID string) string {
-	return filepath.Join("v1", "installations", installationID, "generations", strconv.FormatInt(generation, 10),
-		"tenants", strconv.FormatInt(tenantID, 10), "lanes", strconv.Itoa(laneID), "journals", batchID+".zst")
+func journalObjectKey(installationID string, tenantID int64, laneID int, batchID string) string {
+	return strings.Join([]string{"v1", installationID, "journals", strconv.FormatInt(tenantID, 10), strconv.Itoa(laneID), batchID + ".jsonl.zst"}, "/")
 }
 
 func makeIndex(commands []Command) []int {

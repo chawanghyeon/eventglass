@@ -180,5 +180,13 @@ func TestWorkflowRejectsIncompleteDurableResults(t *testing.T) {
 	}
 }
 
+func TestJournalObjectKeyContract(t *testing.T) {
+	got := journalObjectKey("00000000-0000-4000-8000-000000000001", 42, 7, "00000000-0000-4000-8000-000000000002")
+	want := "v1/00000000-0000-4000-8000-000000000001/journals/42/7/00000000-0000-4000-8000-000000000002.jsonl.zst"
+	if got != want {
+		t.Fatalf("journal object key=%q want=%q", got, want)
+	}
+}
+
 var _ JournalObjectStore = (*workflowStore)(nil)
 var _ IngestController = (*workflowControl)(nil)
