@@ -137,7 +137,42 @@ func (s *S3Store) PutStream(ctx context.Context, key string, body io.ReadSeeker,
 	if info.Size != size || info.SHA256 != checksum {
 		return ObjectInfo{}, errors.New("uploaded S3 object metadata does not match content")
 	}
+	if err := s.VerifyObject(ctx, key, size, checksum); err != nil {
+		return ObjectInfo{}, err
+	}
 	return info, nil
+}
+
+// VerifyObject establishes stored bytes with a bounded full readback. Head
+// metadata is uploader-controlled and is not accepted as content evidence.
+func (s *S3Store) VerifyObject(ctx context.Context, key string, size int64, checksum string) error {
+	if size < 0 {
+		return errors.New("invalid verification size")
+	}
+	if _, err := decodeHash(checksum); err != nil {
+		return err
+	}
+	objectKey, err := s.objectKey(key)
+	if err != nil {
+		return err
+	}
+	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(objectKey)})
+	if err != nil {
+		return fmt.Errorf("get S3 object for verification: %w", err)
+	}
+	defer output.Body.Close()
+	if output.ContentLength != nil && aws.ToInt64(output.ContentLength) != size {
+		return errors.New("stored S3 object size mismatch")
+	}
+	hash := sha256.New()
+	n, err := io.Copy(hash, io.LimitReader(output.Body, size+1))
+	if err != nil {
+		return fmt.Errorf("read S3 object for verification: %w", err)
+	}
+	if n != size || hex.EncodeToString(hash.Sum(nil)) != checksum {
+		return errors.New("stored S3 object checksum mismatch")
+	}
+	return nil
 }
 
 func (s *S3Store) Head(ctx context.Context, key string) (ObjectInfo, error) {

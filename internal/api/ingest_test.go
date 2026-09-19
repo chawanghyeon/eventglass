@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/ingest"
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/resource"
@@ -281,10 +282,10 @@ type recordingSink struct {
 	lastAuth ingest.Authorization
 }
 
-func (sink *recordingSink) Accept(_ context.Context, command ingest.Command) error {
+func (sink *recordingSink) Accept(_ context.Context, command ingest.Command) (control.ReceiptResult, error) {
 	sink.lastAuth = command.Authorization
 	sink.batches = append(sink.batches, command.Request)
-	return nil
+	return control.ReceiptResult{AcceptanceID: command.Request.AcceptanceID}, nil
 }
 
 func TestAuthenticationSnapshotDoesNotEnterCanonicalData(t *testing.T) {
@@ -301,7 +302,7 @@ func TestAuthenticationSnapshotDoesNotEnterCanonicalData(t *testing.T) {
 	if response.Code != 200 {
 		t.Fatal(response.Code, response.Body.String())
 	}
-	if sink.lastAuth != (ingest.Authorization{TenantID: 2, ProjectID: 7, KeyHash: sha256.Sum256([]byte("fixturePublicKey")), ProjectRevision: 9, KeyRevision: 3, ScrubRevision: 5}) {
+	if sink.lastAuth != (ingest.Authorization{TenantID: 2, ProjectID: 7, KeyHash: sha256.Sum256([]byte("fixturePublicKey")), TenantRevision: 1, ProjectRevision: 9, KeyRevision: 3, ScrubRevision: 5, ConfigRevision: 1}) {
 		t.Fatal("auth snapshot was lost")
 	}
 	encoded, err := json.Marshal(sink.batches[0])
@@ -310,6 +311,62 @@ func TestAuthenticationSnapshotDoesNotEnterCanonicalData(t *testing.T) {
 	}
 	if bytes.Contains(encoded, []byte("fixturePublicKey")) || bytes.Contains(encoded, []byte("private-transport-marker")) || bytes.Contains(encoded, []byte("KeyHash")) {
 		t.Fatal("transport/auth data entered canonical request")
+	}
+}
+
+func TestDynamicAuthorizationControlsPolicyAndReceipt(t *testing.T) {
+	sink := &recordingSink{}
+	var resolvedHash [32]byte
+	handler, err := NewIngestHandler(Config{
+		TenantID: 2, ProjectID: 7, Sink: sink,
+		ResolveAuthorization: func(_ context.Context, tenantID, projectID int64, keyHash [32]byte) (control.ProjectAuthorization, error) {
+			if tenantID != 2 || projectID != 7 {
+				t.Fatal("resolver scope changed")
+			}
+			resolvedHash = keyHash
+			return control.ProjectAuthorization{
+				Snapshot:       control.AuthorizationSnapshot{TenantRevision: 4, ProjectRevision: 9, KeyRevision: 3, ScrubRevision: 5, ConfigRevision: 6, KeyHash: keyHash},
+				DefaultService: "dynamic-service", AllowedOrigins: []string{"https://dynamic.invalid"},
+			}, nil
+		},
+		ResolveOrigins: func(context.Context, int64, int64) ([]string, error) { return []string{"https://dynamic.invalid"}, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest("POST", "/api/7/envelope/?sentry_key=dynamic-key", strings.NewReader("{}\n{\"type\":\"event\"}\n{\"message\":\"dynamic\"}"))
+	request.Header.Set("Origin", "https://dynamic.invalid")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("X-Eventglass-Receipt") == "" || resolvedHash != sha256.Sum256([]byte("dynamic-key")) {
+		t.Fatalf("dynamic response=%d headers=%#v hash=%x", response.Code, response.Header(), resolvedHash)
+	}
+	if sink.lastAuth.TenantRevision != 4 || sink.lastAuth.ConfigRevision != 6 || sink.lastAuth.KeyHash != resolvedHash || len(sink.batches) != 1 || sink.batches[0].Records[0].Service == nil || *sink.batches[0].Records[0].Service != "dynamic-service" {
+		t.Fatalf("dynamic auth/policy lost: auth=%#v batches=%#v", sink.lastAuth, sink.batches)
+	}
+	preflight := httptest.NewRequest(http.MethodOptions, "/api/7/envelope/", nil)
+	preflight.Header.Set("Origin", "https://dynamic.invalid")
+	preflight.Header.Set("Access-Control-Request-Headers", "content-type")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, preflight)
+	if response.Code != http.StatusNoContent || response.Header().Get("Access-Control-Allow-Origin") != "https://dynamic.invalid" {
+		t.Fatalf("dynamic preflight=%d %#v", response.Code, response.Header())
+	}
+
+	denied, err := NewIngestHandler(Config{
+		TenantID: 2, ProjectID: 7, Sink: sink,
+		ResolveAuthorization: func(context.Context, int64, int64, [32]byte) (control.ProjectAuthorization, error) {
+			return control.ProjectAuthorization{}, control.ErrKeyRevoked
+		},
+		ResolveOrigins: func(context.Context, int64, int64) ([]string, error) { return nil, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response = httptest.NewRecorder()
+	denied.ServeHTTP(response, httptest.NewRequest("POST", "/api/7/envelope/?sentry_key=revoked", strings.NewReader("{}")))
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked dynamic key status=%d", response.Code)
 	}
 }
 

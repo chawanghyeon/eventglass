@@ -93,6 +93,28 @@ type ExistingSubsetError struct {
 func (err *ExistingSubsetError) Error() string { return ErrAlreadyAcceptedSubset.Error() }
 func (err *ExistingSubsetError) Unwrap() error { return ErrAlreadyAcceptedSubset }
 
+type AuthorizationRejection struct {
+	AcceptanceID string
+	Cause        error
+}
+
+type AuthorizationRejectError struct {
+	Rejected []AuthorizationRejection
+}
+
+func (err *AuthorizationRejectError) Error() string { return ErrAuthorizationStale.Error() }
+func (err *AuthorizationRejectError) Is(target error) bool {
+	if target == ErrAuthorizationStale {
+		return true
+	}
+	for _, rejection := range err.Rejected {
+		if errors.Is(rejection.Cause, target) {
+			return true
+		}
+	}
+	return false
+}
+
 type receiptQueryer interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }

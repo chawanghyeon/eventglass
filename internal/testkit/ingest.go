@@ -4,9 +4,11 @@ package testkit
 
 import (
 	"context"
+	"sync"
+
+	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/ingest"
 	"github.com/chawanghyeon/eventglass/internal/model"
-	"sync"
 )
 
 type MemorySink struct {
@@ -15,14 +17,14 @@ type MemorySink struct {
 	err     error
 }
 
-func (s *MemorySink) Accept(_ context.Context, command ingest.Command) error {
+func (s *MemorySink) Accept(_ context.Context, command ingest.Command) (control.ReceiptResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
-		return s.err
+		return control.ReceiptResult{}, s.err
 	}
 	s.batches = append(s.batches, command.Request)
-	return nil
+	return control.ReceiptResult{AcceptanceID: command.Request.AcceptanceID}, nil
 }
 
 func (s *MemorySink) Batches() []model.NormalizedRequest {

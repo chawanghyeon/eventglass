@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/ingest"
 	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/sdk"
@@ -35,7 +36,7 @@ const (
 var errStorePayloadTooLarge = errors.New("legacy store payload limit exceeded")
 
 type Acceptor interface {
-	Accept(context.Context, ingest.Command) error
+	Accept(context.Context, ingest.Command) (control.ReceiptResult, error)
 }
 
 type Config struct {
@@ -53,6 +54,10 @@ type Config struct {
 	ProjectRevision       int64
 	KeyRevision           int64
 	ScrubRevision         int
+	TenantRevision        int64
+	ConfigRevision        int64
+	ResolveAuthorization  func(context.Context, int64, int64, [32]byte) (control.ProjectAuthorization, error)
+	ResolveOrigins        func(context.Context, int64, int64) ([]string, error)
 	// App injects process-wide budgets when multiple handlers/roles coexist.
 	IngressBudget *resource.Budget
 	WorkingBudget *resource.Budget
@@ -66,8 +71,11 @@ type IngestHandler struct {
 }
 
 func NewIngestHandler(config Config) (*IngestHandler, error) {
-	if config.TenantID <= 0 || config.ProjectID <= 0 || config.PublicKey == "" || config.Sink == nil {
+	if config.TenantID <= 0 || config.ProjectID <= 0 || (config.PublicKey == "" && config.ResolveAuthorization == nil) || config.Sink == nil {
 		return nil, errors.New("tenant, project, public key, and sink are required")
+	}
+	if (config.ResolveAuthorization == nil) != (config.ResolveOrigins == nil) {
+		return nil, errors.New("dynamic authorization and origin resolvers must be configured together")
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -81,7 +89,13 @@ func NewIngestHandler(config Config) (*IngestHandler, error) {
 	if config.ScrubRevision == 0 {
 		config.ScrubRevision = 1
 	}
-	if config.ProjectRevision < 1 || config.KeyRevision < 1 || config.ScrubRevision < 1 {
+	if config.TenantRevision == 0 {
+		config.TenantRevision = 1
+	}
+	if config.ConfigRevision == 0 {
+		config.ConfigRevision = 1
+	}
+	if config.ProjectRevision < 1 || config.KeyRevision < 1 || config.ScrubRevision < 1 || config.TenantRevision < 1 || config.ConfigRevision < 1 {
 		return nil, errors.New("authorization revisions must be positive")
 	}
 	if config.DecoderSlots <= 0 {
@@ -111,12 +125,12 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	writer.Header().Set("Content-Type", "application/json")
 	if origin := request.Header.Get("Origin"); origin != "" {
 		writer.Header().Add("Vary", "Origin")
-		if _, allowed := handler.origins[origin]; allowed {
-			writer.Header().Set("Access-Control-Allow-Origin", origin)
-			writer.Header().Set("Access-Control-Expose-Headers", "Retry-After, X-Sentry-Rate-Limits, X-Eventglass-Receipt")
-		} else {
-			writeError(writer, http.StatusForbidden, "origin_not_allowed")
-			return
+		if handler.config.ResolveAuthorization == nil {
+			if _, allowed := handler.origins[origin]; !allowed {
+				writeError(writer, http.StatusForbidden, "origin_not_allowed")
+				return
+			}
+			setCORSResponse(writer, origin)
 		}
 	}
 	if request.Method == http.MethodOptions {
@@ -202,7 +216,36 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 			return
 		}
 	}
-	if !handler.authorized(request, envelope.Header, projectID) {
+	identity, ok := handler.ingestIdentity(request, envelope.Header, projectID)
+	if !ok {
+		writeError(writer, http.StatusUnauthorized, "invalid_key")
+		return
+	}
+	authorization := ingest.Authorization{
+		TenantID: handler.config.TenantID, ProjectID: projectID, KeyHash: sha256.Sum256([]byte(identity)),
+		TenantRevision: handler.config.TenantRevision, ProjectRevision: handler.config.ProjectRevision,
+		KeyRevision: handler.config.KeyRevision, ScrubRevision: handler.config.ScrubRevision, ConfigRevision: handler.config.ConfigRevision,
+	}
+	defaultService := handler.config.DefaultService
+	if handler.config.ResolveAuthorization != nil {
+		resolved, err := handler.config.ResolveAuthorization(request.Context(), handler.config.TenantID, projectID, authorization.KeyHash)
+		if err != nil {
+			handler.writeAuthorizationError(writer, err)
+			return
+		}
+		authorization.TenantRevision = resolved.Snapshot.TenantRevision
+		authorization.ProjectRevision = resolved.Snapshot.ProjectRevision
+		authorization.KeyRevision = resolved.Snapshot.KeyRevision
+		authorization.ScrubRevision = resolved.Snapshot.ScrubRevision
+		authorization.ConfigRevision = resolved.Snapshot.ConfigRevision
+		defaultService = resolved.DefaultService
+		if origin := request.Header.Get("Origin"); origin != "" && !containsString(resolved.AllowedOrigins, origin) {
+			writeError(writer, http.StatusForbidden, "origin_not_allowed")
+			return
+		} else if origin != "" {
+			setCORSResponse(writer, origin)
+		}
+	} else if identity != handler.config.PublicKey {
 		writeError(writer, http.StatusUnauthorized, "invalid_key")
 		return
 	}
@@ -213,7 +256,7 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 	}
 	batch, err := ingest.NormalizeEnvelope(envelope, ingest.NormalizeOptions{
 		TenantID: handler.config.TenantID, ProjectID: projectID, AcceptanceID: acceptanceID,
-		ArrivalTime: handler.config.Now(), DefaultService: handler.config.DefaultService,
+		ArrivalTime: handler.config.Now(), DefaultService: defaultService,
 		ForbiddenValue: handler.config.ForbiddenFixtureValue,
 	})
 	if err != nil {
@@ -224,13 +267,9 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusBadRequest, "normalization_failed")
 		return
 	}
-	command := ingest.Command{Request: batch, Authorization: ingest.Authorization{
-		TenantID: handler.config.TenantID, ProjectID: projectID,
-		KeyHash:         sha256.Sum256([]byte(handler.config.PublicKey)),
-		ProjectRevision: handler.config.ProjectRevision, KeyRevision: handler.config.KeyRevision,
-		ScrubRevision: handler.config.ScrubRevision,
-	}}
-	if err := handler.config.Sink.Accept(request.Context(), command); err != nil {
+	command := ingest.Command{Request: batch, Authorization: authorization}
+	receipt, err := handler.config.Sink.Accept(request.Context(), command)
+	if err != nil {
 		if errors.Is(err, ingest.ErrProjectDisabled) {
 			writeError(writer, http.StatusForbidden, "project_disabled")
 			return
@@ -246,7 +285,11 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		writeError(writer, http.StatusServiceUnavailable, "dependency_unavailable")
 		return
 	}
-	writer.Header().Set("X-Eventglass-Receipt", acceptanceID)
+	if receipt.AcceptanceID != acceptanceID {
+		writeError(writer, http.StatusServiceUnavailable, "receipt_mismatch")
+		return
+	}
+	writer.Header().Set("X-Eventglass-Receipt", receipt.AcceptanceID)
 	if batch.Unsupported > 0 {
 		writer.Header().Set("X-Eventglass-Unsupported-Items", strconv.Itoa(batch.Unsupported))
 	}
@@ -289,6 +332,24 @@ func (handler *IngestHandler) options(writer http.ResponseWriter, request *http.
 		writeError(writer, http.StatusBadRequest, "missing_origin")
 		return
 	}
+	projectID, _, ok := parseIngestPath(request.URL.Path)
+	if !ok || projectID != handler.config.ProjectID {
+		writeError(writer, http.StatusNotFound, "not_found")
+		return
+	}
+	origin := request.Header.Get("Origin")
+	if handler.config.ResolveOrigins != nil {
+		origins, err := handler.config.ResolveOrigins(request.Context(), handler.config.TenantID, projectID)
+		if err != nil {
+			handler.writeAuthorizationError(writer, err)
+			return
+		}
+		if !containsString(origins, origin) {
+			writeError(writer, http.StatusForbidden, "origin_not_allowed")
+			return
+		}
+		setCORSResponse(writer, origin)
+	}
 	requested := strings.ToLower(request.Header.Get("Access-Control-Request-Headers"))
 	for _, header := range strings.Split(requested, ",") {
 		header = strings.TrimSpace(header)
@@ -303,24 +364,24 @@ func (handler *IngestHandler) options(writer http.ResponseWriter, request *http.
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (handler *IngestHandler) authorized(request *http.Request, header map[string]any, projectID int64) bool {
+func (handler *IngestHandler) ingestIdentity(request *http.Request, header map[string]any, projectID int64) (string, bool) {
 	identities := make([]string, 0, 4)
 	if authHeaders := request.Header.Values("X-Sentry-Auth"); len(authHeaders) > 0 {
 		for _, authHeader := range authHeaders {
 			keys := authKeys(authHeader)
 			if len(keys) == 0 {
-				return false
+				return "", false
 			}
 			identities = append(identities, keys...)
 		}
 	}
 	if keys, supplied := request.URL.Query()["sentry_key"]; supplied {
 		if len(keys) == 0 {
-			return false
+			return "", false
 		}
 		for _, key := range keys {
 			if key == "" {
-				return false
+				return "", false
 			}
 			identities = append(identities, key)
 		}
@@ -328,23 +389,49 @@ func (handler *IngestHandler) authorized(request *http.Request, header map[strin
 	if rawDSN, _ := header["dsn"].(string); rawDSN != "" {
 		parsed, err := url.Parse(rawDSN)
 		if err != nil || parsed.User == nil || parsed.User.Username() == "" {
-			return false
+			return "", false
 		}
 		project, err := strconv.ParseInt(strings.Trim(parsed.Path, "/"), 10, 64)
 		if err != nil || project != projectID {
-			return false
+			return "", false
 		}
 		identities = append(identities, parsed.User.Username())
 	}
 	if len(identities) == 0 {
-		return false
+		return "", false
 	}
-	for _, identity := range identities {
-		if identity != handler.config.PublicKey {
-			return false
+	identity := identities[0]
+	for _, candidate := range identities[1:] {
+		if candidate != identity {
+			return "", false
 		}
 	}
-	return true
+	return identity, true
+}
+
+func (handler *IngestHandler) writeAuthorizationError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, control.ErrTenantDisabled), errors.Is(err, control.ErrProjectDisabled):
+		writeError(writer, http.StatusForbidden, "project_disabled")
+	case errors.Is(err, control.ErrKeyRevoked):
+		writeError(writer, http.StatusUnauthorized, "invalid_key")
+	default:
+		writeError(writer, http.StatusServiceUnavailable, "dependency_unavailable")
+	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func setCORSResponse(writer http.ResponseWriter, origin string) {
+	writer.Header().Set("Access-Control-Allow-Origin", origin)
+	writer.Header().Set("Access-Control-Expose-Headers", "Retry-After, X-Sentry-Rate-Limits, X-Eventglass-Receipt")
 }
 
 func authKeys(header string) []string {

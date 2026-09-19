@@ -192,15 +192,17 @@ func lookupAndClassify(ctx context.Context, queryer receiptQueryer, batch Verifi
 
 func lockProjectAuthorities(ctx context.Context, tx pgx.Tx, batch VerifiedBatch, tenantRevision int64) (map[int64]int, error) {
 	authorities := make(map[projectAuthorityKey]AuthorizationSnapshot)
+	requestIDs := make(map[projectAuthorityKey][]string)
 	for _, request := range batch.Requests {
 		if request.Authorization.TenantRevision != tenantRevision {
-			return nil, ErrAuthorizationStale
+			return nil, &AuthorizationRejectError{Rejected: []AuthorizationRejection{{AcceptanceID: request.Index.AcceptanceID, Cause: ErrAuthorizationStale}}}
 		}
 		key := projectAuthorityKey{request.Index.ProjectID, request.Authorization.KeyHash}
 		if previous, exists := authorities[key]; exists && previous != request.Authorization {
-			return nil, ErrAuthorizationStale
+			return nil, &AuthorizationRejectError{Rejected: []AuthorizationRejection{{AcceptanceID: request.Index.AcceptanceID, Cause: ErrAuthorizationStale}}}
 		}
 		authorities[key] = request.Authorization
+		requestIDs[key] = append(requestIDs[key], request.Index.AcceptanceID)
 	}
 	keys := make([]projectAuthorityKey, 0, len(authorities))
 	for key := range authorities {
@@ -213,6 +215,7 @@ func lockProjectAuthorities(ctx context.Context, tx pgx.Tx, batch VerifiedBatch,
 		return string(keys[i].keyHash[:]) < string(keys[j].keyHash[:])
 	})
 	retention := make(map[int64]int, len(keys))
+	var rejected []AuthorizationRejection
 	for _, key := range keys {
 		expected := authorities[key]
 		var projectState, keyState string
@@ -223,21 +226,36 @@ func lockProjectAuthorities(ctx context.Context, tx pgx.Tx, batch VerifiedBatch,
 			WHERE p.tenant_id=$1 AND p.project_id=$2 AND k.key_hash=$3 FOR SHARE OF p,k`,
 			batch.TenantID, key.projectID, key.keyHash[:]).Scan(&projectState, &projectRevision, &scrubRevision, &configRevision, &retentionDays, &keyState, &keyRevision)
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, ErrKeyRevoked
+			for _, acceptanceID := range requestIDs[key] {
+				rejected = append(rejected, AuthorizationRejection{AcceptanceID: acceptanceID, Cause: ErrKeyRevoked})
+			}
+			continue
 		}
 		if err != nil {
 			return nil, err
 		}
 		if projectState != "active" {
-			return nil, ErrProjectDisabled
+			for _, acceptanceID := range requestIDs[key] {
+				rejected = append(rejected, AuthorizationRejection{AcceptanceID: acceptanceID, Cause: ErrProjectDisabled})
+			}
+			continue
 		}
 		if keyState != "active" {
-			return nil, ErrKeyRevoked
+			for _, acceptanceID := range requestIDs[key] {
+				rejected = append(rejected, AuthorizationRejection{AcceptanceID: acceptanceID, Cause: ErrKeyRevoked})
+			}
+			continue
 		}
 		if projectRevision != expected.ProjectRevision || keyRevision != expected.KeyRevision || scrubRevision != expected.ScrubRevision || configRevision != expected.ConfigRevision {
-			return nil, ErrAuthorizationStale
+			for _, acceptanceID := range requestIDs[key] {
+				rejected = append(rejected, AuthorizationRejection{AcceptanceID: acceptanceID, Cause: ErrAuthorizationStale})
+			}
+			continue
 		}
 		retention[key.projectID] = retentionDays
+	}
+	if len(rejected) != 0 {
+		return nil, &AuthorizationRejectError{Rejected: rejected}
 	}
 	return retention, nil
 }
