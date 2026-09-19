@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4 are complete; Q1 is the first pending packet. Do not mark a packet complete until
+G03 packets P1–P4 and G04 packet Q1 are complete; Q2 is the first pending packet. Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
 in the implementation commit, not by making per-packet diary files.
 
@@ -57,7 +57,7 @@ using isolated fixtures, never automatic production seed accounts.
 
 | ID / depends on | Read | Files | Required tests and done condition |
 |---|---|---|---|
-| Q1 / P4 | api-ui auth/routes, control G04 | migrations/0005_auth_queries.sql; api/openapi.yaml; api/generated; control/auth.go; api/session.go; app routes; codegen tool lock | Real setup race, CSRF/login limits/hash budget, last-admin, cross-tenant grants, disabled scope, key not read auth, secret once, deterministic codegen. Define all v1 DTOs/routes now; only enable implemented routes |
+| Q1 / P4 — complete | api-ui auth/routes, control G04 | migrations/0005_auth_queries.sql; api/openapi.yaml; api/generated; control/auth.go; api/session.go; app routes; codegen tool lock | Real setup race, CSRF/login limits/hash budget, last-admin, cross-tenant grants, disabled scope, key not read auth, secret once, deterministic codegen. Define all v1 DTOs/routes now; only enable implemented routes |
 | Q2 / Q1 | query IR/compiler | query/filter.go,cel.go,sql.go,hash.go; model plan types | AST/CEL equivalence, missing!=false, negation, wildcard literals, namespaces/dotted pointers, invalid macros/regex, 38digit integers, Unicode, SQL injection/OR escape; independent Go oracle distinct from compiler |
 | Q3 / Q2 | query snapshots/tokens | control/snapshots.go,catalog.go; query/snapshot.go,token.go | Reader/GC lane lock race, RR retry, dataset shared rows/histogram, token purpose/MAC/owner/revision/generation/TTL, empty authorized catalog vs missing object, cursor equal-time ties |
 | Q4 / Q3 | query tasks/merges, child protocol | control/query_jobs.go; query/execute.go,merge.go; engine/query.go,reduce.go; app query-worker | Disjoint partitions, same winning attempt twice ignored, coordinator restart/cancel, topK global winner outside all local topK, weighted average, overflow,20k/20k+1 groups,64MiB total cap, empty histogram/negative epoch |

@@ -21,6 +21,7 @@ type RuntimeInstallation struct {
 	LaneCount                 int
 	GlobalScrubPolicySHA      string
 	GlobalScrubPolicyRevision int64
+	SetupState                SetupState
 }
 
 // RuntimeDatabase owns the PostgreSQL driver pool. App assembly configures its
@@ -58,6 +59,9 @@ func (database *RuntimeDatabase) IngestOperations() (*IngestOperations, error) {
 }
 func (database *RuntimeDatabase) PublicationOperations() (*PublicationOperations, error) {
 	return NewPublicationOperations(database.pool)
+}
+func (database *RuntimeDatabase) AuthOperations() (*AuthOperations, error) {
+	return NewAuthOperations(database.pool)
 }
 
 // VerifyRuntimeSchema is read-only. Runtime never races migrations into a live
@@ -102,18 +106,18 @@ func LoadRuntimeInstallation(ctx context.Context, pool *pgxpool.Pool) (RuntimeIn
 	}
 	var installation RuntimeInstallation
 	err := pool.QueryRow(ctx, `SELECT installation_id::text,storage_generation,storage_identity,schema_version,
-		topology_version,lane_count,global_scrub_policy_sha,global_scrub_policy_revision
+		topology_version,lane_count,global_scrub_policy_sha,global_scrub_policy_revision,setup_state
 		FROM installations WHERE singleton`).Scan(
 		&installation.InstallationID, &installation.StorageGeneration, &installation.StorageIdentity,
 		&installation.SchemaVersion, &installation.TopologyVersion, &installation.LaneCount,
-		&installation.GlobalScrubPolicySHA, &installation.GlobalScrubPolicyRevision)
+		&installation.GlobalScrubPolicySHA, &installation.GlobalScrubPolicyRevision, &installation.SetupState)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RuntimeInstallation{}, errors.New("installation is not initialized")
 	}
 	if err != nil {
 		return RuntimeInstallation{}, err
 	}
-	if installation.StorageGeneration <= 0 || installation.SchemaVersion != model.SchemaVersion || installation.TopologyVersion != 1 || installation.LaneCount != model.LaneCount || installation.GlobalScrubPolicyRevision <= 0 {
+	if installation.StorageGeneration <= 0 || installation.SchemaVersion != model.SchemaVersion || installation.TopologyVersion != 1 || installation.LaneCount != model.LaneCount || installation.GlobalScrubPolicyRevision <= 0 || (installation.SetupState != SetupUninitialized && installation.SetupState != SetupProvisioning && installation.SetupState != SetupReady) {
 		return RuntimeInstallation{}, errors.New("installation format is not supported by this binary")
 	}
 	return installation, nil

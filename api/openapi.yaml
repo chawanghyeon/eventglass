@@ -1,0 +1,543 @@
+openapi: 3.1.0
+info:
+  title: Eventglass Management API
+  version: 0.0.0-g04
+  description: Generated-contract source for the bounded Eventglass v1 management and query API.
+servers:
+  - url: /
+security:
+  - sessionCookie: []
+paths:
+  /livez:
+    get:
+      operationId: getLiveness
+      security: []
+      responses:
+        "200": {description: Alive, content: {application/json: {schema: {$ref: "#/components/schemas/Health"}}}}
+  /readyz:
+    get:
+      operationId: getReadiness
+      security: []
+      responses:
+        "200": {description: Ready, content: {application/json: {schema: {$ref: "#/components/schemas/Health"}}}}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/setup:
+    get:
+      operationId: getSetupState
+      security: []
+      responses:
+        "200": {description: Setup state, content: {application/json: {schema: {$ref: "#/components/schemas/SetupState"}}}}
+        "503": {$ref: "#/components/responses/Error"}
+    post:
+      operationId: createSetup
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/SetupRequest"}}}}
+      responses:
+        "201": {description: First session, headers: {Set-Cookie: {schema: {type: string}}}, content: {application/json: {schema: {$ref: "#/components/schemas/Session"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "409": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+        "503": {$ref: "#/components/responses/Error"}
+  /v1/sessions:
+    post:
+      operationId: createSession
+      security: []
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/LoginRequest"}}}}
+      responses:
+        "200": {description: Session, headers: {Set-Cookie: {schema: {type: string}}}, content: {application/json: {schema: {$ref: "#/components/schemas/Session"}}}}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/session:
+    get:
+      operationId: getSession
+      responses:
+        "200": {description: Current session, content: {application/json: {schema: {$ref: "#/components/schemas/Session"}}}}
+        "401": {$ref: "#/components/responses/Error"}
+    delete:
+      operationId: deleteSession
+      parameters: [{$ref: "#/components/parameters/CSRF"}]
+      responses:
+        "204": {description: Revoked}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+  /v1/session/password:
+    post:
+      operationId: updateSessionCredential
+      parameters: [{$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/CredentialChangeRequest"}}}}
+      responses:
+        "204": {description: Password changed; all sessions revoked}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
+  /v1/projects:
+    get:
+      operationId: listProjects
+      parameters: [{$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/Limit"}, {$ref: "#/components/parameters/Cursor"}]
+      responses: {"200": {description: Projects, content: {application/json: {schema: {$ref: "#/components/schemas/ProjectList"}}}}, "401": {$ref: "#/components/responses/Error"}, "403": {$ref: "#/components/responses/Error"}}
+    post:
+      operationId: createProject
+      parameters: [{$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ProjectCreate"}}}}
+      responses: {"201": {description: Project, content: {application/json: {schema: {$ref: "#/components/schemas/Project"}}}}, "400": {$ref: "#/components/responses/Error"}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/projects/{id}:
+    patch:
+      operationId: updateProject
+      parameters: [{$ref: "#/components/parameters/NumericID"}, {$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ProjectPatch"}}}}
+      responses: {"200": {description: Project, content: {application/json: {schema: {$ref: "#/components/schemas/Project"}}}}, "403": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/projects/{id}/keys:
+    get:
+      operationId: listProjectKeys
+      parameters: [{$ref: "#/components/parameters/NumericID"}, {$ref: "#/components/parameters/TenantID"}]
+      responses: {"200": {description: Keys, content: {application/json: {schema: {$ref: "#/components/schemas/KeyList"}}}}, "403": {$ref: "#/components/responses/Error"}}
+    post:
+      operationId: createProjectKey
+      parameters: [{$ref: "#/components/parameters/NumericID"}, {$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/KeyCreate"}}}}
+      responses: {"201": {description: One-time key secret, content: {application/json: {schema: {$ref: "#/components/schemas/CreatedKey"}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/projects/{id}/keys/{key_id}:
+    delete:
+      operationId: revokeProjectKey
+      parameters: [{$ref: "#/components/parameters/NumericID"}, {name: key_id, in: path, required: true, schema: {$ref: "#/components/schemas/UUID"}}, {$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/Revision"}, {$ref: "#/components/parameters/CSRF"}]
+      responses: {"204": {description: Revoked}, "403": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/users:
+    get:
+      operationId: listUsers
+      parameters: [{$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/Limit"}, {$ref: "#/components/parameters/Cursor"}]
+      responses: {"200": {description: Users, content: {application/json: {schema: {$ref: "#/components/schemas/UserList"}}}}, "403": {$ref: "#/components/responses/Error"}}
+    post:
+      operationId: createUser
+      parameters: [{$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/UserCreate"}}}}
+      responses: {"201": {description: User, content: {application/json: {schema: {$ref: "#/components/schemas/User"}}}}, "403": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/users/{id}:
+    patch:
+      operationId: updateUser
+      parameters: [{$ref: "#/components/parameters/NumericID"}, {$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/UserPatch"}}}}
+      responses: {"200": {description: User, content: {application/json: {schema: {$ref: "#/components/schemas/User"}}}}, "403": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/search:
+    post:
+      operationId: searchRecords
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/SearchRequest"}}}}
+      responses: {"200": {description: Search result, content: {application/json: {schema: {$ref: "#/components/schemas/SearchResult"}}}}, "202": {description: Async query, content: {application/json: {schema: {$ref: "#/components/schemas/QueryJob"}}}}, "403": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}}
+  /v1/aggregate:
+    post:
+      operationId: aggregateRecords
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AggregateRequest"}}}}
+      responses: {"200": {description: Aggregate result, content: {application/json: {schema: {$ref: "#/components/schemas/AggregateResult"}}}}, "202": {description: Async query, content: {application/json: {schema: {$ref: "#/components/schemas/QueryJob"}}}}, "403": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}}
+  /v1/records/{id}:
+    get:
+      operationId: getRecord
+      parameters: [{$ref: "#/components/parameters/RecordID"}, {$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/ProjectID"}, {$ref: "#/components/parameters/ReadToken"}]
+      responses: {"200": {description: Record detail, content: {application/json: {schema: {$ref: "#/components/schemas/RecordDetail"}}}}, "403": {$ref: "#/components/responses/Error"}, "404": {$ref: "#/components/responses/Error"}, "410": {$ref: "#/components/responses/Error"}}
+  /v1/records/{id}/related:
+    post:
+      operationId: getRelatedRecords
+      parameters: [{$ref: "#/components/parameters/RecordID"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/RelatedRequest"}}}}
+      responses: {"200": {description: Related rows, content: {application/json: {schema: {$ref: "#/components/schemas/SearchResult"}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/live:
+    get:
+      operationId: getLiveRecords
+      parameters: [{$ref: "#/components/parameters/TenantID"}, {name: project_ids, in: query, required: true, schema: {type: array, items: {$ref: "#/components/schemas/Int64"}}}, {name: kinds, in: query, schema: {type: array, items: {$ref: "#/components/schemas/Kind"}}}, {name: expression, in: query, schema: {type: string, maxLength: 8192}}, {name: catchup_start_us, in: query, schema: {$ref: "#/components/schemas/Int64"}}, {name: resume_token, in: query, schema: {type: string, maxLength: 8192}}]
+      responses: {"200": {description: SSE stream, content: {text/event-stream: {schema: {type: string}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/issues:
+    get:
+      operationId: listIssues
+      parameters: [{$ref: "#/components/parameters/TenantID"}, {name: project_ids, in: query, required: true, schema: {type: array, items: {$ref: "#/components/schemas/Int64"}}}, {name: status, in: query, schema: {$ref: "#/components/schemas/IssueStatus"}}, {$ref: "#/components/parameters/Limit"}, {$ref: "#/components/parameters/Cursor"}]
+      responses: {"200": {description: Issues, content: {application/json: {schema: {$ref: "#/components/schemas/IssueList"}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/issues/{id}:
+    get:
+      operationId: getIssue
+      parameters: [{$ref: "#/components/parameters/IssueID"}, {$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/ProjectID"}]
+      responses: {"200": {description: Issue, content: {application/json: {schema: {$ref: "#/components/schemas/Issue"}}}}, "404": {$ref: "#/components/responses/Error"}}
+    patch:
+      operationId: updateIssue
+      parameters: [{$ref: "#/components/parameters/IssueID"}, {$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/IssuePatch"}}}}
+      responses: {"200": {description: Issue, content: {application/json: {schema: {$ref: "#/components/schemas/Issue"}}}}, "403": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/issues/{id}/occurrences:
+    get:
+      operationId: listIssueOccurrences
+      parameters: [{$ref: "#/components/parameters/IssueID"}, {$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/ProjectID"}, {$ref: "#/components/parameters/Limit"}, {$ref: "#/components/parameters/Cursor"}]
+      responses: {"200": {description: Occurrences, content: {application/json: {schema: {$ref: "#/components/schemas/OccurrenceList"}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/destinations:
+    get:
+      operationId: listDestinations
+      parameters: [{$ref: "#/components/parameters/TenantID"}]
+      responses: {"200": {description: Destinations, content: {application/json: {schema: {$ref: "#/components/schemas/DestinationList"}}}}, "403": {$ref: "#/components/responses/Error"}}
+    post:
+      operationId: createDestination
+      parameters: [{$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/DestinationCreate"}}}}
+      responses: {"201": {description: Destination, content: {application/json: {schema: {$ref: "#/components/schemas/Destination"}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/destinations/{id}:
+    patch:
+      operationId: updateDestination
+      parameters: [{$ref: "#/components/parameters/ID"}, {$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/DestinationPatch"}}}}
+      responses: {"200": {description: Destination, content: {application/json: {schema: {$ref: "#/components/schemas/Destination"}}}}, "403": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/alerts:
+    get:
+      operationId: listAlerts
+      parameters: [{$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/ProjectID"}, {$ref: "#/components/parameters/Limit"}, {$ref: "#/components/parameters/Cursor"}]
+      responses: {"200": {description: Alert rules, content: {application/json: {schema: {$ref: "#/components/schemas/RuleList"}}}}, "403": {$ref: "#/components/responses/Error"}}
+    post:
+      operationId: createAlert
+      parameters: [{$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/RuleCreate"}}}}
+      responses: {"201": {description: Alert rule, content: {application/json: {schema: {$ref: "#/components/schemas/Rule"}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/alerts/{id}:
+    patch:
+      operationId: updateAlert
+      parameters: [{$ref: "#/components/parameters/ID"}, {$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/RulePatch"}}}}
+      responses: {"200": {description: Alert rule, content: {application/json: {schema: {$ref: "#/components/schemas/Rule"}}}}, "403": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/deliveries:
+    get:
+      operationId: listDeliveries
+      parameters: [{$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/ProjectID"}, {name: alert_id, in: query, schema: {$ref: "#/components/schemas/UUID"}}, {name: state, in: query, schema: {type: string}}, {$ref: "#/components/parameters/Limit"}, {$ref: "#/components/parameters/Cursor"}]
+      responses: {"200": {description: Deliveries, content: {application/json: {schema: {$ref: "#/components/schemas/DeliveryList"}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/deliveries/{id}/retry:
+    post:
+      operationId: retryDelivery
+      parameters: [{$ref: "#/components/parameters/ID"}, {$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ScopedRevision"}}}}
+      responses: {"200": {description: Delivery, content: {application/json: {schema: {$ref: "#/components/schemas/Delivery"}}}}, "403": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/query-jobs/{id}:
+    get:
+      operationId: getQueryJob
+      parameters: [{$ref: "#/components/parameters/ID"}, {$ref: "#/components/parameters/TenantID"}]
+      responses: {"200": {description: Query job, content: {application/json: {schema: {$ref: "#/components/schemas/QueryJob"}}}}, "404": {$ref: "#/components/responses/Error"}, "410": {$ref: "#/components/responses/Error"}}
+    delete:
+      operationId: deleteQueryJob
+      parameters: [{$ref: "#/components/parameters/ID"}, {$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/CSRF"}]
+      responses: {"204": {description: Canceled}, "404": {$ref: "#/components/responses/Error"}}
+  /v1/snapshots/{id}/heartbeat:
+    post:
+      operationId: heartbeatSnapshot
+      parameters: [{$ref: "#/components/parameters/ID"}, {$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/SnapshotHeartbeat"}}}}
+      responses: {"200": {description: Renewed token, content: {application/json: {schema: {$ref: "#/components/schemas/ReadTokenResponse"}}}}, "403": {$ref: "#/components/responses/Error"}, "410": {$ref: "#/components/responses/Error"}}
+  /v1/snapshots/{id}:
+    delete:
+      operationId: deleteSnapshot
+      parameters: [{$ref: "#/components/parameters/ID"}, {$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/CSRF"}]
+      responses: {"204": {description: Released}, "404": {$ref: "#/components/responses/Error"}}
+  /v1/system:
+    get:
+      operationId: getSystem
+      parameters: [{$ref: "#/components/parameters/TenantID"}]
+      responses: {"200": {description: System state, content: {application/json: {schema: {$ref: "#/components/schemas/System"}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/system/retention:
+    patch:
+      operationId: updateRetention
+      parameters: [{$ref: "#/components/parameters/CSRF"}]
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/RetentionPatch"}}}}
+      responses: {"200": {description: Retention, content: {application/json: {schema: {$ref: "#/components/schemas/Retention"}}}}, "403": {$ref: "#/components/responses/Error"}, "409": {$ref: "#/components/responses/Error"}}
+  /v1/system/sdk-outcomes:
+    get:
+      operationId: listSDKOutcomes
+      parameters: [{$ref: "#/components/parameters/TenantID"}, {name: start_us, in: query, required: true, schema: {$ref: "#/components/schemas/Int64"}}, {name: end_us, in: query, required: true, schema: {$ref: "#/components/schemas/Int64"}}, {$ref: "#/components/parameters/Limit"}, {$ref: "#/components/parameters/Cursor"}]
+      responses: {"200": {description: SDK outcomes, content: {application/json: {schema: {$ref: "#/components/schemas/SDKOutcomeList"}}}}, "403": {$ref: "#/components/responses/Error"}}
+  /v1/audit:
+    get:
+      operationId: listAudit
+      parameters: [{$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/Limit"}, {$ref: "#/components/parameters/Cursor"}]
+      responses: {"200": {description: Audit events, content: {application/json: {schema: {$ref: "#/components/schemas/AuditList"}}}}, "403": {$ref: "#/components/responses/Error"}}
+components:
+  securitySchemes:
+    sessionCookie: {type: apiKey, in: cookie, name: __Host-eventglass_session}
+  parameters:
+    CSRF: {name: X-CSRF-Token, in: header, required: true, schema: {type: string, minLength: 43, maxLength: 43}}
+    ID: {name: id, in: path, required: true, schema: {$ref: "#/components/schemas/UUID"}}
+    NumericID: {name: id, in: path, required: true, schema: {$ref: "#/components/schemas/Int64"}}
+    RecordID: {name: id, in: path, required: true, schema: {$ref: "#/components/schemas/SHA256"}}
+    IssueID: {name: id, in: path, required: true, schema: {$ref: "#/components/schemas/SHA256"}}
+    TenantID: {name: tenant_id, in: query, required: true, schema: {$ref: "#/components/schemas/Int64"}}
+    ProjectID: {name: project_id, in: query, required: true, schema: {$ref: "#/components/schemas/Int64"}}
+    Revision: {name: revision, in: query, required: true, schema: {$ref: "#/components/schemas/Int64"}}
+    Limit: {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 1000, default: 100}}
+    Cursor: {name: cursor, in: query, schema: {type: string, maxLength: 8192}}
+    ReadToken: {name: read_token, in: query, schema: {type: string, maxLength: 8192}}
+  responses:
+    Error: {description: Error, content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+  schemas:
+    UUID: {type: string, format: uuid, pattern: "^[0-9a-f-]{36}$"}
+    SHA256: {type: string, pattern: "^[0-9a-f]{64}$"}
+    Int64: {type: string, pattern: "^-?(0|[1-9][0-9]*)$"}
+    Timestamp: {type: string, format: date-time}
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties: {status: {type: string, enum: [alive, ready]}}
+    Error:
+      type: object
+      additionalProperties: false
+      required: [code, message, retryable, request_id]
+      properties:
+        code: {type: string, maxLength: 64}
+        message: {type: string, maxLength: 512}
+        retryable: {type: boolean}
+        request_id: {$ref: "#/components/schemas/UUID"}
+        details: {type: object, additionalProperties: true}
+    SetupState:
+      type: object
+      additionalProperties: false
+      required: [state]
+      properties: {state: {type: string, enum: [required, in_progress, complete]}}
+    SetupRequest:
+      type: object
+      additionalProperties: false
+      required: [bootstrap_token, email, password, tenant_name]
+      properties:
+        bootstrap_token: {type: string, pattern: "^[0-9a-f]{64}$"}
+        email: {type: string, minLength: 3, maxLength: 320}
+        password: {type: string, minLength: 12, maxLength: 1024}
+        tenant_name: {type: string, minLength: 1, maxLength: 128}
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties: {email: {type: string, minLength: 3, maxLength: 320}, password: {type: string, maxLength: 1024}}
+    CredentialChangeRequest:
+      type: object
+      additionalProperties: false
+      required: [current_password, new_password]
+      properties: {current_password: {type: string, maxLength: 1024}, new_password: {type: string, minLength: 12, maxLength: 1024}}
+    ProjectGrant:
+      type: object
+      additionalProperties: false
+      required: [project_id, role]
+      properties: {project_id: {$ref: "#/components/schemas/Int64"}, role: {type: string, enum: [operator, viewer]}}
+    SessionTenant:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, name, role, project_grants]
+      properties:
+        tenant_id: {$ref: "#/components/schemas/Int64"}
+        name: {type: string}
+        role: {type: string, enum: [admin, member]}
+        project_grants: {type: array, items: {$ref: "#/components/schemas/ProjectGrant"}}
+    Session:
+      type: object
+      additionalProperties: false
+      required: [user_id, email, tenants, expires_at, csrf_token, is_installation_admin]
+      properties:
+        user_id: {$ref: "#/components/schemas/Int64"}
+        email: {type: string}
+        tenants: {type: array, items: {$ref: "#/components/schemas/SessionTenant"}}
+        expires_at: {$ref: "#/components/schemas/Timestamp"}
+        csrf_token: {type: string, minLength: 43, maxLength: 43}
+        is_installation_admin: {type: boolean}
+    ScrubRules:
+      type: object
+      additionalProperties: false
+      required: [version, redact_keys, redact_paths, body_patterns]
+      properties:
+        version: {type: integer, const: 1}
+        redact_keys: {type: array, maxItems: 32, items: {type: string, maxLength: 128}}
+        redact_paths: {type: array, maxItems: 32, items: {type: string, maxLength: 1024}}
+        body_patterns: {type: array, maxItems: 32, items: {type: string, maxLength: 1024}}
+    Project:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, project_id, name, state, default_service, allowed_origins, revision, auth_revision, scrub_revision]
+      properties:
+        tenant_id: {$ref: "#/components/schemas/Int64"}
+        project_id: {$ref: "#/components/schemas/Int64"}
+        name: {type: string}
+        state: {type: string, enum: [active, disabled]}
+        default_service: {type: string}
+        allowed_origins: {type: array, items: {type: string, format: uri}}
+        revision: {$ref: "#/components/schemas/Int64"}
+        auth_revision: {$ref: "#/components/schemas/Int64"}
+        scrub_revision: {$ref: "#/components/schemas/Int64"}
+        scrub_rules: {$ref: "#/components/schemas/ScrubRules"}
+    ProjectCreate:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, name, default_service, allowed_origins]
+      properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, name: {type: string}, default_service: {type: string}, allowed_origins: {type: array, items: {type: string, format: uri}}}
+    ProjectPatch:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, revision]
+      properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, revision: {$ref: "#/components/schemas/Int64"}, name: {type: string}, state: {type: string, enum: [active, disabled]}, default_service: {type: string}, allowed_origins: {type: array, items: {type: string, format: uri}}, scrub_rules: {$ref: "#/components/schemas/ScrubRules"}}
+    ProjectList: {$ref: "#/components/schemas/GenericProjectList"}
+    GenericProjectList:
+      type: object
+      required: [items, next_cursor]
+      properties: {items: {type: array, items: {$ref: "#/components/schemas/Project"}}, next_cursor: {type: string, nullable: true}}
+    Key:
+      type: object
+      required: [key_id, label, key_prefix, state, revision, created_at]
+      properties: {key_id: {$ref: "#/components/schemas/UUID"}, label: {type: string}, key_prefix: {type: string, pattern: "^[0-9a-f]{8}$"}, state: {type: string, enum: [active, revoked]}, revision: {$ref: "#/components/schemas/Int64"}, created_at: {$ref: "#/components/schemas/Timestamp"}}
+    CreatedKey:
+      allOf:
+        - {$ref: "#/components/schemas/Key"}
+        - {type: object, required: [public_key, dsn], properties: {public_key: {type: string}, dsn: {type: string}}}
+    KeyCreate: {type: object, additionalProperties: false, required: [tenant_id, label], properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, label: {type: string, maxLength: 128}}}
+    KeyList: {type: object, required: [items, next_cursor], properties: {items: {type: array, items: {$ref: "#/components/schemas/Key"}}, next_cursor: {type: string, nullable: true}}}
+    User:
+      type: object
+      required: [user_id, email, state, revision, role, project_grants]
+      properties:
+        user_id: {$ref: "#/components/schemas/Int64"}
+        email: {type: string}
+        state: {type: string, enum: [active, disabled]}
+        revision: {$ref: "#/components/schemas/Int64"}
+        role:
+          oneOf:
+            - {type: string, enum: [admin, member]}
+            - {type: "null"}
+        project_grants: {type: array, items: {$ref: "#/components/schemas/ProjectGrant"}}
+    UserCreate: {type: object, additionalProperties: false, required: [tenant_id, email, initial_password, role, project_grants], properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, email: {type: string}, initial_password: {type: string, minLength: 12, maxLength: 1024}, role: {type: string, enum: [admin, member]}, project_grants: {type: array, items: {$ref: "#/components/schemas/ProjectGrant"}}}}
+    UserPatch:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, revision]
+      properties:
+        tenant_id: {$ref: "#/components/schemas/Int64"}
+        revision: {$ref: "#/components/schemas/Int64"}
+        state: {type: string, enum: [active, disabled]}
+        role:
+          oneOf:
+            - {type: string, enum: [admin, member]}
+            - {type: "null"}
+        project_grants: {type: array, items: {$ref: "#/components/schemas/ProjectGrant"}}
+        new_password: {type: string, minLength: 12, maxLength: 1024}
+    UserList: {type: object, required: [items, next_cursor], properties: {items: {type: array, items: {$ref: "#/components/schemas/User"}}, next_cursor: {type: string, nullable: true}}}
+    Kind: {type: string, enum: [error, log, transaction]}
+    Dataset:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, project_ids, start_us, end_us, time_basis, kinds]
+      properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, project_ids: {type: array, minItems: 1, uniqueItems: true, items: {$ref: "#/components/schemas/Int64"}}, start_us: {$ref: "#/components/schemas/Int64"}, end_us: {$ref: "#/components/schemas/Int64"}, time_basis: {type: string, enum: [event, received]}, kinds: {type: array, uniqueItems: true, items: {$ref: "#/components/schemas/Kind"}}, expression: {type: string, maxLength: 8192}, filter: {$ref: "#/components/schemas/FilterNode"}}
+    FilterNode: {type: object, maxProperties: 8, additionalProperties: true}
+    SearchRequest:
+      allOf:
+        - {$ref: "#/components/schemas/Dataset"}
+        - {type: object, properties: {read_token: {type: string}, cursor: {type: string}, limit: {type: integer, minimum: 1, maximum: 1000, default: 100}, sort: {type: string, enum: [event_desc, received_desc], default: event_desc}, mode: {type: string, enum: [auto, sync, async], default: auto}, projection: {type: string, const: list}}}
+    ListRow:
+      type: object
+      required: [record_id, project_id, kind, event_time_us, event_time_ns_remainder, received_time_us, level, message, message_truncated]
+      properties: {record_id: {$ref: "#/components/schemas/SHA256"}, project_id: {$ref: "#/components/schemas/Int64"}, kind: {$ref: "#/components/schemas/Kind"}, event_time_us: {$ref: "#/components/schemas/Int64"}, event_time_ns_remainder: {type: integer, minimum: 0, maximum: 999}, received_time_us: {$ref: "#/components/schemas/Int64"}, level: {type: string}, severity_number: {type: integer, nullable: true}, message: {type: string, maxLength: 2048}, service: {type: string, nullable: true}, environment: {type: string, nullable: true}, release: {type: string, nullable: true}, trace_id: {type: string, nullable: true}, issue_id: {oneOf: [{$ref: "#/components/schemas/SHA256"}, {type: "null"}]}, message_truncated: {type: boolean}}
+    Cut: {type: object, required: [lane_id, seq], properties: {lane_id: {type: integer, minimum: 0, maximum: 15}, seq: {$ref: "#/components/schemas/Int64"}}}
+    QueryStats: {type: object, required: [scanned_bytes, objects, cache_bytes, elapsed_ms, cut, visibility_lag_ms], properties: {scanned_bytes: {$ref: "#/components/schemas/Int64"}, objects: {$ref: "#/components/schemas/Int64"}, cache_bytes: {$ref: "#/components/schemas/Int64"}, elapsed_ms: {$ref: "#/components/schemas/Int64"}, cut: {type: array, minItems: 16, maxItems: 16, items: {$ref: "#/components/schemas/Cut"}}, visibility_lag_ms: {oneOf: [{$ref: "#/components/schemas/Int64"}, {type: "null"}]}}}
+    SearchResult: {type: object, required: [rows, read_token, next_cursor, complete, stats, warnings], properties: {rows: {type: array, items: {$ref: "#/components/schemas/ListRow"}}, read_token: {type: string}, next_cursor: {type: string, nullable: true}, complete: {type: boolean, const: true}, stats: {$ref: "#/components/schemas/QueryStats"}, warnings: {type: array, items: {type: string}}}}
+    AggregateRequest: {allOf: [{$ref: "#/components/schemas/Dataset"}, {type: object, required: [metrics, group_by], properties: {metrics: {type: array, minItems: 1, items: {$ref: "#/components/schemas/Metric"}}, group_by: {type: array, items: {$ref: "#/components/schemas/GroupNode"}}, histogram: {$ref: "#/components/schemas/Histogram"}, top: {type: integer, minimum: 1, maximum: 20000, default: 100}, order: {$ref: "#/components/schemas/MetricOrder"}, read_token: {type: string}, mode: {type: string, enum: [auto, sync, async]}}}]}
+    Metric: {type: object, required: [name, op], properties: {name: {type: string, pattern: "^[a-z][a-z0-9_]{0,31}$"}, op: {type: string, enum: [count, sum, min, max, avg]}, field: {$ref: "#/components/schemas/GroupNode"}}}
+    GroupNode: {type: object, additionalProperties: true, maxProperties: 6}
+    Histogram: {type: object, required: [interval, empty_buckets], properties: {interval: {type: string}, empty_buckets: {type: boolean}}}
+    MetricOrder: {type: object, required: [metric, direction], properties: {metric: {type: string}, direction: {type: string, enum: [asc, desc]}}}
+    AggregateResult: {type: object, required: [groups, read_token, complete, stats, warnings], properties: {groups: {type: array, items: {$ref: "#/components/schemas/AggregateGroup"}}, read_token: {type: string}, complete: {type: boolean, const: true}, stats: {$ref: "#/components/schemas/QueryStats"}, warnings: {type: array, items: {type: string}}}}
+    AggregateGroup: {type: object, required: [keys, metrics], properties: {keys: {type: array, items: {$ref: "#/components/schemas/TypedValue"}}, bucket_start_us: {$ref: "#/components/schemas/Int64"}, metrics: {type: object, additionalProperties: {$ref: "#/components/schemas/MetricValue"}}}}
+    TypedValue: {type: object, required: [type], properties: {type: {type: string}, value: {}}}
+    MetricValue: {type: object, required: [type, value, valid_count, excluded_count], properties: {type: {type: string}, value: {}, valid_count: {$ref: "#/components/schemas/Int64"}, excluded_count: {$ref: "#/components/schemas/Int64"}}}
+    RecordDetail: {type: object, required: [record, raw, envelope_sdk, read_token], properties: {record: {type: object, additionalProperties: true}, raw: {type: object, additionalProperties: true}, envelope_sdk: {type: object, nullable: true, additionalProperties: true}, read_token: {type: string}}}
+    RelatedRequest: {allOf: [{$ref: "#/components/schemas/Dataset"}, {type: object, properties: {read_token: {type: string}, limit: {type: integer, minimum: 1, maximum: 1000}, allow_time_service_fallback: {type: boolean}}}]}
+    IssueStatus: {type: string, enum: [unresolved, resolved, ignored]}
+    IssuePoint: {type: object, required: [event_us, ns, record_id, release], properties: {event_us: {$ref: "#/components/schemas/Int64"}, ns: {type: integer, minimum: 0, maximum: 999}, record_id: {$ref: "#/components/schemas/SHA256"}, release: {type: string, nullable: true}}}
+    Issue: {type: object, required: [issue_id, project_id, status, revision, title, grouping_version, lifetime_occurrence_count, first, last, last_received_us, detail_retention_floor_us], properties: {issue_id: {$ref: "#/components/schemas/SHA256"}, project_id: {$ref: "#/components/schemas/Int64"}, status: {$ref: "#/components/schemas/IssueStatus"}, revision: {$ref: "#/components/schemas/Int64"}, title: {type: string}, grouping_version: {type: integer}, lifetime_occurrence_count: {$ref: "#/components/schemas/Int64"}, first: {$ref: "#/components/schemas/IssuePoint"}, last: {$ref: "#/components/schemas/IssuePoint"}, last_received_us: {$ref: "#/components/schemas/Int64"}, detail_retention_floor_us: {$ref: "#/components/schemas/Int64"}}}
+    IssuePatch: {type: object, additionalProperties: false, required: [tenant_id, project_id, revision, status], properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, project_id: {$ref: "#/components/schemas/Int64"}, revision: {$ref: "#/components/schemas/Int64"}, status: {$ref: "#/components/schemas/IssueStatus"}, operation_id: {$ref: "#/components/schemas/UUID"}}}
+    IssueList: {type: object, required: [items, next_cursor], properties: {items: {type: array, items: {$ref: "#/components/schemas/Issue"}}, next_cursor: {type: string, nullable: true}}}
+    Occurrence: {type: object, required: [record_id, project_id, event_us, ns, received_us, release, detail_available], properties: {record_id: {$ref: "#/components/schemas/SHA256"}, project_id: {$ref: "#/components/schemas/Int64"}, event_us: {$ref: "#/components/schemas/Int64"}, ns: {type: integer}, received_us: {$ref: "#/components/schemas/Int64"}, release: {type: string, nullable: true}, detail_available: {type: boolean}}}
+    OccurrenceList: {type: object, required: [items, next_cursor], properties: {items: {type: array, items: {$ref: "#/components/schemas/Occurrence"}}, next_cursor: {type: string, nullable: true}}}
+    Destination: {type: object, additionalProperties: false, required: [destination_id, name, revision, enabled, has_secret], properties: {destination_id: {$ref: "#/components/schemas/UUID"}, name: {type: string}, revision: {$ref: "#/components/schemas/Int64"}, enabled: {type: boolean}, url: {type: string, format: uri, maxLength: 2048}, has_secret: {type: boolean}}}
+    DestinationCreate: {type: object, additionalProperties: false, required: [tenant_id, name, url], properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, name: {type: string, minLength: 1, maxLength: 128}, url: {type: string, format: uri, maxLength: 2048}, secret: {type: string, maxLength: 4096}}}
+    DestinationPatch: {type: object, additionalProperties: false, required: [tenant_id, revision], properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, revision: {$ref: "#/components/schemas/Int64"}, name: {type: string, minLength: 1, maxLength: 128}, url: {type: string, format: uri, maxLength: 2048}, secret: {oneOf: [{type: string, maxLength: 4096}, {type: "null"}]}, enabled: {type: boolean}}}
+    DestinationList: {type: object, required: [items, next_cursor], properties: {items: {type: array, items: {$ref: "#/components/schemas/Destination"}}, next_cursor: {type: string, nullable: true}}}
+    IssueAlertRule: {type: object, additionalProperties: false, required: [events], properties: {events: {type: array, minItems: 1, maxItems: 2, uniqueItems: true, items: {type: string, enum: [created, regressed]}}}}
+    ThresholdAlertRule:
+      type: object
+      additionalProperties: false
+      required: [kinds, window_seconds, metric, operator, threshold]
+      properties:
+        expression: {type: string, maxLength: 8192}
+        filter: {$ref: "#/components/schemas/FilterNode"}
+        kinds: {type: array, minItems: 1, uniqueItems: true, items: {$ref: "#/components/schemas/Kind"}}
+        window_seconds: {type: integer, enum: [60, 300, 900, 3600]}
+        metric: {type: string, const: count}
+        operator: {type: string, enum: [gt, ge, lt, le]}
+        threshold: {$ref: "#/components/schemas/Int64"}
+    AlertRule: {oneOf: [{$ref: "#/components/schemas/IssueAlertRule"}, {$ref: "#/components/schemas/ThresholdAlertRule"}]}
+    Rule:
+      type: object
+      additionalProperties: false
+      required: [alert_id, project_id, name, revision, enabled, kind, rule, destination_id, cooldown_seconds]
+      properties:
+        alert_id: {$ref: "#/components/schemas/UUID"}
+        project_id: {$ref: "#/components/schemas/Int64"}
+        name: {type: string, minLength: 1, maxLength: 128}
+        revision: {$ref: "#/components/schemas/Int64"}
+        enabled: {type: boolean}
+        kind: {type: string, enum: [issue, threshold]}
+        rule: {$ref: "#/components/schemas/AlertRule"}
+        destination_id: {$ref: "#/components/schemas/UUID"}
+        cooldown_seconds: {type: integer, minimum: 0, maximum: 86400}
+        last_completed_end_us: {$ref: "#/components/schemas/Int64"}
+        last_fired_end_us: {$ref: "#/components/schemas/Int64"}
+    RuleCreate:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, project_id, name, kind, destination_id, cooldown_seconds, rule]
+      properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, project_id: {$ref: "#/components/schemas/Int64"}, name: {type: string}, kind: {type: string, enum: [issue, threshold]}, destination_id: {$ref: "#/components/schemas/UUID"}, cooldown_seconds: {type: integer, minimum: 0, maximum: 86400}, rule: {$ref: "#/components/schemas/AlertRule"}}
+    RulePatch:
+      type: object
+      additionalProperties: false
+      required: [tenant_id, project_id, revision]
+      properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, project_id: {$ref: "#/components/schemas/Int64"}, revision: {$ref: "#/components/schemas/Int64"}, name: {type: string}, enabled: {type: boolean}, destination_id: {$ref: "#/components/schemas/UUID"}, cooldown_seconds: {type: integer, minimum: 0, maximum: 86400}, rule: {$ref: "#/components/schemas/AlertRule"}}
+    RuleList: {type: object, required: [items, next_cursor], properties: {items: {type: array, items: {$ref: "#/components/schemas/Rule"}}, next_cursor: {type: string, nullable: true}}}
+    Delivery:
+      type: object
+      additionalProperties: false
+      required: [delivery_id, alert_id, state, revision, attempt, created_at]
+      properties:
+        delivery_id: {$ref: "#/components/schemas/UUID"}
+        alert_id: {$ref: "#/components/schemas/UUID"}
+        state: {type: string, enum: [queued, running, succeeded, failed, canceled]}
+        revision: {$ref: "#/components/schemas/Int64"}
+        attempt: {type: integer, minimum: 0, maximum: 12}
+        next_retry_at: {$ref: "#/components/schemas/Timestamp"}
+        last_http_status: {type: integer, minimum: 100, maximum: 599}
+        error_code: {type: string, maxLength: 64}
+        created_at: {$ref: "#/components/schemas/Timestamp"}
+    DeliveryList: {type: object, required: [items, next_cursor], properties: {items: {type: array, items: {$ref: "#/components/schemas/Delivery"}}, next_cursor: {type: string, nullable: true}}}
+    ScopedRevision: {type: object, required: [tenant_id, project_id, revision], properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, project_id: {$ref: "#/components/schemas/Int64"}, revision: {$ref: "#/components/schemas/Int64"}}}
+    QueryJob: {type: object, required: [query_id, state, expires_at, poll_after_ms], properties: {query_id: {$ref: "#/components/schemas/UUID"}, state: {type: string, enum: [planning, queued, running, succeeded, failed, canceled]}, expires_at: {$ref: "#/components/schemas/Timestamp"}, poll_after_ms: {type: integer, default: 500}, result: {}, error: {$ref: "#/components/schemas/Error"}}}
+    SnapshotHeartbeat: {type: object, required: [tenant_id, read_token], properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, read_token: {type: string}}}
+    ReadTokenResponse: {type: object, required: [read_token], properties: {read_token: {type: string}}}
+    Resource: {type: object, required: [name, unit, used, max], properties: {name: {type: string}, unit: {type: string, enum: [bytes, count]}, used: {$ref: "#/components/schemas/Int64"}, max: {$ref: "#/components/schemas/Int64"}}}
+    Retention: {type: object, required: [days, revision, floor_us], properties: {days: {type: integer}, revision: {$ref: "#/components/schemas/Int64"}, floor_us: {$ref: "#/components/schemas/Int64"}}}
+    RetentionPatch: {type: object, required: [tenant_id, revision, retention_days], properties: {tenant_id: {$ref: "#/components/schemas/Int64"}, revision: {$ref: "#/components/schemas/Int64"}, retention_days: {type: integer, minimum: 1, maximum: 3650}}}
+    LaneStatus: {type: object, additionalProperties: false, required: [lane_id, accepted_seq, published_seq], properties: {lane_id: {type: integer, minimum: 0, maximum: 15}, accepted_seq: {$ref: "#/components/schemas/Int64"}, published_seq: {$ref: "#/components/schemas/Int64"}, oldest_pending_received_us: {$ref: "#/components/schemas/Int64"}, error_code: {type: string}}}
+    DependencyStatus: {type: object, additionalProperties: false, required: [name, status], properties: {name: {type: string}, status: {type: string, enum: [healthy, degraded, unavailable]}}}
+    BackupStatus: {type: object, additionalProperties: false, required: [state], properties: {state: {type: string}, last_success_at: {$ref: "#/components/schemas/Timestamp"}, wal_age_seconds: {$ref: "#/components/schemas/Int64"}, last_restore_at: {$ref: "#/components/schemas/Timestamp"}}}
+    CounterScope: {type: object, additionalProperties: false, required: [since, scope], properties: {since: {$ref: "#/components/schemas/Timestamp"}, scope: {type: string, enum: [tenant, process]}}}
+    IngestCounters: {allOf: [{$ref: "#/components/schemas/CounterScope"}, {type: object, required: [accepted_requests, accepted_records, duplicate_records, conflict_records, published_records, rejected_requests], properties: {accepted_requests: {$ref: "#/components/schemas/Int64"}, accepted_records: {$ref: "#/components/schemas/Int64"}, duplicate_records: {$ref: "#/components/schemas/Int64"}, conflict_records: {$ref: "#/components/schemas/Int64"}, published_records: {$ref: "#/components/schemas/Int64"}, rejected_requests: {$ref: "#/components/schemas/Int64"}}}]}
+    SDKOutcome: {type: object, additionalProperties: false, required: [sdk_name, category, reason, count, approximate], properties: {sdk_name: {type: string}, category: {type: string}, reason: {type: string}, count: {$ref: "#/components/schemas/Int64"}, approximate: {type: boolean}}}
+    SDKCounters: {allOf: [{$ref: "#/components/schemas/CounterScope"}, {type: object, required: [reported_drops, reported_drops_approximate, unsupported_items, by_reason], properties: {reported_drops: {$ref: "#/components/schemas/Int64"}, reported_drops_approximate: {type: boolean, const: true}, unsupported_items: {$ref: "#/components/schemas/Int64"}, by_reason: {type: array, items: {$ref: "#/components/schemas/SDKOutcome"}}, next_cursor: {type: string, nullable: true}}}]}
+    System:
+      type: object
+      additionalProperties: false
+      required: [generation, recovery_state, lanes, ingest, sdk, resources, dependencies, backup, retention, alerts_paused]
+      properties:
+        generation: {$ref: "#/components/schemas/Int64"}
+        recovery_state: {type: string, enum: [ready, restoring, verification_required]}
+        lanes: {type: array, minItems: 16, maxItems: 16, items: {$ref: "#/components/schemas/LaneStatus"}}
+        ingest: {$ref: "#/components/schemas/IngestCounters"}
+        sdk: {$ref: "#/components/schemas/SDKCounters"}
+        resources: {type: array, items: {$ref: "#/components/schemas/Resource"}}
+        dependencies: {type: array, items: {$ref: "#/components/schemas/DependencyStatus"}}
+        backup: {$ref: "#/components/schemas/BackupStatus"}
+        retention: {$ref: "#/components/schemas/Retention"}
+        alerts_paused: {type: boolean}
+    SDKOutcomeList: {type: object, required: [items, next_cursor], properties: {items: {type: array, items: {$ref: "#/components/schemas/SDKOutcome"}}, next_cursor: {type: string, nullable: true}}}
+    AuditEvent: {type: object, additionalProperties: false, required: [audit_id, actor_user_id, action, target_type, target_id, occurred_at, request_id], properties: {audit_id: {$ref: "#/components/schemas/UUID"}, actor_user_id: {oneOf: [{$ref: "#/components/schemas/Int64"}, {type: "null"}]}, action: {type: string}, target_type: {type: string}, target_id: {type: string}, target_revision: {$ref: "#/components/schemas/Int64"}, occurred_at: {$ref: "#/components/schemas/Timestamp"}, request_id: {$ref: "#/components/schemas/UUID"}, operation_id: {$ref: "#/components/schemas/UUID"}}}
+    AuditList: {type: object, required: [items, next_cursor], properties: {items: {type: array, items: {$ref: "#/components/schemas/AuditEvent"}}, next_cursor: {type: string, nullable: true}}}

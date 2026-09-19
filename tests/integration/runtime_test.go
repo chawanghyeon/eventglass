@@ -3,10 +3,12 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -75,7 +77,8 @@ func TestRuntimeStartsDurableIngressAndDrains(t *testing.T) {
 	}
 	config := app.Config{
 		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
-		ScratchDir: filepath.Join(t.TempDir(), "runtime"), Roles: map[app.Role]bool{app.RoleAPI: true}, S3: s3Config, DrainTimeout: time.Second,
+		ScratchDir: filepath.Join(t.TempDir(), "runtime"), AuthHashKeyFile: authHashKeyFile(t), InsecureCookie: true,
+		Roles: map[app.Role]bool{app.RoleAPI: true}, S3: s3Config, DrainTimeout: time.Second,
 	}
 	if _, err := app.NewRuntime(context.Background(), config); err == nil {
 		t.Fatal("runtime started without the installation marker")
@@ -153,6 +156,81 @@ func TestRuntimeStartsDurableIngressAndDrains(t *testing.T) {
 	}
 }
 
+func TestRuntimeExposesOnlySetupSurfaceUntilInitializationCompletes(t *testing.T) {
+	fixture := setupAcceptFixture(t, 607)
+	environment := requiredEnvironment(t, "EVENTGLASS_DATABASE_URL", "EVENTGLASS_S3_ENDPOINT", "EVENTGLASS_S3_BUCKET")
+	s3Config := storage.S3Config{
+		Endpoint: environment["EVENTGLASS_S3_ENDPOINT"], Region: "us-east-1", Bucket: environment["EVENTGLASS_S3_BUCKET"],
+		Prefix: "runtime-setup-607", PathStyle: true,
+	}
+	identity, err := app.StorageIdentity(s3Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := bytes.Repeat([]byte{0x61}, 32)
+	bootstrapHash := sha256.Sum256(bootstrap)
+	if _, err := fixture.pool.Exec(context.Background(), `UPDATE installations SET storage_identity=$1,setup_state='uninitialized',
+		setup_attempt=NULL,setup_request_fingerprint=NULL,setup_marker_key=NULL,setup_marker_sha256=NULL,setup_owner=NULL,
+		setup_lease_until=NULL,bootstrap_token_hash=$2,setup_completed_at=NULL WHERE singleton`, identity, bootstrapHash[:]); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.pool.Exec(context.Background(), `UPDATE installations SET setup_state='ready',bootstrap_token_hash=NULL,
+			setup_completed_at=clock_timestamp() WHERE singleton`)
+	})
+	bootstrapPath := filepath.Join(t.TempDir(), "bootstrap-token")
+	if err := os.WriteFile(bootstrapPath, []byte(fmt.Sprintf("%x\n", bootstrap)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := app.Config{
+		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
+		ScratchDir: filepath.Join(t.TempDir(), "runtime-setup"), BootstrapTokenFile: bootstrapPath,
+		AuthHashKeyFile: authHashKeyFile(t), InsecureCookie: true, Roles: map[app.Role]bool{app.RoleAPI: true},
+		S3: s3Config, DrainTimeout: time.Second,
+	}
+	runtime, err := app.NewRuntime(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runContext, cancel := context.WithCancel(context.Background())
+	runResult := make(chan error, 1)
+	go func() { runResult <- runtime.Run(runContext) }()
+	select {
+	case <-runtime.Started():
+	case <-time.After(5 * time.Second):
+		t.Fatal("setup runtime did not start")
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	baseURL := "http://" + runtime.Addr()
+	for path, expected := range map[string]int{"/readyz": http.StatusServiceUnavailable, "/v1/setup": http.StatusOK} {
+		response, err := client.Get(baseURL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, response.Body)
+		response.Body.Close()
+		if response.StatusCode != expected {
+			t.Fatalf("%s status=%d want=%d", path, response.StatusCode, expected)
+		}
+	}
+	ingestRequest, err := http.NewRequest(http.MethodPost, baseURL+"/api/1/envelope/?sentry_key=blocked", bytes.NewReader([]byte("{}\n")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingestResponse, err := client.Do(ingestRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ingestResponse.Body.Close()
+	if ingestResponse.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("uninitialized ingress status=%d", ingestResponse.StatusCode)
+	}
+	cancel()
+	if err := <-runResult; err != nil {
+		t.Fatalf("setup runtime drain=%v", err)
+	}
+}
+
 func TestRuntimeWorkerPublishesEmptyAckedBatch(t *testing.T) {
 	fixture := setupAcceptFixture(t, 606)
 	environment := requiredEnvironment(t, "EVENTGLASS_DATABASE_URL", "EVENTGLASS_S3_ENDPOINT", "EVENTGLASS_S3_BUCKET")
@@ -182,7 +260,8 @@ func TestRuntimeWorkerPublishesEmptyAckedBatch(t *testing.T) {
 	}
 	config := app.Config{
 		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
-		ScratchDir: filepath.Join(t.TempDir(), "runtime-worker"), Roles: map[app.Role]bool{app.RoleAPI: true, app.RoleWorker: true}, S3: s3Config, DrainTimeout: 3 * time.Second,
+		ScratchDir: filepath.Join(t.TempDir(), "runtime-worker"), AuthHashKeyFile: authHashKeyFile(t), InsecureCookie: true,
+		Roles: map[app.Role]bool{app.RoleAPI: true, app.RoleWorker: true}, S3: s3Config, DrainTimeout: 3 * time.Second,
 	}
 	runtime, err := app.NewRuntime(ctx, config)
 	if err != nil {
@@ -238,4 +317,13 @@ func TestRuntimeWorkerPublishesEmptyAckedBatch(t *testing.T) {
 	if err := <-runResult; err != nil {
 		t.Fatalf("worker runtime drain=%v", err)
 	}
+}
+
+func authHashKeyFile(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "auth-hash-key")
+	if err := os.WriteFile(path, []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

@@ -12,7 +12,7 @@ func TestLoadConfigAndRejectUnknownRoles(t *testing.T) {
 	values := map[string]string{
 		"EVENTGLASS_DATABASE_URL": "postgres://eventglass.invalid/db", "EVENTGLASS_PUBLIC_URL": "https://events.invalid",
 		"EVENTGLASS_ROLES": "api", "EVENTGLASS_SCRATCH_DIR": t.TempDir(), "EVENTGLASS_S3_REGION": "us-east-1",
-		"EVENTGLASS_S3_BUCKET": "eventglass", "EVENTGLASS_S3_ENDPOINT": "http://127.0.0.1:9000/",
+		"EVENTGLASS_S3_BUCKET": "eventglass", "EVENTGLASS_S3_ENDPOINT": "http://127.0.0.1:9000/", "EVENTGLASS_AUTH_HASH_KEY_FILE": "/run/secrets/eventglass-auth-hash-key",
 	}
 	lookup := func(key string) (string, bool) { value, ok := values[key]; return value, ok }
 	config, err := LoadConfigFromEnv(lookup)

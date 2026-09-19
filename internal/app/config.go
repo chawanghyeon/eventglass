@@ -3,6 +3,7 @@ package app
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -20,13 +21,16 @@ const (
 )
 
 type Config struct {
-	DatabaseURL  string
-	HTTPAddr     string
-	PublicURL    string
-	ScratchDir   string
-	Roles        map[Role]bool
-	S3           storage.S3Config
-	DrainTimeout time.Duration
+	DatabaseURL        string
+	HTTPAddr           string
+	PublicURL          string
+	ScratchDir         string
+	BootstrapTokenFile string
+	AuthHashKeyFile    string
+	InsecureCookie     bool
+	Roles              map[Role]bool
+	S3                 storage.S3Config
+	DrainTimeout       time.Duration
 }
 
 func LoadConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
@@ -48,9 +52,16 @@ func LoadConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	}
 	config := Config{
 		DatabaseURL: value("EVENTGLASS_DATABASE_URL"), HTTPAddr: value("EVENTGLASS_HTTP_ADDR"),
-		PublicURL: value("EVENTGLASS_PUBLIC_URL"), ScratchDir: value("EVENTGLASS_SCRATCH_DIR"), Roles: roles,
+		PublicURL: value("EVENTGLASS_PUBLIC_URL"), ScratchDir: value("EVENTGLASS_SCRATCH_DIR"),
+		BootstrapTokenFile: value("EVENTGLASS_BOOTSTRAP_TOKEN_FILE"), AuthHashKeyFile: value("EVENTGLASS_AUTH_HASH_KEY_FILE"), Roles: roles,
 		S3:           storage.S3Config{Endpoint: endpoint, Region: value("EVENTGLASS_S3_REGION"), Bucket: value("EVENTGLASS_S3_BUCKET"), Prefix: value("EVENTGLASS_S3_PREFIX"), PathStyle: pathStyle},
 		DrainTimeout: 30 * time.Second,
+	}
+	if raw := value("EVENTGLASS_INSECURE_COOKIE"); raw != "" {
+		config.InsecureCookie, err = strconv.ParseBool(raw)
+		if err != nil {
+			return Config{}, errors.New("EVENTGLASS_INSECURE_COOKIE must be true or false")
+		}
 	}
 	if config.HTTPAddr == "" {
 		config.HTTPAddr = ":8080"
@@ -73,14 +84,31 @@ func (config Config) Validate() error {
 			return fmt.Errorf("unsupported role %q", role)
 		}
 	}
+	if config.Roles[RoleAPI] && config.AuthHashKeyFile == "" {
+		return errors.New("EVENTGLASS_AUTH_HASH_KEY_FILE is required for the API role")
+	}
 	parsed, err := url.Parse(config.PublicURL)
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("EVENTGLASS_PUBLIC_URL must be an absolute HTTP(S) URL without credentials, query, or fragment")
 	}
 	if strings.HasPrefix(config.S3.Prefix, "/") || strings.Contains(config.S3.Prefix, "..") || strings.ContainsRune(config.S3.Prefix, '\\') {
 		return errors.New("S3 prefix must be a safe relative prefix")
 	}
+	if config.InsecureCookie && (parsed.Scheme != "http" || !loopbackHost(parsed.Hostname())) {
+		return errors.New("insecure cookies require a loopback-only HTTP public URL")
+	}
+	if config.Roles[RoleAPI] && parsed.Scheme != "https" && !config.InsecureCookie {
+		return errors.New("the API role requires HTTPS unless loopback insecure-cookie mode is explicit")
+	}
 	return nil
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func parseRoles(raw string) (map[Role]bool, error) {

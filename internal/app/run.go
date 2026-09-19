@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,16 +74,33 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	if err := database.VerifySchema(ctx); err != nil {
 		return fail(fmt.Errorf("verify runtime schema: %w", err))
 	}
+	identity, err := StorageIdentity(config.S3)
+	if err != nil {
+		return fail(err)
+	}
+	authOperations, err := database.AuthOperations()
+	if err != nil {
+		return fail(err)
+	}
+	if config.BootstrapTokenFile != "" {
+		bootstrap, err := readHexSecret(config.BootstrapTokenFile)
+		if err != nil {
+			return fail(fmt.Errorf("read bootstrap token: %w", err))
+		}
+		installationID, err := randomUUID()
+		if err != nil {
+			return fail(err)
+		}
+		if err := authOperations.EnsureSetupInstallation(ctx, installationID, identity, sha256.Sum256(bootstrap[:])); err != nil {
+			return fail(fmt.Errorf("initialize setup authority: %w", err))
+		}
+	}
 	installation, err := database.LoadInstallation(ctx)
 	if err != nil {
 		return fail(fmt.Errorf("load installation: %w", err))
 	}
 	if installation.GlobalScrubPolicySHA != control.EmptyGlobalScrubPolicySHA {
 		return fail(errors.New("global scrub policy does not match this runtime"))
-	}
-	identity, err := StorageIdentity(config.S3)
-	if err != nil {
-		return fail(err)
 	}
 	if identity != installation.StorageIdentity {
 		return fail(errors.New("configured S3 storage identity does not match PostgreSQL authority"))
@@ -94,8 +113,12 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	if err != nil {
 		return fail(err)
 	}
-	if err := store.VerifyObject(ctx, markerKey, int64(len(marker)), markerSHA); err != nil {
-		return fail(fmt.Errorf("verify installation marker: %w", err))
+	if installation.SetupState == control.SetupReady {
+		if err := store.VerifyObject(ctx, markerKey, int64(len(marker)), markerSHA); err != nil {
+			return fail(fmt.Errorf("verify installation marker: %w", err))
+		}
+	} else if !config.Roles[RoleAPI] {
+		return fail(errors.New("an uninitialized installation requires the API role"))
 	}
 	runtime := &Runtime{
 		config: config, resources: resources, database: database, store: store, installation: installation,
@@ -103,6 +126,28 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	}
 	mux := http.NewServeMux()
 	if config.Roles[RoleAPI] {
+		authHashKey, err := readHexSecret(config.AuthHashKeyFile)
+		if err != nil {
+			return fail(fmt.Errorf("read auth hash key: %w", err))
+		}
+		passwords, err := api.NewPasswordHasher(resources.Working)
+		if err != nil {
+			return fail(err)
+		}
+		management, err := api.NewManagementHandler(api.ManagementConfig{
+			Auth: authOperations, Passwords: passwords, PublicOrigin: strings.TrimRight(config.PublicURL, "/"),
+			SecureCookie: !config.InsecureCookie, LoginBucketKey: authHashKey, BuildMarker: InstallationMarker,
+			StoreMarker: func(ctx context.Context, key string, body []byte, checksum string) error {
+				return store.EnsureImmutableObject(ctx, key, body, checksum)
+			},
+			OnSetupComplete: func() {
+				runtime.ready.Store(true)
+			},
+		})
+		if err != nil {
+			return fail(err)
+		}
+		management.Register(mux)
 		operations, err := database.IngestOperations()
 		if err != nil {
 			return fail(err)
@@ -131,7 +176,13 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			_ = runtime.batcher.Drain(context.Background())
 			return fail(err)
 		}
-		mux.Handle("/api/", ingestHandler)
+		mux.Handle("/api/", http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if !runtime.ready.Load() {
+				writeReadinessError(writer)
+				return
+			}
+			ingestHandler.ServeHTTP(writer, request)
+		}))
 	}
 	if config.Roles[RoleWorker] {
 		operations, err := database.PublicationOperations()
@@ -149,7 +200,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	mux.HandleFunc("/livez", runtime.livez)
 	mux.HandleFunc("/readyz", runtime.readyz)
 	runtime.handler = mux
-	runtime.ready.Store(true)
+	runtime.ready.Store(installation.SetupState == control.SetupReady)
 	return runtime, nil
 }
 
@@ -242,29 +293,40 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 }
 
 func (runtime *Runtime) livez(writer http.ResponseWriter, _ *http.Request) {
-	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
-	_, _ = writer.Write([]byte("live\n"))
+	_, _ = writer.Write([]byte("{\"status\":\"alive\"}\n"))
 }
 
 func (runtime *Runtime) readyz(writer http.ResponseWriter, request *http.Request) {
 	if !runtime.ready.Load() {
-		http.Error(writer, "not ready", http.StatusServiceUnavailable)
+		writeReadinessError(writer)
 		return
 	}
 	ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
 	defer cancel()
 	if err := runtime.database.Ping(ctx); err != nil {
-		http.Error(writer, "dependency unavailable", http.StatusServiceUnavailable)
+		writeReadinessError(writer)
 		return
 	}
 	if err := runtime.store.VerifyObject(ctx, runtime.markerKey, runtime.markerBytes, runtime.markerSHA); err != nil {
-		http.Error(writer, "dependency unavailable", http.StatusServiceUnavailable)
+		writeReadinessError(writer)
 		return
 	}
-	writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	writer.WriteHeader(http.StatusOK)
-	_, _ = writer.Write([]byte("ready\n"))
+	_, _ = writer.Write([]byte("{\"status\":\"ready\"}\n"))
+}
+
+func writeReadinessError(writer http.ResponseWriter) {
+	requestID, err := randomUUID()
+	if err != nil {
+		requestID = "00000000-0000-4000-8000-000000000000"
+	}
+	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	writer.Header().Set("Cache-Control", "no-store")
+	writer.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = fmt.Fprintf(writer, "{\"code\":\"dependency_unavailable\",\"message\":\"dependency unavailable\",\"retryable\":true,\"request_id\":%q}\n", requestID)
 }
 
 func ensurePrivateDirectory(path string) error {

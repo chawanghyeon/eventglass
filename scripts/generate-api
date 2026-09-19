@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+
+mkdir -p api/generated web/src/generated
+go tool oapi-codegen -generate types -package generated -o api/generated/types.gen.go api/openapi.yaml
+npm exec --prefix tools/codegen -- openapi-typescript "$ROOT/api/openapi.yaml" -o "$ROOT/web/src/generated/api.ts"

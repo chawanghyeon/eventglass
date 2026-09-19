@@ -5,6 +5,7 @@ The active product is the root Go module. Use Go 1.26.5 exactly and run commands
 ```sh
 ./scripts/bootstrap
 ./scripts/check unit
+./scripts/check codegen
 ./scripts/check architecture
 ./scripts/check focused ingest
 ./scripts/check journal-bench
@@ -14,7 +15,7 @@ The active product is the root Go module. Use Go 1.26.5 exactly and run commands
 ./scripts/check crash
 ```
 
-Commands for later implementation gates intentionally fail until their gate is implemented. `./scripts/check sdk` replays committed captures and runs the pinned SDK applications against a localhost Go handler; run `tools/sdk-fixtures/bootstrap.sh` once to install its locked tools. Docker is required for the PostgreSQL/S3 integration environment and Linux ARM64 image checks. Tests must use temporary databases, buckets, prefixes, directories, and localhost receivers. Linux AMD64 is not a currently verified or supported release target.
+Commands for later implementation gates intentionally fail until their gate is implemented. `./scripts/check codegen` regenerates the Go and TypeScript wire contracts in a temporary tree and requires byte-identical output; install its exact tool lock with `npm ci --prefix tools/codegen --ignore-scripts` when changing `api/openapi.yaml`, then run `./scripts/generate-api`. `./scripts/check sdk` replays committed captures and runs the pinned SDK applications against a localhost Go handler; run `tools/sdk-fixtures/bootstrap.sh` once to install its locked tools. Docker is required for the PostgreSQL/S3 integration environment and Linux ARM64 image checks. Tests must use temporary databases, buckets, prefixes, directories, and localhost receivers. Linux AMD64 is not a currently verified or supported release target.
 
 Complete and verify one gate at a time, then commit directly to `main` and run `git push origin main`. Use commit subjects such as `feat: 한국어 변경 요약`, selecting `fix`, `perf`, `test`, `docs`, or `chore` as appropriate. Do not bypass hooks or rewrite published history merely to normalize messages.
 
@@ -33,13 +34,19 @@ Current pre-push runs unit/layout/architecture checks. Production deployment and
 historical Rust artifact staging are not implemented by this hook. Gate completion
 requires its executable evidence, not just the hook passing.
 
-The `run` command currently starts the G02 API role only. It requires an exactly
-migrated and explicitly initialized PostgreSQL installation plus its verified S3
-installation marker; it never creates either authority at startup. Configure
-`EVENTGLASS_DATABASE_URL`, `EVENTGLASS_PUBLIC_URL`, `EVENTGLASS_ROLES=api`,
+The `run` command starts the API and/or publication worker roles against the
+exactly migrated PostgreSQL schema and matching S3 identity. Configure
+`EVENTGLASS_DATABASE_URL`, `EVENTGLASS_PUBLIC_URL`, `EVENTGLASS_ROLES`,
 `EVENTGLASS_SCRATCH_DIR`, `EVENTGLASS_S3_REGION`, `EVENTGLASS_S3_BUCKET`, and
-optional endpoint/prefix/path-style settings. AWS credentials use the default
-SDK chain. Worker/scheduler roles, setup, and deployment remain later gates.
+optional endpoint/prefix/path-style settings. The API role also requires
+`EVENTGLASS_AUTH_HASH_KEY_FILE`, whose file contains one random 32-byte value as
+64 lowercase hexadecimal characters. A fresh installation additionally uses
+`EVENTGLASS_BOOTSTRAP_TOKEN_FILE` in the same format; startup stores only its
+hash, exposes the recoverable setup surface, and keeps readiness and ingestion
+closed until setup commits. Production management cookies require HTTPS.
+`EVENTGLASS_INSECURE_COOKIE=true` is accepted only with an explicit loopback HTTP
+public URL for local development. AWS credentials use the default SDK chain.
+The scheduler and deployment remain later gates.
 
 `./scripts/check crash` cross-compiles the crash and ingress-resource tests for
 Linux ARM64, then runs them with CPU1/512MiB/no-swap limits against disposable

@@ -19,6 +19,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
 
 const checksumMetadataKey = "eventglass-sha256"
@@ -256,6 +257,36 @@ func (s *S3Store) Head(ctx context.Context, key string) (ObjectInfo, error) {
 		return ObjectInfo{}, fmt.Errorf("head S3 object: %w", err)
 	}
 	return ObjectInfo{Key: key, Size: aws.ToInt64(output.ContentLength), SHA256: output.Metadata[checksumMetadataKey], ETag: aws.ToString(output.ETag)}, nil
+}
+
+// EnsureImmutableObject creates a durable authority object only when absent.
+// An existing object must already be byte-identical; conflicting bytes are
+// never overwritten. PostgreSQL owns coordination, while this check protects
+// setup/recovery identities from accidental S3 replacement.
+func (s *S3Store) EnsureImmutableObject(ctx context.Context, key string, data []byte, checksum string) error {
+	digest := sha256.Sum256(data)
+	if len(data) == 0 || hex.EncodeToString(digest[:]) != checksum {
+		return errors.New("invalid immutable object identity")
+	}
+	info, err := s.Head(ctx, key)
+	if err == nil {
+		if info.Size != int64(len(data)) || info.SHA256 != checksum {
+			return errors.New("immutable object conflicts with stored identity")
+		}
+		return s.VerifyObject(ctx, key, int64(len(data)), checksum)
+	}
+	var responseError *smithyhttp.ResponseError
+	if !errors.As(err, &responseError) || responseError.HTTPStatusCode() != 404 {
+		return err
+	}
+	uploaded, err := s.Put(ctx, key, data)
+	if err != nil {
+		return err
+	}
+	if uploaded.Size != int64(len(data)) || uploaded.SHA256 != checksum {
+		return errors.New("immutable object upload metadata mismatch")
+	}
+	return nil
 }
 
 func (s *S3Store) ReadRange(ctx context.Context, key string, offset, length int64) ([]byte, error) {

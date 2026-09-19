@@ -31,6 +31,23 @@ unit() {
   test "$(sha256sum docs/observe/source-design.md | awk '{print $1}')" = "4cccddc98f76d5c38099958587386c55756a08cf366c26ed9e65eeedec0526e5"
 }
 
+codegen() {
+  check_go_version
+  if [ ! -x "$ROOT/tools/codegen/node_modules/.bin/openapi-typescript" ]; then
+    echo "missing codegen dependencies; run npm ci --prefix tools/codegen --ignore-scripts" >&2
+    exit 1
+  fi
+  generated_dir=$(mktemp -d "$ROOT/.tools/eventglass-codegen.XXXXXX")
+  cleanup_codegen() {
+    rm -rf "$generated_dir"
+  }
+  trap cleanup_codegen EXIT INT TERM
+  go tool oapi-codegen -generate types -package generated -o "$generated_dir/types.gen.go" api/openapi.yaml
+  npm exec --prefix tools/codegen -- openapi-typescript "$ROOT/api/openapi.yaml" -o "$generated_dir/api.ts" >/dev/null
+  cmp api/generated/types.gen.go "$generated_dir/types.gen.go"
+  cmp web/src/generated/api.ts "$generated_dir/api.ts"
+}
+
 contracts() {
   docker_required contracts
   case "$(uname -m)" in
@@ -144,6 +161,7 @@ case "${1:-}" in
     ;;
   journal-bench) check_go_version; go test ./internal/storage -run '^$' -bench BenchmarkJournal -benchmem -count=1 ;;
   unit) unit ;;
+  codegen) codegen ;;
   contracts) contracts ;;
   integration) integration ;;
   sdk) sdk ;;
@@ -153,5 +171,5 @@ case "${1:-}" in
   scale) docker_required scale; missing "scale verification" ;;
   comparison) docker_required comparison; missing "comparison verification" ;;
   release) docker_required release; missing "release verification" ;;
-  *) echo "usage: ./scripts/check {unit|architecture|focused PACKAGE|journal-bench|contracts|integration|sdk|crash|web|resource|scale|comparison|release}" >&2; exit 2 ;;
+  *) echo "usage: ./scripts/check {unit|codegen|architecture|focused PACKAGE|journal-bench|contracts|integration|sdk|crash|web|resource|scale|comparison|release}" >&2; exit 2 ;;
 esac
