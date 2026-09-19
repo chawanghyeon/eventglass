@@ -31,3 +31,11 @@ benchmark reports host allocations/time, not Linux RSS or production throughput.
 Current pre-push runs unit/layout/architecture checks. Production deployment and
 historical Rust artifact staging are not implemented by this hook. Gate completion
 requires its executable evidence, not just the hook passing.
+
+The `run` command currently starts the G02 API role only. It requires an exactly
+migrated and explicitly initialized PostgreSQL installation plus its verified S3
+installation marker; it never creates either authority at startup. Configure
+`EVENTGLASS_DATABASE_URL`, `EVENTGLASS_PUBLIC_URL`, `EVENTGLASS_ROLES=api`,
+`EVENTGLASS_SCRATCH_DIR`, `EVENTGLASS_S3_REGION`, `EVENTGLASS_S3_BUCKET`, and
+optional endpoint/prefix/path-style settings. AWS credentials use the default
+SDK chain. Worker/scheduler roles, setup, and deployment remain later gates.

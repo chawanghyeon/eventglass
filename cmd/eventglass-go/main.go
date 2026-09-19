@@ -11,11 +11,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/chawanghyeon/eventglass/internal/app"
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/engine"
 )
 
-const version = "0.0.0-g00"
+const version = "0.0.0-g02-i4"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -58,7 +59,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(manifest)
 	case "run":
-		return errors.New("run is unavailable until the G02 durable ACK path is implemented")
+		config, err := app.LoadConfigFromEnv(os.LookupEnv)
+		if err != nil {
+			return err
+		}
+		return app.Run(ctx, config)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}

@@ -318,7 +318,13 @@ func TestDynamicAuthorizationControlsPolicyAndReceipt(t *testing.T) {
 	sink := &recordingSink{}
 	var resolvedHash [32]byte
 	handler, err := NewIngestHandler(Config{
-		TenantID: 2, ProjectID: 7, Sink: sink,
+		Sink: sink,
+		ResolveProject: func(_ context.Context, projectID int64) (int64, error) {
+			if projectID != 7 {
+				t.Fatal("router project changed")
+			}
+			return 2, nil
+		},
 		ResolveAuthorization: func(_ context.Context, tenantID, projectID int64, keyHash [32]byte) (control.ProjectAuthorization, error) {
 			if tenantID != 2 || projectID != 7 {
 				t.Fatal("resolver scope changed")

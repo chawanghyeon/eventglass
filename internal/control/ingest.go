@@ -38,3 +38,7 @@ func (operations *IngestOperations) LoadProjectAuthorization(ctx context.Context
 func (operations *IngestOperations) LoadProjectOrigins(ctx context.Context, tenantID, projectID int64) ([]string, error) {
 	return LoadProjectOrigins(ctx, operations.pool, tenantID, projectID)
 }
+
+func (operations *IngestOperations) LoadProjectTenant(ctx context.Context, projectID int64) (int64, error) {
+	return LoadProjectTenant(ctx, operations.pool, projectID)
+}

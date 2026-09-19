@@ -56,6 +56,7 @@ type Config struct {
 	ScrubRevision         int
 	TenantRevision        int64
 	ConfigRevision        int64
+	ResolveProject        func(context.Context, int64) (int64, error)
 	ResolveAuthorization  func(context.Context, int64, int64, [32]byte) (control.ProjectAuthorization, error)
 	ResolveOrigins        func(context.Context, int64, int64) ([]string, error)
 	// App injects process-wide budgets when multiple handlers/roles coexist.
@@ -71,11 +72,15 @@ type IngestHandler struct {
 }
 
 func NewIngestHandler(config Config) (*IngestHandler, error) {
-	if config.TenantID <= 0 || config.ProjectID <= 0 || (config.PublicKey == "" && config.ResolveAuthorization == nil) || config.Sink == nil {
+	dynamicProject := config.ResolveProject != nil
+	if config.Sink == nil || (!dynamicProject && (config.TenantID <= 0 || config.ProjectID <= 0)) || (dynamicProject && (config.TenantID != 0 || config.ProjectID != 0)) || (config.PublicKey == "" && config.ResolveAuthorization == nil) {
 		return nil, errors.New("tenant, project, public key, and sink are required")
 	}
 	if (config.ResolveAuthorization == nil) != (config.ResolveOrigins == nil) {
 		return nil, errors.New("dynamic authorization and origin resolvers must be configured together")
+	}
+	if dynamicProject && config.ResolveAuthorization == nil {
+		return nil, errors.New("dynamic project routing requires dynamic authorization")
 	}
 	if config.Now == nil {
 		config.Now = time.Now
@@ -148,9 +153,18 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		return
 	}
 	projectID, endpoint, ok := parseIngestPath(request.URL.Path)
-	if !ok || projectID != handler.config.ProjectID {
+	if !ok || (handler.config.ProjectID != 0 && projectID != handler.config.ProjectID) {
 		writeError(writer, http.StatusNotFound, "not_found")
 		return
+	}
+	tenantID := handler.config.TenantID
+	if handler.config.ResolveProject != nil {
+		var err error
+		tenantID, err = handler.config.ResolveProject(request.Context(), projectID)
+		if err != nil {
+			handler.writeAuthorizationError(writer, err)
+			return
+		}
 	}
 	release, ok := handler.acquireDecoder(request.ContentLength)
 	if !ok {
@@ -222,13 +236,13 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		return
 	}
 	authorization := ingest.Authorization{
-		TenantID: handler.config.TenantID, ProjectID: projectID, KeyHash: sha256.Sum256([]byte(identity)),
+		TenantID: tenantID, ProjectID: projectID, KeyHash: sha256.Sum256([]byte(identity)),
 		TenantRevision: handler.config.TenantRevision, ProjectRevision: handler.config.ProjectRevision,
 		KeyRevision: handler.config.KeyRevision, ScrubRevision: handler.config.ScrubRevision, ConfigRevision: handler.config.ConfigRevision,
 	}
 	defaultService := handler.config.DefaultService
 	if handler.config.ResolveAuthorization != nil {
-		resolved, err := handler.config.ResolveAuthorization(request.Context(), handler.config.TenantID, projectID, authorization.KeyHash)
+		resolved, err := handler.config.ResolveAuthorization(request.Context(), tenantID, projectID, authorization.KeyHash)
 		if err != nil {
 			handler.writeAuthorizationError(writer, err)
 			return
@@ -255,7 +269,7 @@ func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *htt
 		return
 	}
 	batch, err := ingest.NormalizeEnvelope(envelope, ingest.NormalizeOptions{
-		TenantID: handler.config.TenantID, ProjectID: projectID, AcceptanceID: acceptanceID,
+		TenantID: tenantID, ProjectID: projectID, AcceptanceID: acceptanceID,
 		ArrivalTime: handler.config.Now(), DefaultService: defaultService,
 		ForbiddenValue: handler.config.ForbiddenFixtureValue,
 	})
@@ -333,13 +347,22 @@ func (handler *IngestHandler) options(writer http.ResponseWriter, request *http.
 		return
 	}
 	projectID, _, ok := parseIngestPath(request.URL.Path)
-	if !ok || projectID != handler.config.ProjectID {
+	if !ok || (handler.config.ProjectID != 0 && projectID != handler.config.ProjectID) {
 		writeError(writer, http.StatusNotFound, "not_found")
 		return
 	}
+	tenantID := handler.config.TenantID
+	if handler.config.ResolveProject != nil {
+		var err error
+		tenantID, err = handler.config.ResolveProject(request.Context(), projectID)
+		if err != nil {
+			handler.writeAuthorizationError(writer, err)
+			return
+		}
+	}
 	origin := request.Header.Get("Origin")
 	if handler.config.ResolveOrigins != nil {
-		origins, err := handler.config.ResolveOrigins(request.Context(), handler.config.TenantID, projectID)
+		origins, err := handler.config.ResolveOrigins(request.Context(), tenantID, projectID)
 		if err != nil {
 			handler.writeAuthorizationError(writer, err)
 			return

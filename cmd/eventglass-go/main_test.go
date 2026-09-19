@@ -17,10 +17,11 @@ func TestVersion(t *testing.T) {
 	}
 }
 
-func TestRunDoesNotAdvertiseAnUnavailableServer(t *testing.T) {
+func TestRunRequiresValidatedConfiguration(t *testing.T) {
+	t.Setenv("EVENTGLASS_ROLES", "")
 	var stdout, stderr bytes.Buffer
 	err := run(context.Background(), []string{"run"}, &stdout, &stderr)
-	if err == nil || !strings.Contains(err.Error(), "G02 durable ACK") {
+	if err == nil || !strings.Contains(err.Error(), "EVENTGLASS_ROLES") {
 		t.Fatalf("run error = %v", err)
 	}
 }
