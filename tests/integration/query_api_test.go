@@ -149,6 +149,41 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 	if _, err := service.Job(ctx, principal, tokenHash, fixture.tenantID, async.Job.QueryId.String()); !errors.Is(err, api.ErrPublicQueryGone) {
 		t.Fatalf("expired job error=%v", err)
 	}
+
+	currentCtx, stopCurrent := context.WithCancel(ctx)
+	currentEvents := []string{}
+	err = service.Live(currentCtx, principal, tokenHash, query.PublicLiveRequest{
+		TenantID: fixture.tenantID, ProjectIDs: []int64{fixture.projectID}, Kinds: []model.Kind{model.KindLog}, Filter: filter, Canonical: canonical,
+	}, "", func(event query.LiveEvent) error {
+		currentEvents = append(currentEvents, event.Type)
+		stopCurrent()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || len(currentEvents) != 1 || currentEvents[0] != "checkpoint" {
+		t.Fatalf("current-cut live events=%v err=%v", currentEvents, err)
+	}
+
+	catchup := time.Now().Add(-5 * time.Minute)
+	liveCtx, stopLive := context.WithTimeout(ctx, 15*time.Second)
+	defer stopLive()
+	var liveRows []map[string]any
+	err = service.Live(liveCtx, principal, tokenHash, query.PublicLiveRequest{
+		TenantID: fixture.tenantID, ProjectIDs: []int64{fixture.projectID}, Kinds: []model.Kind{model.KindLog}, Filter: filter, Canonical: canonical, CatchupStart: &catchup,
+	}, "", func(event query.LiveEvent) error {
+		if event.Type != "rows" {
+			return nil
+		}
+		var wire struct {
+			Rows []map[string]any `json:"rows"`
+		}
+		decodeWire(t, event.Data, &wire)
+		liveRows = append(liveRows, wire.Rows...)
+		stopLive()
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) || len(liveRows) != 1 || liveRows[0]["record_id"] != strings.Repeat("c", 64) {
+		t.Fatalf("catchup live rows=%#v err=%v", liveRows, err)
+	}
 	after := store.OperationCounts()
 	t.Logf("query evidence cold: HEAD=%d full_GET=%d bytes=%d elapsed_ms=%d", coldFinished.HeadRequests-before.HeadRequests, coldFinished.FullGetRequests-before.FullGetRequests, coldFinished.FullGetBytes-before.FullGetBytes, coldElapsed.Milliseconds())
 	t.Logf("query evidence warm: HEAD=%d full_GET=%d bytes=%d elapsed_ms=%d", warmFinished.HeadRequests-coldFinished.HeadRequests, warmFinished.FullGetRequests-coldFinished.FullGetRequests, warmFinished.FullGetBytes-coldFinished.FullGetBytes, warmElapsed.Milliseconds())
@@ -165,10 +200,12 @@ func insertPublicQueryBundle(t *testing.T, ctx context.Context, fixture *acceptF
 	t.Helper()
 	root := t.TempDir()
 	analyticsPath, payloadPath := filepath.Join(root, "analytics.parquet"), filepath.Join(root, "payload.parquet")
-	recordA, recordB := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	recordA, recordB, recordC := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	liveEventUS := time.Now().Add(-time.Minute).UnixMicro()
 	message := strings.Repeat("가", 1100)
 	writeIntegrationParquet(t, ctx, analyticsPath, `SELECT * FROM (VALUES
-		(`+wireAnalyticsRow(fixture, recordA, 1_200_000, message, 0)+`),(`+wireAnalyticsRow(fixture, recordB, 1_100_000, "short", 1)+`))
+		(`+wireAnalyticsRow(fixture, recordA, 1_200_000, message, 0)+`),(`+wireAnalyticsRow(fixture, recordB, 1_100_000, "short", 1)+`),
+		(`+wireAnalyticsRow(fixture, recordC, liveEventUS, "live", 2)+`))
 		t(tenant_id,project_id,record_id,kind,event_time_us,event_time_ns_remainder,arrival_time_us,received_time_us,lane_id,batch_seq,record_ordinal,level,severity_number,message,service,environment,release,trace_id,issue_id,grouping_version)`)
 	metadata := func(id, value string, event int64) string {
 		object := map[string]any{"tenant_id": fixture.tenantID, "project_id": fixture.projectID, "record_id": id, "kind": "log", "event_time_us": event, "event_time_ns_remainder": 0, "arrival_time_us": event, "level": "info", "message": value, "attrs": []any{}, "search_values": []string{value}, "warnings": []string{}, "schema_version": 1, "normalizer_version": 1, "scrub_version": 1}
@@ -177,9 +214,11 @@ func insertPublicQueryBundle(t *testing.T, ctx context.Context, fixture *acceptF
 	}
 	rawA, _ := json.Marshal(map[string]any{"message": message})
 	rawB, _ := json.Marshal(map[string]any{"message": "short"})
+	rawC, _ := json.Marshal(map[string]any{"message": "live"})
 	writeIntegrationParquet(t, ctx, payloadPath, `SELECT * FROM (VALUES
 		('`+recordA+`','`+strings.ReplaceAll(string(rawA), "'", "''")+`',NULL,'[]','`+metadata(recordA, message, 1_200_000)+`'),
-		('`+recordB+`','`+strings.ReplaceAll(string(rawB), "'", "''")+`',NULL,'[]','`+metadata(recordB, "short", 1_100_000)+`'))
+		('`+recordB+`','`+strings.ReplaceAll(string(rawB), "'", "''")+`',NULL,'[]','`+metadata(recordB, "short", 1_100_000)+`'),
+		('`+recordC+`','`+strings.ReplaceAll(string(rawC), "'", "''")+`',NULL,'[]','`+metadata(recordC, "live", liveEventUS)+`'))
 		t(record_id,raw_json,envelope_sdk_json,normalization_warnings_json,canonical_metadata_json)`)
 	analyticsBytes, _ := os.ReadFile(analyticsPath)
 	payloadBytes, _ := os.ReadFile(payloadPath)
@@ -193,7 +232,7 @@ func insertPublicQueryBundle(t *testing.T, ctx context.Context, fixture *acceptF
 	}
 	analyticsEvidence, _ := storage.InspectFile(analyticsPath)
 	payloadEvidence, _ := storage.InspectFile(payloadPath)
-	insertCatalogObjects(t, ctx, fixture, analyticsInfo, payloadInfo, analyticsEvidence, payloadEvidence)
+	insertCatalogObjects(t, ctx, fixture, analyticsInfo, payloadInfo, analyticsEvidence, payloadEvidence, liveEventUS)
 }
 
 func wireAnalyticsRow(fixture *acceptFixture, id string, event int64, message string, ordinal int) string {
@@ -213,7 +252,7 @@ func writeIntegrationParquet(t *testing.T, ctx context.Context, path, statement 
 	}
 }
 
-func insertCatalogObjects(t *testing.T, ctx context.Context, fixture *acceptFixture, analytics, payload storage.ObjectInfo, analyticsEvidence, payloadEvidence storage.FileEvidence) {
+func insertCatalogObjects(t *testing.T, ctx context.Context, fixture *acceptFixture, analytics, payload storage.ObjectInfo, analyticsEvidence, payloadEvidence storage.FileEvidence, maxTimeUS int64) {
 	t.Helper()
 	ids := []string{snapshotUUID(fixture.tenantID, 701), snapshotUUID(fixture.tenantID, 702), snapshotUUID(fixture.tenantID, 703), snapshotUUID(fixture.tenantID, 704), snapshotUUID(fixture.tenantID, 705)}
 	for index, object := range []storage.ObjectInfo{analytics, payload} {
@@ -224,13 +263,13 @@ func insertCatalogObjects(t *testing.T, ctx context.Context, fixture *acceptFixt
 		}
 	}
 	if _, err := fixture.pool.Exec(ctx, `INSERT INTO bundles(bundle_id,tenant_id,lane_id,schema_version,grouping_version,event_day,kind,input_seq_min,input_seq_max,row_count,identity_sha256,valid_from_generation)
-		VALUES($1,$2,0,1,1,'2026-09-20','log',1,5,2,$3,7)`, ids[2], fixture.tenantID, strings.Repeat("1", 64)); err != nil {
+		VALUES($1,$2,0,1,1,'2026-09-20','log',1,5,3,$3,7)`, ids[2], fixture.tenantID, strings.Repeat("1", 64)); err != nil {
 		t.Fatal(err)
 	}
 	for index, evidence := range []storage.FileEvidence{analyticsEvidence, payloadEvidence} {
 		role := []string{"analytics", "payload"}[index]
 		if _, err := fixture.pool.Exec(ctx, `INSERT INTO files(file_id,tenant_id,bundle_id,intent_id,role,bytes,full_sha256,row_count,min_event_time_us,max_event_time_us,min_received_time_us,max_received_time_us,min_batch_seq,max_batch_seq)
-			VALUES($1,$2,$3,$4,$5,$6,$7,2,1100000,1200000,1100000,1200000,1,5)`, ids[3+index], fixture.tenantID, ids[2], ids[index], role, evidence.Bytes, evidence.SHA256); err != nil {
+			VALUES($1,$2,$3,$4,$5,$6,$7,3,1100000,$8,1100000,$8,1,5)`, ids[3+index], fixture.tenantID, ids[2], ids[index], role, evidence.Bytes, evidence.SHA256, maxTimeUS); err != nil {
 			t.Fatal(err)
 		}
 		for block, checksum := range evidence.BlockSHA256 {

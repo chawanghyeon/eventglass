@@ -22,6 +22,7 @@ const (
 	MaxTokenLifetime   = time.Hour
 	ReadTokenPurpose   = "read"
 	CursorTokenPurpose = "cursor"
+	LiveTokenPurpose   = "live"
 )
 
 var (
@@ -77,6 +78,22 @@ type CursorClaims struct {
 	Limit         int         `json:"limit"`
 	Last          CursorTuple `json:"last"`
 	ExpiresAtUS   int64       `json:"expires_at_us"`
+}
+
+type LivePosition struct {
+	BatchSeq int64 `json:"batch_seq"`
+	Ordinal  int   `json:"ordinal"`
+}
+
+type LiveTokenClaims struct {
+	Version       int                           `json:"version"`
+	Purpose       string                        `json:"purpose"`
+	KeyID         string                        `json:"key_id"`
+	Generation    int64                         `json:"generation"`
+	PrincipalHash string                        `json:"principal_hash"`
+	ScopeHash     string                        `json:"scope_hash"`
+	Positions     [model.LaneCount]LivePosition `json:"positions"`
+	ExpiresAtUS   int64                         `json:"expires_at_us"`
 }
 
 type TokenExpectation struct {
@@ -156,6 +173,35 @@ func (codec *TokenCodec) VerifyCursor(token string, expected TokenExpectation) (
 	}
 	if err := codec.checkExpected(claims.Generation, claims.PrincipalHash, claims.DatasetHash, claims.OperationHash, claims.Sort, claims.Limit, claims.ExpiresAtUS, expected); err != nil {
 		return CursorClaims{}, err
+	}
+	return claims, nil
+}
+
+func (codec *TokenCodec) SignLive(generation int64, principalHash, scopeHash string, positions [model.LaneCount]LivePosition, expiresAtUS int64) (string, error) {
+	claims := LiveTokenClaims{
+		Version: TokenVersion, Purpose: LiveTokenPurpose, KeyID: codec.current.ID,
+		Generation: generation, PrincipalHash: principalHash, ScopeHash: scopeHash,
+		Positions: positions, ExpiresAtUS: expiresAtUS,
+	}
+	if !validLiveClaims(claims, codec.now()) {
+		return "", ErrTokenMismatch
+	}
+	return codec.sign(claims)
+}
+
+func (codec *TokenCodec) VerifyLive(token string, expected TokenExpectation, scopeHash string) (LiveTokenClaims, error) {
+	var claims LiveTokenClaims
+	if err := codec.verify(token, LiveTokenPurpose, &claims); err != nil {
+		return LiveTokenClaims{}, err
+	}
+	if !validLiveClaims(claims, time.Time{}) {
+		return LiveTokenClaims{}, ErrTokenMalformed
+	}
+	if err := codec.checkExpected(claims.Generation, claims.PrincipalHash, "", "", "", 0, claims.ExpiresAtUS, expected); err != nil {
+		return LiveTokenClaims{}, err
+	}
+	if claims.ScopeHash != scopeHash {
+		return LiveTokenClaims{}, ErrTokenMismatch
 	}
 	return claims, nil
 }
@@ -282,4 +328,22 @@ func validCursor(sortName string, limit int, last CursorTuple) bool {
 	default:
 		return false
 	}
+}
+
+func validLiveClaims(claims LiveTokenClaims, now time.Time) bool {
+	if claims.Version != TokenVersion || claims.Purpose != LiveTokenPurpose || claims.Generation <= 0 || !validDigest(claims.PrincipalHash) || !validDigest(claims.ScopeHash) {
+		return false
+	}
+	for _, position := range claims.Positions {
+		if position.BatchSeq < 0 || position.Ordinal < -1 || position.BatchSeq == 0 && position.Ordinal != -1 {
+			return false
+		}
+	}
+	if !now.IsZero() {
+		expires := time.UnixMicro(claims.ExpiresAtUS)
+		if !expires.After(now) || expires.After(now.Add(MaxTokenLifetime)) {
+			return false
+		}
+	}
+	return true
 }

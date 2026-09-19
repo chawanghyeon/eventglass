@@ -1,13 +1,20 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
+	"time"
 
 	generated "github.com/chawanghyeon/eventglass/api/generated"
 	"github.com/chawanghyeon/eventglass/internal/control"
+	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/query"
 	"github.com/google/uuid"
 )
@@ -39,6 +46,7 @@ type PublicQueryService interface {
 	Cancel(context.Context, control.SessionPrincipal, [32]byte, int64, string) error
 	RenewSnapshot(context.Context, control.SessionPrincipal, [32]byte, int64, string, string) (string, error)
 	ReleaseSnapshot(context.Context, control.SessionPrincipal, [32]byte, int64, string) error
+	Live(context.Context, control.SessionPrincipal, [32]byte, query.PublicLiveRequest, string, func(query.LiveEvent) error) error
 }
 
 func (handler *ManagementHandler) registerQueryRoutes(mux *http.ServeMux) {
@@ -49,6 +57,176 @@ func (handler *ManagementHandler) registerQueryRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /v1/query-jobs/{id}", handler.deleteQueryJob)
 	mux.HandleFunc("POST /v1/snapshots/{id}/heartbeat", handler.heartbeatSnapshot)
 	mux.HandleFunc("DELETE /v1/snapshots/{id}", handler.deleteSnapshot)
+	mux.HandleFunc("GET /v1/live", handler.getLive)
+}
+
+func (handler *ManagementHandler) getLive(writer http.ResponseWriter, request *http.Request) {
+	principal, tokenHash, _, ok := handler.authenticate(writer, request, false)
+	if !ok {
+		return
+	}
+	spec, resume, err := parseLiveRequest(request)
+	if err != nil {
+		handler.error(writer, request, http.StatusBadRequest, "invalid_input", false)
+		return
+	}
+	select {
+	case handler.liveSlots <- struct{}{}:
+		defer func() { <-handler.liveSlots }()
+	default:
+		writer.Header().Set("Retry-After", "1")
+		handler.error(writer, request, http.StatusTooManyRequests, "admission_limited", true)
+		return
+	}
+	started := false
+	emit := func(event query.LiveEvent) error {
+		encoded, err := encodeSSE(event)
+		if err != nil {
+			return err
+		}
+		if !started {
+			noStore(writer)
+			writer.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+			writer.Header().Set("X-Accel-Buffering", "no")
+			writer.WriteHeader(http.StatusOK)
+			started = true
+		}
+		controller := http.NewResponseController(writer)
+		_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if _, err := writer.Write(encoded); err != nil {
+			return err
+		}
+		if err := controller.Flush(); err != nil {
+			return err
+		}
+		return nil
+	}
+	err = handler.config.Queries.Live(request.Context(), principal, tokenHash, spec, resume, emit)
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
+	if !started {
+		handler.publicQueryError(writer, request, err)
+	}
+}
+
+func parseLiveRequest(request *http.Request) (query.PublicLiveRequest, string, error) {
+	values := request.URL.Query()
+	tenantID, err := parseCanonicalInt64(values.Get("tenant_id"))
+	if err != nil || tenantID <= 0 {
+		return query.PublicLiveRequest{}, "", errors.New("invalid live tenant")
+	}
+	projects, err := parseLiveInt64Set(values["project_ids"])
+	if err != nil || len(projects) < 1 || len(projects) > 100 {
+		return query.PublicLiveRequest{}, "", errors.New("invalid live projects")
+	}
+	kinds, err := parseLiveKinds(values["kinds"])
+	if err != nil {
+		return query.PublicLiveRequest{}, "", err
+	}
+	expression := values.Get("expression")
+	if len(expression) > 8192 {
+		return query.PublicLiveRequest{}, "", errors.New("live expression is too large")
+	}
+	root := &query.Node{Op: "constant", Constant: true}
+	if expression != "" {
+		root, err = query.ParseCEL(expression)
+		if err != nil {
+			return query.PublicLiveRequest{}, "", err
+		}
+	}
+	canonical, err := query.CanonicalFilter(root)
+	if err != nil {
+		return query.PublicLiveRequest{}, "", err
+	}
+	result := query.PublicLiveRequest{TenantID: tenantID, ProjectIDs: projects, Kinds: kinds, Filter: root, Canonical: canonical}
+	if value := values.Get("catchup_start_us"); value != "" {
+		micros, parseErr := parseCanonicalInt64(value)
+		if parseErr != nil {
+			return result, "", parseErr
+		}
+		start := time.UnixMicro(micros)
+		result.CatchupStart = &start
+	}
+	resume := values.Get("resume_token")
+	lastEventID := request.Header.Get("Last-Event-ID")
+	if len(resume) > query.MaxTokenPayload*2 || len(lastEventID) > query.MaxTokenPayload*2 || resume != "" && lastEventID != "" && resume != lastEventID {
+		return result, "", errors.New("live resume checkpoints disagree")
+	}
+	if resume == "" {
+		resume = lastEventID
+	}
+	return result, resume, nil
+}
+
+func parseLiveInt64Set(raw []string) ([]int64, error) {
+	parts := splitQuerySet(raw)
+	result := make([]int64, len(parts))
+	for index, part := range parts {
+		value, err := parseCanonicalInt64(part)
+		if err != nil || value <= 0 {
+			return nil, errors.New("invalid live project")
+		}
+		result[index] = value
+	}
+	slices.Sort(result)
+	if len(result) != len(slices.Compact(result)) {
+		return nil, errors.New("duplicate live project")
+	}
+	return result, nil
+}
+
+func parseLiveKinds(raw []string) ([]model.Kind, error) {
+	parts := splitQuerySet(raw)
+	if len(parts) == 0 {
+		return []model.Kind{model.KindError, model.KindLog, model.KindTransaction}, nil
+	}
+	result := make([]model.Kind, len(parts))
+	for index, part := range parts {
+		result[index] = model.Kind(part)
+		if result[index] != model.KindError && result[index] != model.KindLog && result[index] != model.KindTransaction {
+			return nil, errors.New("invalid live kind")
+		}
+	}
+	slices.Sort(result)
+	if len(result) != len(slices.Compact(result)) {
+		return nil, errors.New("duplicate live kind")
+	}
+	return result, nil
+}
+
+func splitQuerySet(raw []string) []string {
+	var result []string
+	for _, value := range raw {
+		for _, part := range strings.Split(value, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				result = append(result, part)
+			}
+		}
+	}
+	return result
+}
+
+func encodeSSE(event query.LiveEvent) ([]byte, error) {
+	if event.Type != "rows" && event.Type != "checkpoint" && event.Type != "heartbeat" && event.Type != "resync_required" && event.Type != "error" {
+		return nil, errors.New("invalid live event type")
+	}
+	if strings.ContainsAny(event.ID, "\r\n") {
+		return nil, errors.New("invalid live event id")
+	}
+	data, err := json.Marshal(event.Data)
+	if err != nil {
+		return nil, err
+	}
+	var encoded bytes.Buffer
+	if event.ID != "" {
+		fmt.Fprintf(&encoded, "id: %s\n", event.ID)
+	}
+	fmt.Fprintf(&encoded, "event: %s\ndata: %s\n\n", event.Type, data)
+	if encoded.Len() > query.LiveMaximumPending {
+		return nil, errors.New("live event exceeds pending byte limit")
+	}
+	return encoded.Bytes(), nil
 }
 
 func (handler *ManagementHandler) postSearch(writer http.ResponseWriter, request *http.Request) {
@@ -248,7 +426,7 @@ func (handler *ManagementHandler) publicQueryError(writer http.ResponseWriter, r
 		handler.error(writer, request, http.StatusNotFound, "not_found", false)
 	case errors.Is(err, ErrPublicQueryGone), errors.Is(err, control.ErrSnapshotExpired), errors.Is(err, query.ErrTokenExpired):
 		handler.error(writer, request, http.StatusGone, "expired", false)
-	case errors.Is(err, control.ErrForbidden), errors.Is(err, query.ErrTokenForbidden):
+	case errors.Is(err, control.ErrForbidden), errors.Is(err, control.ErrUnauthenticated), errors.Is(err, query.ErrTokenForbidden):
 		handler.error(writer, request, http.StatusForbidden, "forbidden", false)
 	case errors.Is(err, control.ErrStorageGeneration), errors.Is(err, query.ErrTokenGenerationChanged):
 		handler.error(writer, request, http.StatusConflict, "storage_generation_changed", false)

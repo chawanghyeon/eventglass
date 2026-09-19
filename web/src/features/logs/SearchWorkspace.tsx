@@ -10,6 +10,7 @@ import { executeSearch } from "../../shared/search/execute";
 import { executeAggregate, histogramRequest } from "../../shared/search/aggregate";
 import { cancelDataset, datasetQueryPrefix } from "../../shared/search/lifetime";
 import { StatusPanel } from "../../shared/ui/StatusPanel";
+import { mergeLiveRows, rowsFromLiveEvent, streamLive, type LiveRow } from "./live";
 
 export function SearchWorkspace({ title, defaultKinds, histogram = false }: { title: string; defaultKinds: Kind[]; histogram?: boolean }) {
   const { session, tenant } = useSession();
@@ -26,13 +27,45 @@ export function SearchWorkspace({ title, defaultKinds, histogram = false }: { ti
   const key = datasetKey(tenant.tenant_id, state);
   const previousKey = useRef(key);
   const queryClient = useQueryClient();
+  const [live, setLive] = useState(false);
+  const [liveRows, setLiveRows] = useState<LiveRow[]>([]);
+  const [liveState, setLiveState] = useState<"idle" | "connecting" | "connected" | "resync" | "forbidden" | "error">("idle");
   useEffect(() => {
     if (previousKey.current === key) return;
     void cancelDataset(queryClient, session.user_id, tenant.tenant_id, previousKey.current);
     previousKey.current = key;
     setDraft(state.expression);
     setProjectDraft(state.projectIDs.join(","));
+    setLive(false);
+    setLiveRows([]);
+    setLiveState("idle");
   }, [key, queryClient, session.user_id, tenant.tenant_id]);
+  useEffect(() => {
+    if (!live || state.projectIDs.length === 0) return;
+    const controller = new AbortController();
+    setLiveState("connecting");
+    void streamLive({ tenantID: tenant.tenant_id, projectIDs: state.projectIDs, kinds: state.kinds, expression: state.expression }, controller.signal, (event) => {
+      if (event.type === "rows") {
+        setLiveRows((rows) => mergeLiveRows(rows, rowsFromLiveEvent(event)));
+        setLiveState("connected");
+      } else if (event.type === "checkpoint" || event.type === "heartbeat") {
+        setLiveState("connected");
+      } else if (event.type === "resync_required") {
+        setLiveState("resync");
+        setLive(false);
+      } else if (event.type === "error") {
+        const code = typeof event.data === "object" && event.data !== null && "code" in event.data ? event.data.code : "";
+        setLiveState(code === "forbidden" ? "forbidden" : "error");
+        setLive(false);
+      }
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setLiveState(error instanceof DOMException && error.name === "AbortError" ? "idle" : "error");
+        setLive(false);
+      }
+    });
+    return () => controller.abort();
+  }, [live, key, tenant.tenant_id]);
   const result = useQuery<SearchResult>({
     queryKey: [...datasetQueryPrefix(session.user_id, tenant.tenant_id, key), "new", "rows"],
     queryFn: ({ signal }) => executeSearch(searchRequest(tenant.tenant_id, state), session.csrf_token, signal),
@@ -52,8 +85,12 @@ export function SearchWorkspace({ title, defaultKinds, histogram = false }: { ti
     <form className="search-bar" onSubmit={submit}>
       <label>Project IDs<input value={projectDraft} onChange={(event) => setProjectDraft(event.target.value)} inputMode="numeric" pattern="[0-9]+(,[0-9]+)*" placeholder="1,2" /></label>
       <label>Filter expression<input value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="service == 'api'" /></label>
-      <button>Search</button>
+      <button>Search</button><button type="button" disabled={!state.projectIDs.length} onClick={() => setLive((enabled) => !enabled)}>{live ? "Stop live" : "Start live"}</button>
     </form>
+    {liveState !== "idle" ? <p className="query-summary" role="status">Live: {liveState} · {liveRows.length} bounded rows</p> : null}
+    {liveState === "resync" ? <StatusPanel empty="Live checkpoint expired. Start live again from the current cut." /> : null}
+    {liveState === "forbidden" ? <StatusPanel empty="Live access was revoked." /> : null}
+    {liveState === "error" ? <StatusPanel empty="Live disconnected. Start it again when ready." /> : null}
     {!state.projectIDs.length ? <StatusPanel empty="Choose at least one authorized project." /> : null}
     {result.isPending && state.projectIDs.length ? <p role="status">Running query…</p> : null}
     <StatusPanel error={result.error} onRetry={() => void result.refetch()} />
@@ -62,7 +99,7 @@ export function SearchWorkspace({ title, defaultKinds, histogram = false }: { ti
     {histogram && aggregate.isPending && result.data ? <p role="status">Loading snapshot histogram…</p> : null}
     {histogram ? <StatusPanel error={aggregate.error} onRetry={() => void aggregate.refetch()} /> : null}
     {histogram && aggregate.data ? <div className="histogram" aria-label="Event histogram">{aggregate.data.groups.map((group, index) => <div key={group.bucket_start_us ?? index} title={`${String(group.bucket_start_us ?? "bucket")}: ${String(group.metrics.events?.value ?? "0")}`} style={{ height: `${barHeight(group.metrics.events?.value)}px` }} />)}</div> : null}
-    <div className="stack">{result.data?.rows.map((row) => <article className="record-card" key={row.record_id}>
+    <div className="stack">{(liveRows.length ? liveRows : result.data?.rows ?? []).map((row) => <article className="record-card" key={row.record_id}>
       <div><span className={`badge level-${row.level}`}>{row.level}</span><span className="muted">{row.kind} · project {formatInt64(row.project_id)}</span></div>
       <p>{row.message}</p>
       <footer><code>{row.service ?? "no service"}</code><Link to={`/logs/${row.record_id}?project=${row.project_id}`}>View detail</Link></footer>

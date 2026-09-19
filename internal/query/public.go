@@ -1,6 +1,10 @@
 package query
 
-import "github.com/chawanghyeon/eventglass/internal/model"
+import (
+	"time"
+
+	"github.com/chawanghyeon/eventglass/internal/model"
+)
 
 type RequestMode string
 
@@ -40,4 +44,19 @@ type PublicAggregateRequest struct {
 	Histogram *AggregateHistogram
 	Top       int
 	Order     AggregateOrder
+}
+
+type PublicLiveRequest struct {
+	TenantID     int64
+	ProjectIDs   []int64
+	Kinds        []model.Kind
+	Filter       *Node
+	Canonical    []byte
+	CatchupStart *time.Time
+}
+
+type LiveEvent struct {
+	Type string
+	ID   string
+	Data any
 }

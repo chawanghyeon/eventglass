@@ -49,7 +49,10 @@ type ManagementConfig struct {
 	Queries         PublicQueryService
 }
 
-type ManagementHandler struct{ config ManagementConfig }
+type ManagementHandler struct {
+	config    ManagementConfig
+	liveSlots chan struct{}
+}
 
 func NewManagementHandler(config ManagementConfig) (*ManagementHandler, error) {
 	if config.Auth == nil || config.StoreMarker == nil || config.Passwords == nil || config.BuildMarker == nil || config.LoginBucketKey == ([32]byte{}) { // pragma: allowlist secret
@@ -76,7 +79,7 @@ func NewManagementHandler(config ManagementConfig) (*ManagementHandler, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &ManagementHandler{config: config}, nil
+	return &ManagementHandler{config: config, liveSlots: make(chan struct{}, 32)}, nil
 }
 
 func (handler *ManagementHandler) Register(mux *http.ServeMux) {

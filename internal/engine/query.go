@@ -18,6 +18,7 @@ const (
 	MaxQueryInputFiles  = 8
 	MaxQueryOutputBytes = int64(64 << 20)
 	MaxQueryOutputRows  = int64(20000)
+	LiveQueryPageRows   = 100
 )
 
 var (
@@ -180,7 +181,7 @@ func (request QueryRequest) validate() (string, []any, error) {
 	if request.Version != QueryExecutionProtocolVersion || request.QueryID == "" || request.Operation.Version != QueryExecutionProtocolVersion || request.Operation.MaxRows < 1 || request.Operation.MaxRows > MaxQueryOutputRows || len(request.InputPaths) > MaxQueryInputFiles || !filepath.IsAbs(request.OutputPath) || !filepath.IsAbs(request.SpillDirectory) || request.OutputPath == request.SpillDirectory {
 		return "", nil, errors.New("invalid query request")
 	}
-	if request.Operation.Kind != "rows" && request.Operation.Kind != "aggregate" && request.Operation.Kind != "detail" || !validQueryResultPlan(request.Operation) {
+	if request.Operation.Kind != "rows" && request.Operation.Kind != "aggregate" && request.Operation.Kind != "detail" && request.Operation.Kind != "live" || !validQueryResultPlan(request.Operation) {
 		return "", nil, errors.New("invalid query operation kind")
 	}
 	if request.NativeMemoryBytes < 32<<20 || request.NativeMemoryBytes > DefaultNativeMemoryBytes || request.NativeSpillBytes < 64<<20 || request.NativeSpillBytes > DefaultNativeSpillBytes {
@@ -237,6 +238,9 @@ func validQueryResultPlan(operation QueryOperation) bool {
 	if result.Kind == "rows" {
 		return result.Limit >= 1 && result.Limit <= 1000 && (result.Sort == "event_desc" || result.Sort == "received_desc") &&
 			(result.CursorHash == "" || validQueryDigest(result.CursorHash)) && result.RecordID == "" && len(result.Groups) == 0 && len(result.Metrics) == 0
+	}
+	if result.Kind == "live" {
+		return result.Limit == LiveQueryPageRows && result.Sort == "live_asc" && result.CursorHash == "" && result.RecordID == "" && len(result.Groups) == 0 && len(result.Metrics) == 0
 	}
 	if result.Kind == "detail" {
 		return result.Limit == 1 && result.Sort == "" && len(result.Groups) == 0 && len(result.Metrics) == 0 && result.CursorHash == "" && validQueryDigest(result.RecordID)

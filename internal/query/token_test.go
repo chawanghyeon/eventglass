@@ -101,6 +101,36 @@ func TestCursorBindsOperationSortLimitAndCompleteTieTuple(t *testing.T) {
 	}
 }
 
+func TestLiveTokenBindsPrincipalScopeAndPositions(t *testing.T) {
+	codec, _ := NewTokenCodec(SigningKey{ID: "live", Secret: sha256.Sum256([]byte("live signing key"))}, nil)
+	now := time.Unix(1_800_000_000, 0)
+	codec.now = func() time.Time { return now }
+	principal := strings.Repeat("1", 64)
+	scope := strings.Repeat("2", 64)
+	var positions [model.LaneCount]LivePosition
+	for lane := range positions {
+		positions[lane].Ordinal = -1
+	}
+	positions[3] = LivePosition{BatchSeq: 8, Ordinal: 4}
+	token, err := codec.SignLive(7, principal, scope, positions, now.Add(time.Minute).UnixMicro())
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, err := codec.VerifyLive(token, TokenExpectation{Generation: 7, PrincipalHash: principal}, scope)
+	if err != nil || claims.Positions[3] != positions[3] {
+		t.Fatalf("claims=%#v err=%v", claims, err)
+	}
+	if _, err := codec.VerifyRead(token, TokenExpectation{Generation: 7, PrincipalHash: principal}); !errors.Is(err, ErrTokenMalformed) {
+		t.Fatalf("live token crossed purpose boundary: %v", err)
+	}
+	if _, err := codec.VerifyLive(token, TokenExpectation{Generation: 7, PrincipalHash: strings.Repeat("3", 64)}, scope); !errors.Is(err, ErrTokenForbidden) {
+		t.Fatalf("principal mismatch=%v", err)
+	}
+	if _, err := codec.VerifyLive(token, TokenExpectation{Generation: 7, PrincipalHash: principal}, strings.Repeat("4", 64)); !errors.Is(err, ErrTokenMismatch) {
+		t.Fatalf("scope mismatch=%v", err)
+	}
+}
+
 func TestCursorPredicatesBindEveryTieBreaker(t *testing.T) {
 	eventUS, eventNS := int64(42), 7
 	event, err := CompileCursorPredicate("event_desc", CursorTuple{EventUS: &eventUS, EventNS: &eventNS, RecordID: strings.Repeat("b", 64)})
