@@ -112,3 +112,21 @@ func TestGroupingEscapingMarkersEmptyAndNonError(t *testing.T) {
 		t.Fatalf("title runes=%d err=%v", len([]rune(group.Title)), err)
 	}
 }
+
+func TestMalformedOptionalFingerprintAndFramesFallBackWithoutPoisoning(t *testing.T) {
+	record := errorRecord(t, 7, map[string]any{"fingerprint": "not-an-array"}, "safe", nil)
+	group, err := GroupRecord(record)
+	if err != nil || string(group.CanonicalBytes) != `["eventglass-grouping-v1","7",["message","safe"]]` {
+		t.Fatalf("malformed fingerprint group=%s err=%v", group.CanonicalBytes, err)
+	}
+	record = errorRecord(t, 7, map[string]any{
+		"fingerprint": []any{"custom", 1},
+		"exception": map[string]any{"values": []any{map[string]any{
+			"type": "Failure", "value": "bad", "stacktrace": map[string]any{"frames": []any{"bad-frame"}},
+		}}},
+	}, "", nil)
+	group, err = GroupRecord(record)
+	if err != nil || string(group.CanonicalBytes) != `["eventglass-grouping-v1","7",["exception","Failure","bad"]]` {
+		t.Fatalf("malformed optional values group=%s err=%v", group.CanonicalBytes, err)
+	}
+}

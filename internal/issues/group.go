@@ -53,16 +53,10 @@ func GroupRecord(record model.Record) (Group, error) {
 	components := defaults
 	if fingerprint, exists := raw["fingerprint"]; exists {
 		items, ok := fingerprint.([]any)
-		if !ok {
-			return Group{}, errors.New("explicit fingerprint must be a string array")
-		}
-		if len(items) != 0 {
+		if ok && len(items) != 0 && allStrings(items) {
 			expanded := make([]any, 0, len(items))
 			for _, item := range items {
-				literal, ok := item.(string)
-				if !ok {
-					return Group{}, errors.New("explicit fingerprint must be a string array")
-				}
+				literal := item.(string)
 				if literal == "{{default}}" || literal == "{{ default }}" {
 					expanded = append(expanded, []any{"default", defaults})
 				} else {
@@ -144,15 +138,17 @@ func exceptionValues(value any) []map[string]any {
 }
 
 func selectFrames(frames []any) []any {
+	valid := make([]any, 0, len(frames))
 	inApp := make([]any, 0, len(frames))
 	for _, frame := range frames {
 		if object, ok := frame.(map[string]any); ok {
+			valid = append(valid, frame)
 			if value, ok := object["in_app"].(bool); ok && value {
 				inApp = append(inApp, frame)
 			}
 		}
 	}
-	selected := frames
+	selected := valid
 	if len(inApp) != 0 {
 		selected = inApp
 	}
@@ -160,6 +156,15 @@ func selectFrames(frames []any) []any {
 		selected = selected[len(selected)-8:]
 	}
 	return selected
+}
+
+func allStrings(values []any) bool {
+	for _, value := range values {
+		if _, ok := value.(string); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func stringField(object map[string]any, name string) string {
