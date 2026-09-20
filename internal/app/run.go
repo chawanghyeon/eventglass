@@ -34,6 +34,8 @@ type Runtime struct {
 	publication    *control.PublicationOperations
 	maintenance    *control.MaintenanceOperations
 	compactor      *maintenance.Workflow
+	retainer       *maintenance.RetentionWorkflow
+	collector      *maintenance.GCWorkflow
 	queryControl   *control.QueryOperations
 	alertControl   *control.AlertOperations
 	alertCipher    *alerts.SecretCipher
@@ -260,6 +262,11 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			Control: maintenanceOperations, Store: store, Runner: ProcessCompactionRunner{Gate: nativeTasks},
 			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "compaction-worker"),
 		}
+		runtime.retainer = &maintenance.RetentionWorkflow{
+			Control: maintenanceOperations, Store: store, Runner: ProcessCompactionRunner{Gate: nativeTasks},
+			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "retention-worker"),
+		}
+		runtime.collector = &maintenance.GCWorkflow{Control: maintenanceOperations, Store: store}
 		runtime.deliveryWorker = &alerts.DeliveryWorker{Control: runtime.alertControl, Cipher: runtime.alertCipher, Sender: alerts.Sender{}, InstallationID: installation.InstallationID, StorageGeneration: installation.StorageGeneration, Owner: owner}
 	}
 	if config.Roles[RoleScheduler] || config.Roles[RoleWorker] {

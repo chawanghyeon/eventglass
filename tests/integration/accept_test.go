@@ -286,7 +286,7 @@ func TestAcceptRollbackEmptyMissingSourceExpiryAndSubset(t *testing.T) {
 
 	expiryID := fixture.uuidForLane(3)
 	expired := fixture.batch(t, 3, "expiry", []control.VerifiedRequest{fixture.request(expiryID, "expiry", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", fixtureSHA("new-after-expiry"))})
-	if _, err := fixture.pool.Exec(ctx, `UPDATE event_dedupe SET expires_at=clock_timestamp()-interval '1 second' WHERE tenant_id=$1`, fixture.tenantID); err != nil {
+	if _, err := fixture.pool.Exec(ctx, `UPDATE event_dedupe SET created_at=clock_timestamp()-interval '40 days',expires_at=clock_timestamp()-interval '1 second' WHERE tenant_id=$1`, fixture.tenantID); err != nil {
 		t.Fatal(err)
 	}
 	expiryResult, err := control.Accept(ctx, fixture.pool, expired)

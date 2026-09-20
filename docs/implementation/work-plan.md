@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, all G05 packets U1–U3 and A1–A2, and M1 are complete; M2 is the first pending packet. Do not mark a packet complete until
+G03 packets P1–P4, G04 packets Q1–Q5, all G05 packets U1–U3 and A1–A2, and M1–M2 are complete; M3 is the first pending packet. Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
 in the implementation commit, not by making per-packet diary files.
 
@@ -82,7 +82,7 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 | ID / depends on | Read | Files | Required tests and done condition |
 |---|---|---|---|
 | M1 / U3 — complete | operations compaction, control G06 | migrations/0010_maintenance.sql; maintenance/compact.go; control/maintenance.go | Concurrent publication does not starve swap; exact reserved inputs only; identity preserved; crash before/after swap and reader pinned old generation |
-| M2 / M1 | operations retention/GC | maintenance/retain.go,gc.go; control/retention.go | Mixed-retention rewrite, snapshot floor stable, widening cannot resurrect, journal protect8days+backup horizon, current/pinned/prepared file never deleted, latePUT tombstone resweep |
+| M2 / M1 — complete | operations retention/GC | maintenance/retain.go,gc.go; control/retention.go | Mixed-retention rewrite, snapshot floor stable, widening cannot resurrect, journal protect8days+backup horizon, current/pinned/prepared file never deleted, latePUT tombstone resweep |
 | M3 / M2 | operations cache/child | storage/cache.go; integrate existing gateway | Singleflight/pin eviction, SHA corrupt last block, shortRange/changed identity, disk quotas, no default fullGET, canceled child releases pins only after exit |
 | M4 / M3 | operations recovery | maintenance/recovery.go; CLI doctor/repair/restore; deploy pgBackRest config/runbook | Actual isolated PG base+WAL+S3 restore, referenced set verification, fresh generation reads old verified files, no newer-object adoption, sessions invalid, outgoing paused, missingfile unhealthy; **G06 complete** |
 

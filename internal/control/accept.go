@@ -301,7 +301,7 @@ func selectCandidates(ctx context.Context, tx pgx.Tx, batch VerifiedBatch, reten
 		request := batch.Requests[winner.request]
 		command, err := tx.Exec(ctx, `INSERT INTO event_dedupe(tenant_id,project_id,kind,source_event_id,record_id,receipt_acceptance_id,payload_sha256,expires_at)
 			VALUES($1,$2,$3,$4,$5,$6,$7,clock_timestamp()+make_interval(days=>$8)) ON CONFLICT DO NOTHING`,
-			batch.TenantID, key.projectID, key.kind, key.sourceID, winner.value.RecordID, request.Index.AcceptanceID, winner.value.DedupeSHA256, retention[key.projectID])
+			batch.TenantID, key.projectID, key.kind, key.sourceID, winner.value.RecordID, request.Index.AcceptanceID, winner.value.DedupeSHA256, retention[key.projectID]+7)
 		if err != nil {
 			return nil, err
 		}
@@ -310,8 +310,10 @@ func selectCandidates(ctx context.Context, tx pgx.Tx, batch VerifiedBatch, reten
 		if !winnerAccepted {
 			var existingHash string
 			var expired bool
-			err := tx.QueryRow(ctx, `SELECT payload_sha256,expires_at<=clock_timestamp() FROM event_dedupe
-				WHERE tenant_id=$1 AND project_id=$2 AND kind=$3 AND source_event_id=$4 FOR UPDATE`,
+			err := tx.QueryRow(ctx, `SELECT d.payload_sha256,
+				GREATEST(d.expires_at,d.created_at+make_interval(days=>p.retention_days+7))<=clock_timestamp()
+				FROM event_dedupe d JOIN projects p ON p.tenant_id=d.tenant_id AND p.project_id=d.project_id
+				WHERE d.tenant_id=$1 AND d.project_id=$2 AND d.kind=$3 AND d.source_event_id=$4 FOR UPDATE OF d`,
 				batch.TenantID, key.projectID, key.kind, key.sourceID).Scan(&existingHash, &expired)
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil, errRetryAccept
@@ -323,7 +325,7 @@ func selectCandidates(ctx context.Context, tx pgx.Tx, batch VerifiedBatch, reten
 				command, err := tx.Exec(ctx, `UPDATE event_dedupe SET record_id=$5,receipt_acceptance_id=$6,payload_sha256=$7,
 					expires_at=clock_timestamp()+make_interval(days=>$8),created_at=clock_timestamp()
 					WHERE tenant_id=$1 AND project_id=$2 AND kind=$3 AND source_event_id=$4`,
-					batch.TenantID, key.projectID, key.kind, key.sourceID, winner.value.RecordID, request.Index.AcceptanceID, winner.value.DedupeSHA256, retention[key.projectID])
+					batch.TenantID, key.projectID, key.kind, key.sourceID, winner.value.RecordID, request.Index.AcceptanceID, winner.value.DedupeSHA256, retention[key.projectID]+7)
 				if err != nil {
 					return nil, err
 				}

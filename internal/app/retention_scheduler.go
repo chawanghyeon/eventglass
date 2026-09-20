@@ -21,6 +21,7 @@ func (runtime *Runtime) runRetentionScheduler(ctx context.Context) error {
 	defer func() { <-alertDone }()
 	for {
 		_, _, _ = runtime.queryControl.AdvanceRetentionFloor(ctx)
+		_, _ = runtime.maintenance.RunRetentionCleanup(ctx)
 		_ = runtime.reserveOneCompaction(ctx)
 		timer := time.NewTimer(retentionTickInterval)
 		select {
@@ -37,6 +38,20 @@ func (runtime *Runtime) runRetentionScheduler(ctx context.Context) error {
 func (runtime *Runtime) reserveOneCompaction(ctx context.Context) error {
 	if runtime.maintenance == nil {
 		return nil
+	}
+	retention, retentionErr := runtime.maintenance.FindRetentionCandidate(ctx)
+	if retentionErr == nil {
+		_, err := runtime.maintenance.ReserveRetention(ctx, control.ReserveRetentionCommand{
+			InstallationID: runtime.installation.InstallationID, StorageGeneration: runtime.installation.StorageGeneration,
+			TaskID: uuid.NewString(), TenantID: retention.TenantID, LaneID: retention.LaneID, BundleID: retention.BundleID,
+		})
+		if err == nil || errors.Is(err, control.ErrMaintenanceBusy) {
+			return nil
+		}
+		return err
+	}
+	if !errors.Is(retentionErr, control.ErrMaintenanceNoWork) {
+		return retentionErr
 	}
 	candidate, err := runtime.maintenance.FindCompactionCandidate(ctx)
 	if errors.Is(err, control.ErrMaintenanceNoWork) {

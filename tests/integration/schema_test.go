@@ -88,7 +88,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest) != 10 {
+	if len(manifest) != 11 {
 		t.Fatalf("migration count=%d", len(manifest))
 	}
 	conn, err := pgx.Connect(ctx, env["EVENTGLASS_DATABASE_URL"])
@@ -124,7 +124,20 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	exec(`DELETE FROM file_blocks WHERE file_id IN (SELECT f.file_id FROM files f JOIN object_intents oi ON oi.intent_id=f.intent_id WHERE oi.maintenance_task_id IS NOT NULL)`)
 	exec(`DELETE FROM files WHERE intent_id IN (SELECT intent_id FROM object_intents WHERE maintenance_task_id IS NOT NULL)`)
 	exec(`DELETE FROM object_intents WHERE maintenance_task_id IS NOT NULL`)
+	exec(`UPDATE bundles SET reserved_by=NULL WHERE reserved_by IS NOT NULL`)
 	exec(`DELETE FROM maintenance_tasks`)
+	exec(manifest[10].DownSQL)
+	exec(`INSERT INTO tenants(tenant_id) VALUES(399) ON CONFLICT DO NOTHING`)
+	exec(`INSERT INTO object_intents(intent_id,installation_id,tenant_id,storage_generation,object_key,kind,state,owner,expires_at,expected_bytes,expected_sha256)
+		VALUES('00000000-0000-4000-8000-000000000399','00000000-0000-4000-8000-000000000099',399,1,'v1/upgrade/gc-deleting','temporary','deleting','upgrade',clock_timestamp()-interval '9 days',1,repeat('c',64))`)
+	exec(manifest[10].UpSQL)
+	var gcBackfilled bool
+	if err := tx.QueryRow(ctx, `SELECT gc_marked_at IS NOT NULL AND gc_confirmed_at IS NULL FROM object_intents WHERE intent_id='00000000-0000-4000-8000-000000000399'`).Scan(&gcBackfilled); err != nil || !gcBackfilled {
+		t.Fatalf("GC upgrade backfill=%v err=%v", gcBackfilled, err)
+	}
+	exec(`DELETE FROM object_intents WHERE intent_id='00000000-0000-4000-8000-000000000399'`)
+	exec(manifest[10].DownSQL)
+	exec(`DELETE FROM ingest_batches WHERE recovery_state='retired'`)
 	exec(manifest[9].DownSQL)
 	exec(manifest[8].DownSQL)
 	exec(manifest[7].DownSQL)

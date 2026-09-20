@@ -17,7 +17,7 @@ const (
 )
 
 func (runtime *Runtime) runWorker(ctx context.Context) error {
-	work := []func(context.Context) (bool, error){runtime.runOnePublication, runtime.runOneDelivery, runtime.runOneConversion, runtime.runOneQueryCoordinator, runtime.runOneQuery, runtime.runOneCompaction}
+	work := []func(context.Context) (bool, error){runtime.runOnePublication, runtime.runOneDelivery, runtime.runOneConversion, runtime.runOneQueryCoordinator, runtime.runOneQuery, runtime.runOneRetention, runtime.runOneCompaction, runtime.runOneGC}
 	next := 0
 	for ctx.Err() == nil {
 		var progressed bool
@@ -50,6 +50,29 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (runtime *Runtime) runOneRetention(ctx context.Context) (bool, error) {
+	if runtime.maintenance == nil || runtime.retainer == nil {
+		return false, nil
+	}
+	task, err := runtime.maintenance.ClaimRetention(ctx, runtime.installation.InstallationID, runtime.workerOwner, workerLease)
+	if err != nil || task == nil {
+		return false, err
+	}
+	err = runtime.withCompactionHeartbeat(ctx, task.Authority, func(taskContext context.Context) error { return runtime.retainer.Execute(taskContext, *task) })
+	if err != nil && ctx.Err() == nil {
+		failErr := runtime.maintenance.FailCompaction(ctx, task.Authority, "retention_worker_failed", true)
+		return true, errors.Join(err, failErr)
+	}
+	return true, err
+}
+
+func (runtime *Runtime) runOneGC(ctx context.Context) (bool, error) {
+	if runtime.collector == nil {
+		return false, nil
+	}
+	return runtime.collector.RunOnce(ctx)
 }
 
 func (runtime *Runtime) runOneCompaction(ctx context.Context) (bool, error) {

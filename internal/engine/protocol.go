@@ -32,6 +32,7 @@ type CompactionRequest struct {
 	GroupingVersion   int               `json:"grouping_version"`
 	EventDay          string            `json:"event_day"`
 	Kind              model.Kind        `json:"kind"`
+	MinReceivedTimeUS int64             `json:"min_received_time_us,omitempty"`
 	Inputs            []CompactionInput `json:"inputs"`
 	OutputDirectory   string            `json:"output_directory"`
 	SpillDirectory    string            `json:"spill_directory"`

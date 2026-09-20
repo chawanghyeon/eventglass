@@ -63,8 +63,12 @@ func Compact(ctx context.Context, request CompactionRequest) (CompactionResult, 
 	}
 	analyticsPath := filepath.Join(request.OutputDirectory, "compact.analytics.parquet")
 	payloadPath := filepath.Join(request.OutputDirectory, "compact.payload.parquet")
-	analyticsSQL := `COPY (SELECT * FROM read_parquet(` + parquetPathList(analyticsPaths) + `) ORDER BY received_time_us,lane_id,batch_seq,record_ordinal,record_id) TO '` + quoteSQLString(analyticsPath) + `' (FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,ROW_GROUP_SIZE 16384)`
-	payloadSQL := `COPY (SELECT * FROM read_parquet(` + parquetPathList(payloadPaths) + `) ORDER BY record_id) TO '` + quoteSQLString(payloadPath) + `' (FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,ROW_GROUP_SIZE 16384)`
+	retained := `SELECT * FROM read_parquet(` + parquetPathList(analyticsPaths) + `)`
+	if request.MinReceivedTimeUS > 0 {
+		retained += ` WHERE received_time_us>=` + strconv.FormatInt(request.MinReceivedTimeUS, 10)
+	}
+	analyticsSQL := `COPY (` + retained + ` ORDER BY received_time_us,lane_id,batch_seq,record_ordinal,record_id) TO '` + quoteSQLString(analyticsPath) + `' (FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,ROW_GROUP_SIZE 16384)`
+	payloadSQL := `COPY (SELECT p.* FROM read_parquet(` + parquetPathList(payloadPaths) + `) p SEMI JOIN (` + retained + `) a USING(record_id) ORDER BY p.record_id) TO '` + quoteSQLString(payloadPath) + `' (FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,ROW_GROUP_SIZE 16384)`
 	for _, statement := range []string{analyticsSQL, payloadSQL} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return CompactionResult{}, err
@@ -82,8 +86,11 @@ func Compact(ctx context.Context, request CompactionRequest) (CompactionResult, 
 }
 
 func validateCompactionRequest(request CompactionRequest) error {
-	if request.Version != CompactionProtocolVersion || request.TenantID <= 0 || request.LaneID < 0 || request.LaneID >= model.LaneCount || request.SchemaVersion <= 0 || request.GroupingVersion <= 0 || request.Kind != model.KindError && request.Kind != model.KindLog && request.Kind != model.KindTransaction || len(request.Inputs) < 2 || len(request.Inputs) > 128 {
+	if request.Version != CompactionProtocolVersion || request.TenantID <= 0 || request.LaneID < 0 || request.LaneID >= model.LaneCount || request.SchemaVersion <= 0 || request.GroupingVersion <= 0 || request.MinReceivedTimeUS < 0 || request.Kind != model.KindError && request.Kind != model.KindLog && request.Kind != model.KindTransaction || len(request.Inputs) < 1 || len(request.Inputs) > 128 {
 		return errors.New("invalid compaction request")
+	}
+	if request.MinReceivedTimeUS == 0 && len(request.Inputs) < 2 {
+		return errors.New("compaction requires at least two inputs")
 	}
 	if _, err := time.Parse("2006-01-02", request.EventDay); err != nil {
 		return errors.New("invalid compaction event day")
