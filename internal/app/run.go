@@ -176,6 +176,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	mux := http.NewServeMux()
 	var publicQueries *api.QueryAdapter
 	if config.Roles[RoleAPI] {
+		var ingestHandler *api.IngestHandler
 		authHashKey, err := readHexSecret(config.AuthHashKeyFile)
 		if err != nil {
 			return fail(fmt.Errorf("read auth hash key: %w", err))
@@ -214,6 +215,33 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			},
 			Queries: publicQueries,
 			Alerts:  runtime.alertControl, AlertCipher: runtime.alertCipher,
+			StartedAt: time.Now(),
+			RejectedRequests: func() int64 {
+				if ingestHandler == nil {
+					return 0
+				}
+				return ingestHandler.RejectedRequests()
+			},
+			StorageHealth: func(ctx context.Context) error {
+				info, err := store.Head(ctx, markerKey)
+				if err != nil {
+					return err
+				}
+				if info.Size != int64(len(marker)) || info.SHA256 != markerSHA {
+					return errors.New("installation marker metadata mismatch")
+				}
+				return nil
+			},
+			Resources: func() []api.ResourceMetric {
+				pgUsed, pgMax := database.PoolUsage()
+				return []api.ResourceMetric{
+					{Name: "ingress", Unit: "bytes", Used: resources.Ingress.Used(), Max: resources.Ingress.Limit()},
+					{Name: "working", Unit: "bytes", Used: resources.Working.Used(), Max: resources.Working.Limit()},
+					{Name: "spool", Unit: "bytes", Used: resources.Disk.Used(), Max: resources.Disk.Limit()},
+					{Name: "pg_connections", Unit: "count", Used: pgUsed, Max: pgMax},
+					{Name: "native_tasks", Unit: "count", Used: nativeTasks.used(), Max: 1},
+				}
+			},
 		})
 		if err != nil {
 			return fail(err)
@@ -238,7 +266,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		if err != nil {
 			return fail(err)
 		}
-		ingestHandler, err := api.NewIngestHandler(api.Config{
+		ingestHandler, err = api.NewIngestHandler(api.Config{
 			Sink: runtime.batcher, ResolveProject: operations.LoadProjectTenant,
 			ResolveAuthorization: operations.LoadProjectAuthorization, ResolveOrigins: operations.LoadProjectOrigins,
 			IngressBudget: resources.Ingress, WorkingBudget: resources.Working,

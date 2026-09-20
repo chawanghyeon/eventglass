@@ -25,25 +25,31 @@ func (handler *ManagementHandler) registerOperatorRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /v1/issues/{id}", handler.updateIssue)
 	mux.HandleFunc("GET /v1/issues/{id}/occurrences", handler.listIssueOccurrences)
 	mux.HandleFunc("GET /v1/system/sdk-outcomes", handler.listSDKOutcomes)
+	mux.HandleFunc("GET /v1/users", handler.listUsers)
+	mux.HandleFunc("POST /v1/users", handler.createUser)
+	mux.HandleFunc("PATCH /v1/users/{id}", handler.updateUser)
+	mux.HandleFunc("GET /v1/system", handler.getSystem)
+	mux.HandleFunc("PATCH /v1/system/retention", handler.updateRetention)
 }
 
 type operatorCursor struct {
-	Version    int     `json:"v"`
-	Purpose    string  `json:"p"`
-	TenantID   int64   `json:"t"`
-	UserID     int64   `json:"u"`
-	ProjectIDs []int64 `json:"j,omitempty"`
-	Status     string  `json:"s,omitempty"`
-	ProjectID  int64   `json:"i,omitempty"`
-	IssueID    string  `json:"x,omitempty"`
-	ReceivedUS int64   `json:"r,omitempty"`
-	EventUS    int64   `json:"e,omitempty"`
-	NS         int     `json:"n,omitempty"`
-	RecordID   string  `json:"d,omitempty"`
-	StartUS    int64   `json:"a,omitempty"`
-	EndUS      int64   `json:"b,omitempty"`
-	Category   string  `json:"c,omitempty"`
-	Reason     string  `json:"q,omitempty"`
+	Version     int     `json:"v"`
+	Purpose     string  `json:"p"`
+	TenantID    int64   `json:"t"`
+	UserID      int64   `json:"u"`
+	ProjectIDs  []int64 `json:"j,omitempty"`
+	Status      string  `json:"s,omitempty"`
+	ProjectID   int64   `json:"i,omitempty"`
+	IssueID     string  `json:"x,omitempty"`
+	ReceivedUS  int64   `json:"r,omitempty"`
+	EventUS     int64   `json:"e,omitempty"`
+	NS          int     `json:"n,omitempty"`
+	RecordID    string  `json:"d,omitempty"`
+	AfterUserID int64   `json:"w,omitempty"`
+	StartUS     int64   `json:"a,omitempty"`
+	EndUS       int64   `json:"b,omitempty"`
+	Category    string  `json:"c,omitempty"`
+	Reason      string  `json:"q,omitempty"`
 }
 
 func (handler *ManagementHandler) encodeOperatorCursor(claims operatorCursor) (string, error) {

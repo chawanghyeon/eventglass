@@ -63,3 +63,10 @@ func (gate *NativeTaskGate) memoryLimit(requested int64) int64 {
 	}
 	return requested
 }
+
+func (gate *NativeTaskGate) used() int64 {
+	if gate == nil || len(gate.slot) == 1 {
+		return 0
+	}
+	return 1
+}

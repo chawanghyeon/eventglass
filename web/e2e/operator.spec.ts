@@ -69,6 +69,36 @@ test("SDK ACK becomes safe Issue UI while logs and breadcrumbs keep their roles"
   await page.goto("/system");
   await expect(page.getByText("network_error")).toBeVisible();
   await expect(page.getByText("3", { exact: true })).toBeVisible();
+  await expect(page.getByText("missing", { exact: true })).toBeVisible();
+  await page.getByLabel("Installation-wide days").fill("45");
+  await page.getByRole("button", { name: "Update policy" }).click();
+  await expect(page.getByText(/Current 45 days/)).toBeVisible();
+
+  await page.goto("/users");
+  await page.getByLabel("Email").fill("browser-viewer@example.invalid");
+  await page.getByLabel("Initial password").fill("browser-viewer-password");
+  await page.getByRole("button", { name: "Create user" }).click();
+  const managedUser = page.getByRole("article").filter({ hasText: "browser-viewer@example.invalid" });
+  await expect(managedUser).toBeVisible();
+  await managedUser.getByLabel("Project grants").fill(`${projectID}:viewer`);
+  await managedUser.getByRole("button", { name: "Save" }).click();
+  await expect(managedUser.getByText(/Revision 2/)).toBeVisible();
+
+  await page.goto("/alerts");
+  await page.getByLabel("Name").fill("Browser webhook");
+  await page.getByLabel("HTTPS URL").fill("https://example.invalid/eventglass");
+  await page.getByLabel("Signing secret").fill("browser-secret-not-sent");
+  await page.getByRole("button", { name: "Add destination" }).click();
+  await expect(page.getByText("Browser webhook", { exact: false }).first()).toBeVisible();
+  await page.getByLabel("New issue rule").fill("New browser issues");
+  await page.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByText("New browser issues", { exact: false })).toBeVisible();
+
+  await page.goto("/account");
+  await page.getByLabel("Current password").fill("browser-only-integration-password");
+  await page.getByLabel("New password").fill("browser-rotated-integration-password");
+  await page.getByRole("button", { name: "Change password" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
 
 function makeEnvelope(dsn: string, items: Array<{ type: string; value: unknown; item_count?: number }>): string {

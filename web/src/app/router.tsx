@@ -11,6 +11,8 @@ import { IssuesPage } from "../features/issues/IssuesPage";
 import { IssueDetailPage } from "../features/issues/IssueDetailPage";
 import { AlertsPage } from "../features/alerts/AlertsPage";
 import { SystemPage } from "../features/system/SystemPage";
+import { UsersPage } from "../features/users/UsersPage";
+import { AccountPage } from "../features/auth/AccountPage";
 
 export const router = createBrowserRouter([
   { path: "/setup", element: <SetupPage /> },
@@ -29,6 +31,8 @@ export const router = createBrowserRouter([
         { path: "/explore", element: <ExplorePage /> },
         { path: "/alerts", element: <AlertsPage /> },
         { path: "/system", element: <SystemPage /> },
+        { path: "/users", element: <UsersPage /> },
+        { path: "/account", element: <AccountPage /> },
       ],
     }],
   },

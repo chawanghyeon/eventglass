@@ -37,19 +37,28 @@ type MarkerBuilder func(installationID, storageIdentity string) (body []byte, ke
 type MarkerStore func(context.Context, string, []byte, string) error
 
 type ManagementConfig struct {
-	Auth            *control.AuthOperations
-	StoreMarker     MarkerStore
-	Passwords       *PasswordHasher
-	PublicOrigin    string
-	CookieName      string
-	SecureCookie    bool
-	LoginBucketKey  [32]byte
-	BuildMarker     MarkerBuilder
-	OnSetupComplete func()
-	Now             func() time.Time
-	Queries         PublicQueryService
-	Alerts          *control.AlertOperations
-	AlertCipher     *alerts.SecretCipher
+	Auth             *control.AuthOperations
+	StoreMarker      MarkerStore
+	Passwords        *PasswordHasher
+	PublicOrigin     string
+	CookieName       string
+	SecureCookie     bool
+	LoginBucketKey   [32]byte
+	BuildMarker      MarkerBuilder
+	OnSetupComplete  func()
+	Now              func() time.Time
+	Queries          PublicQueryService
+	Alerts           *control.AlertOperations
+	AlertCipher      *alerts.SecretCipher
+	Resources        func() []ResourceMetric
+	StorageHealth    func(context.Context) error
+	RejectedRequests func() int64
+	StartedAt        time.Time
+}
+
+type ResourceMetric struct {
+	Name, Unit string
+	Used, Max  int64
 }
 
 type ManagementHandler struct {
@@ -81,6 +90,9 @@ func NewManagementHandler(config ManagementConfig) (*ManagementHandler, error) {
 	}
 	if config.Now == nil {
 		config.Now = time.Now
+	}
+	if config.StartedAt.IsZero() {
+		config.StartedAt = config.Now()
 	}
 	return &ManagementHandler{config: config, liveSlots: make(chan struct{}, 32)}, nil
 }

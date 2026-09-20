@@ -23,7 +23,10 @@ a provider benchmark or proof of end-to-end search speed.
 
 `api/capabilities.json` maps registered routes to UI coverage and test sources;
 architecture checks detect missing entries and stale paths. Test-source existence
-does not prove semantic coverage. G05 remains open for U4's missing surfaces.
+does not prove semantic coverage. U4's user/system/editor routes and frontend flows
+are implemented; unit, codegen, architecture, Vitest, typecheck and production build
+pass locally. G05 remains open until the Docker-backed PostgreSQL/MinIO integration
+and final ARM64 image Playwright flow execute successfully.
 `check-browser` now uses the final non-root ARM64 image and production assets,
 not a Vite development server. Release still requires M4/R1-R4 evidence.
 

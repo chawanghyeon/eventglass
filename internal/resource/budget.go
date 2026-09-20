@@ -124,3 +124,9 @@ func (b *Budget) Used() int64 {
 	defer b.mu.Unlock()
 	return b.used
 }
+
+func (b *Budget) Limit() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.limit
+}

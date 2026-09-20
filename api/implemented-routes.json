@@ -5,6 +5,9 @@
   "GET /v1/session",
   "DELETE /v1/session",
   "POST /v1/session/password",
+  "GET /v1/users",
+  "POST /v1/users",
+  "PATCH /v1/users/{id}",
   "GET /v1/projects",
   "POST /v1/projects",
   "PATCH /v1/projects/{id}",
@@ -31,5 +34,7 @@
   "PATCH /v1/alerts/{id}",
   "GET /v1/deliveries",
   "POST /v1/deliveries/{id}/retry",
+  "GET /v1/system",
+  "PATCH /v1/system/retention",
   "GET /v1/system/sdk-outcomes"
 ]

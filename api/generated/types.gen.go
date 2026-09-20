@@ -185,6 +185,21 @@ func (e HealthStatus) Valid() bool {
 	}
 }
 
+// Defines values for IngestCountersRejectedScope.
+const (
+	IngestCountersRejectedScopeProcess IngestCountersRejectedScope = "process"
+)
+
+// Valid indicates whether the value is a known member of the IngestCountersRejectedScope enum.
+func (e IngestCountersRejectedScope) Valid() bool {
+	switch e {
+	case IngestCountersRejectedScopeProcess:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for IngestCountersScope.
 const (
 	IngestCountersScopeProcess IngestCountersScope = "process"
@@ -1060,15 +1075,20 @@ type Histogram struct {
 
 // IngestCounters defines model for IngestCounters.
 type IngestCounters struct {
-	AcceptedRecords  Int64               `json:"accepted_records"`
-	AcceptedRequests Int64               `json:"accepted_requests"`
-	ConflictRecords  Int64               `json:"conflict_records"`
-	DuplicateRecords Int64               `json:"duplicate_records"`
-	PublishedRecords Int64               `json:"published_records"`
-	RejectedRequests Int64               `json:"rejected_requests"`
-	Scope            IngestCountersScope `json:"scope"`
-	Since            Timestamp           `json:"since"`
+	AcceptedRecords  Int64                       `json:"accepted_records"`
+	AcceptedRequests Int64                       `json:"accepted_requests"`
+	ConflictRecords  Int64                       `json:"conflict_records"`
+	DuplicateRecords Int64                       `json:"duplicate_records"`
+	PublishedRecords Int64                       `json:"published_records"`
+	RejectedRequests Int64                       `json:"rejected_requests"`
+	RejectedScope    IngestCountersRejectedScope `json:"rejected_scope"`
+	RejectedSince    Timestamp                   `json:"rejected_since"`
+	Scope            IngestCountersScope         `json:"scope"`
+	Since            Timestamp                   `json:"since"`
 }
+
+// IngestCountersRejectedScope defines model for IngestCounters.RejectedScope.
+type IngestCountersRejectedScope string
 
 // IngestCountersScope defines model for IngestCounters.Scope.
 type IngestCountersScope string

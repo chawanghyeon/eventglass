@@ -49,6 +49,10 @@ func OpenRuntimeDatabase(ctx context.Context, databaseURL string, maxConnections
 
 func (database *RuntimeDatabase) Ping(ctx context.Context) error { return database.pool.Ping(ctx) }
 func (database *RuntimeDatabase) Close()                         { database.pool.Close() }
+func (database *RuntimeDatabase) PoolUsage() (used, maximum int64) {
+	stats := database.pool.Stat()
+	return int64(stats.AcquiredConns()), int64(stats.MaxConns())
+}
 func (database *RuntimeDatabase) VerifySchema(ctx context.Context) error {
 	return VerifyRuntimeSchema(ctx, database.pool)
 }

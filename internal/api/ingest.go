@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/andybalholm/brotli"
@@ -69,7 +70,25 @@ type IngestHandler struct {
 	origins       map[string]struct{}
 	decoderTokens chan struct{}
 	admission     *resource.Budget
+	rejected      atomic.Int64
 }
+
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (writer *statusResponseWriter) WriteHeader(status int) {
+	if writer.wroteHeader {
+		return
+	}
+	writer.wroteHeader = true
+	writer.status = status
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (handler *IngestHandler) RejectedRequests() int64 { return handler.rejected.Load() }
 
 func NewIngestHandler(config Config) (*IngestHandler, error) {
 	dynamicProject := config.ResolveProject != nil
@@ -127,6 +146,13 @@ func NewIngestHandler(config Config) (*IngestHandler, error) {
 }
 
 func (handler *IngestHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	tracked := &statusResponseWriter{ResponseWriter: writer, status: http.StatusOK}
+	writer = tracked
+	defer func() {
+		if tracked.status >= 400 {
+			handler.rejected.Add(1)
+		}
+	}()
 	writer.Header().Set("Content-Type", "application/json")
 	if origin := request.Header.Get("Origin"); origin != "" {
 		writer.Header().Add("Vary", "Origin")

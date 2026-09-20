@@ -51,10 +51,31 @@
       "route": "POST /v1/session/password",
       "owner": "api",
       "backend": "registered",
-      "ui": "not-exposed",
+      "ui": "connected",
       "tests": [
         "tests/integration/auth_test.go"
       ]
+    },
+    {
+      "route": "GET /v1/users",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": ["tests/integration/auth_test.go", "web/src/features/flows.test.tsx"]
+    },
+    {
+      "route": "POST /v1/users",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": ["tests/integration/auth_test.go", "web/src/features/flows.test.tsx"]
+    },
+    {
+      "route": "PATCH /v1/users/{id}",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": ["tests/integration/auth_test.go", "web/src/features/flows.test.tsx"]
     },
     {
       "route": "GET /v1/projects",
@@ -232,7 +253,7 @@
       "route": "GET /v1/destinations",
       "owner": "api",
       "backend": "registered",
-      "ui": "not-exposed",
+      "ui": "connected",
       "tests": [
         "internal/api/alerts_http_test.go",
         "tests/integration/alerts_test.go"
@@ -242,7 +263,7 @@
       "route": "POST /v1/destinations",
       "owner": "api",
       "backend": "registered",
-      "ui": "not-exposed",
+      "ui": "connected",
       "tests": [
         "internal/api/alerts_http_test.go",
         "tests/integration/alerts_test.go"
@@ -252,7 +273,7 @@
       "route": "PATCH /v1/destinations/{id}",
       "owner": "api",
       "backend": "registered",
-      "ui": "not-exposed",
+      "ui": "connected",
       "tests": [
         "internal/api/alerts_http_test.go",
         "tests/integration/alerts_test.go"
@@ -262,7 +283,7 @@
       "route": "GET /v1/alerts",
       "owner": "api",
       "backend": "registered",
-      "ui": "read-only",
+      "ui": "connected",
       "tests": [
         "internal/api/alerts_http_test.go",
         "tests/integration/alerts_test.go"
@@ -272,7 +293,7 @@
       "route": "POST /v1/alerts",
       "owner": "api",
       "backend": "registered",
-      "ui": "not-exposed",
+      "ui": "connected",
       "tests": [
         "internal/api/alerts_http_test.go",
         "tests/integration/alerts_test.go"
@@ -282,7 +303,7 @@
       "route": "PATCH /v1/alerts/{id}",
       "owner": "api",
       "backend": "registered",
-      "ui": "not-exposed",
+      "ui": "connected",
       "tests": [
         "internal/api/alerts_http_test.go",
         "tests/integration/alerts_test.go"
@@ -292,7 +313,7 @@
       "route": "GET /v1/deliveries",
       "owner": "api",
       "backend": "registered",
-      "ui": "read-only",
+      "ui": "connected",
       "tests": [
         "internal/api/alerts_http_test.go",
         "tests/integration/alerts_test.go"
@@ -302,11 +323,25 @@
       "route": "POST /v1/deliveries/{id}/retry",
       "owner": "api",
       "backend": "registered",
-      "ui": "not-exposed",
+      "ui": "connected",
       "tests": [
         "internal/api/alerts_http_test.go",
         "tests/integration/alerts_test.go"
       ]
+    },
+    {
+      "route": "GET /v1/system",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": ["tests/integration/auth_test.go", "web/src/features/flows.test.tsx"]
+    },
+    {
+      "route": "PATCH /v1/system/retention",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": ["tests/integration/auth_test.go", "web/src/features/flows.test.tsx"]
     },
     {
       "route": "GET /v1/system/sdk-outcomes",
@@ -319,16 +354,6 @@
     }
   ],
   "pending": [
-    {
-      "id": "operator-management",
-      "packet": "U4",
-      "description": "User/membership management, password UI, alert/destination editors and delivery retry UI."
-    },
-    {
-      "id": "system-status",
-      "packet": "U4",
-      "description": "GET /v1/system and installation-admin retention mutation, resources/cuts/backup diagnostics."
-    },
     {
       "id": "range-cache",
       "packet": "M3",

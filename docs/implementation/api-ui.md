@@ -212,7 +212,8 @@ Resource DTOs (all fields required unless `?`; secret fields only at creation):
   is null/unavailable, not invented zero or healthy.
 
 System counter objects are exact: ingest `{accepted_requests,accepted_records,
-duplicate_records,conflict_records,published_records,rejected_requests}`; sdk
+duplicate_records,conflict_records,published_records,rejected_requests,
+rejected_since,rejected_scope:"process"}`; sdk
 `{reported_drops,reported_drops_approximate:true,unsupported_items,by_reason:[
 {sdk_name,category,reason,count,approximate}]}`. Counters expose their `since`
 RFC3339 and `scope` tenant/process so callers cannot mistake a process reset for
@@ -222,7 +223,8 @@ latest100 and next_cursor. Never infer generated total by adding these counters.
 Resources are arrays `{name,unit,used,max}`, unit bytes/count, values decimal
 strings; names ingress,working,spool,cache,spill,pg_connections,native_tasks.
 v1 reads accepted/published/SDK counters from indexed durable rows within the
-selected time interval; rejected_requests is a process counter because rejected
+selected time interval; rejected_requests has its own process scope and start
+time because rejected
 requests have no durable receipt. Mark scopes explicitly. A future diagnostic
 rollup needs benchmark evidence and an atomic watermark; it is not part of v1.
 

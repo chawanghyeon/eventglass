@@ -1048,6 +1048,9 @@ export interface components {
             conflict_records: components["schemas"]["Int64"];
             published_records: components["schemas"]["Int64"];
             rejected_requests: components["schemas"]["Int64"];
+            rejected_since: components["schemas"]["Timestamp"];
+            /** @constant */
+            rejected_scope: "process";
         };
         SDKOutcome: {
             sdk_name: string;

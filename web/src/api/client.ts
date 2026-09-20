@@ -2,7 +2,7 @@ import createClient from "openapi-fetch";
 
 import type { paths } from "../generated/api";
 import { ApiFailure } from "./errors";
-import type { AggregateRequest, AggregateResult, ApiErrorBody, CreatedKey, DeliveryList, DestinationList, Issue, IssueList, KeyList, OccurrenceList, Project, ProjectCreate, ProjectList, ProjectPatch, QueryJob, RecordDetail, RuleList, SDKOutcomeList, SearchRequest, SearchResult, Session, SetupRequest, SetupState } from "./types";
+import type { AggregateRequest, AggregateResult, ApiErrorBody, CreatedKey, Delivery, DeliveryList, Destination, DestinationCreate, DestinationList, DestinationPatch, Issue, IssueList, KeyList, OccurrenceList, Project, ProjectCreate, ProjectList, ProjectPatch, QueryJob, RecordDetail, Retention, Rule, RuleCreate, RuleList, RulePatch, SDKOutcomeList, SearchRequest, SearchResult, Session, SetupRequest, SetupState, System, User, UserCreate, UserList, UserPatch } from "./types";
 
 const transport = createClient<paths>({ baseUrl: "/", credentials: "include" });
 
@@ -33,6 +33,19 @@ export const api = {
   async logout(csrf: string): Promise<void> {
     const result = await transport.DELETE("/v1/session", { params: { header: { "X-CSRF-Token": csrf } } });
     if (result.response.status !== 204) unwrap(result);
+  },
+  async changePassword(currentPassword: string, newPassword: string, csrf: string): Promise<void> {
+    const result = await transport.POST("/v1/session/password", { params: { header: { "X-CSRF-Token": csrf } }, body: { current_password: currentPassword, new_password: newPassword } });
+    if (result.response.status !== 204) unwrap(result);
+  },
+  async users(tenantID: string, cursor?: string, signal?: AbortSignal): Promise<UserList> {
+    return unwrap(await transport.GET("/v1/users", { params: { query: { tenant_id: tenantID, limit: 100, cursor } }, signal }));
+  },
+  async createUser(body: UserCreate, csrf: string): Promise<User> {
+    return unwrap(await transport.POST("/v1/users", { params: { header: { "X-CSRF-Token": csrf } }, body }));
+  },
+  async updateUser(userID: string, body: UserPatch, csrf: string): Promise<User> {
+    return unwrap(await transport.PATCH("/v1/users/{id}", { params: { path: { id: userID }, header: { "X-CSRF-Token": csrf } }, body }));
   },
   async projects(tenantID: string, cursor?: string, signal?: AbortSignal): Promise<ProjectList> {
     return unwrap(await transport.GET("/v1/projects", { params: { query: { tenant_id: tenantID, limit: 100, cursor } }, signal }));
@@ -76,6 +89,27 @@ export const api = {
   },
   async destinations(tenantID: string): Promise<DestinationList> {
     return unwrap(await transport.GET("/v1/destinations", { params: { query: { tenant_id: tenantID } } }));
+  },
+  async createDestination(body: DestinationCreate, csrf: string): Promise<Destination> {
+    return unwrap(await transport.POST("/v1/destinations", { params: { header: { "X-CSRF-Token": csrf } }, body }));
+  },
+  async updateDestination(destinationID: string, body: DestinationPatch, csrf: string): Promise<Destination> {
+    return unwrap(await transport.PATCH("/v1/destinations/{id}", { params: { path: { id: destinationID }, header: { "X-CSRF-Token": csrf } }, body }));
+  },
+  async createAlert(body: RuleCreate, csrf: string): Promise<Rule> {
+    return unwrap(await transport.POST("/v1/alerts", { params: { header: { "X-CSRF-Token": csrf } }, body }));
+  },
+  async updateAlert(alertID: string, body: RulePatch, csrf: string): Promise<Rule> {
+    return unwrap(await transport.PATCH("/v1/alerts/{id}", { params: { path: { id: alertID }, header: { "X-CSRF-Token": csrf } }, body }));
+  },
+  async retryDelivery(deliveryID: string, tenantID: string, projectID: string, revision: string, csrf: string): Promise<Delivery> {
+    return unwrap(await transport.POST("/v1/deliveries/{id}/retry", { params: { path: { id: deliveryID }, header: { "X-CSRF-Token": csrf } }, body: { tenant_id: tenantID, project_id: projectID, revision } }));
+  },
+  async system(tenantID: string, signal?: AbortSignal): Promise<System> {
+    return unwrap(await transport.GET("/v1/system", { params: { query: { tenant_id: tenantID } }, signal }));
+  },
+  async updateRetention(tenantID: string, revision: string, retentionDays: number, csrf: string): Promise<Retention> {
+    return unwrap(await transport.PATCH("/v1/system/retention", { params: { header: { "X-CSRF-Token": csrf } }, body: { tenant_id: tenantID, revision, retention_days: retentionDays } }));
   },
   async search(body: SearchRequest, signal?: AbortSignal): Promise<SearchResult | QueryJob> {
     return unwrap(await transport.POST("/v1/search", { body, signal }));

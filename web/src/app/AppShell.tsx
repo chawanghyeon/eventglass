@@ -40,7 +40,8 @@ export function AppShell() {
       <NavLink to="/explore">Explore</NavLink>
       <NavLink to="/projects">Projects</NavLink>
       <NavLink to="/alerts">Alerts</NavLink>
-      {tenant.role === "admin" ? <NavLink to="/system">System</NavLink> : null}
+      {tenant.role === "admin" ? <><NavLink to="/users">Users</NavLink><NavLink to="/system">System</NavLink></> : null}
+      <NavLink to="/account">Account</NavLink>
     </nav>
     <main><Outlet /></main>
   </div>;

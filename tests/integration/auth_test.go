@@ -278,6 +278,88 @@ func TestSetupSessionCSRFRateLimitsAndAuthorizationInvariants(t *testing.T) {
 		t.Fatalf("SDK key read authority=%v", err)
 	}
 
+	userCreateBody, _ := json.Marshal(generated.UserCreate{TenantId: fmt.Sprint(tenantID), Email: "managed@example.invalid", InitialPassword: "managed password value", Role: generated.UserCreateRole("member"), ProjectGrants: []generated.ProjectGrant{{ProjectId: fmt.Sprint(projectID), Role: generated.ProjectGrantRole("viewer")}}})
+	badUserCreate := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/v1/users", bytes.NewReader(userCreateBody))
+	badUserCreate.AddCookie(success.cookie)
+	badUserCreate.Header.Set("Origin", "http://127.0.0.1")
+	badUserCreate.Header.Set("Content-Type", "application/json")
+	badUserResponse := httptest.NewRecorder()
+	mux.ServeHTTP(badUserResponse, badUserCreate)
+	if badUserResponse.Code != http.StatusForbidden {
+		t.Fatalf("user mutation without CSRF status=%d body=%s", badUserResponse.Code, badUserResponse.Body.String())
+	}
+	userCreate := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/v1/users", bytes.NewReader(userCreateBody))
+	userCreate.AddCookie(success.cookie)
+	userCreate.Header.Set("Origin", "http://127.0.0.1")
+	userCreate.Header.Set("Content-Type", "application/json")
+	userCreate.Header.Set("X-CSRF-Token", session.CsrfToken)
+	userResponse := httptest.NewRecorder()
+	mux.ServeHTTP(userResponse, userCreate)
+	var managed generated.User
+	if userResponse.Code != http.StatusCreated || json.Unmarshal(userResponse.Body.Bytes(), &managed) != nil || managed.Email != "managed@example.invalid" || managed.Role == nil || *managed.Role != generated.UserRole("member") {
+		t.Fatalf("create user status=%d user=%#v body=%s", userResponse.Code, managed, userResponse.Body.String())
+	}
+	listUsers := httptest.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1/v1/users?tenant_id=%d&limit=1", tenantID), nil)
+	listUsers.AddCookie(success.cookie)
+	listUsersResponse := httptest.NewRecorder()
+	mux.ServeHTTP(listUsersResponse, listUsers)
+	var users generated.UserList
+	if listUsersResponse.Code != http.StatusOK || json.Unmarshal(listUsersResponse.Body.Bytes(), &users) != nil || len(users.Items) != 1 || users.NextCursor == "" {
+		t.Fatalf("user page status=%d users=%#v body=%s", listUsersResponse.Code, users, listUsersResponse.Body.String())
+	}
+	patchUserBody := []byte(fmt.Sprintf(`{"tenant_id":"%d","revision":"%s","state":"disabled","role":"member","project_grants":[]}`, tenantID, managed.Revision))
+	patchUser := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("http://127.0.0.1/v1/users/%s", managed.UserId), bytes.NewReader(patchUserBody))
+	patchUser.AddCookie(success.cookie)
+	patchUser.Header.Set("Origin", "http://127.0.0.1")
+	patchUser.Header.Set("Content-Type", "application/json")
+	patchUser.Header.Set("X-CSRF-Token", session.CsrfToken)
+	patchUserResponse := httptest.NewRecorder()
+	mux.ServeHTTP(patchUserResponse, patchUser)
+	var disabledUser generated.User
+	if patchUserResponse.Code != http.StatusOK || json.Unmarshal(patchUserResponse.Body.Bytes(), &disabledUser) != nil || disabledUser.State != generated.UserState("disabled") || disabledUser.Revision == managed.Revision {
+		t.Fatalf("patch user status=%d user=%#v body=%s", patchUserResponse.Code, disabledUser, patchUserResponse.Body.String())
+	}
+	stalePatch := httptest.NewRequest(http.MethodPatch, fmt.Sprintf("http://127.0.0.1/v1/users/%s", managed.UserId), bytes.NewReader(patchUserBody))
+	stalePatch.AddCookie(success.cookie)
+	stalePatch.Header.Set("Origin", "http://127.0.0.1")
+	stalePatch.Header.Set("Content-Type", "application/json")
+	stalePatch.Header.Set("X-CSRF-Token", session.CsrfToken)
+	staleResponse := httptest.NewRecorder()
+	mux.ServeHTTP(staleResponse, stalePatch)
+	if staleResponse.Code != http.StatusConflict {
+		t.Fatalf("stale user patch status=%d body=%s", staleResponse.Code, staleResponse.Body.String())
+	}
+
+	systemRequest := httptest.NewRequest(http.MethodGet, fmt.Sprintf("http://127.0.0.1/v1/system?tenant_id=%d", tenantID), nil)
+	systemRequest.AddCookie(success.cookie)
+	systemResponse := httptest.NewRecorder()
+	mux.ServeHTTP(systemResponse, systemRequest)
+	var system generated.System
+	if systemResponse.Code != http.StatusOK || json.Unmarshal(systemResponse.Body.Bytes(), &system) != nil || len(system.Lanes) != 16 || system.Backup.State == "" {
+		t.Fatalf("system status=%d system=%#v body=%s", systemResponse.Code, system, systemResponse.Body.String())
+	}
+	badRetentionBody := []byte(fmt.Sprintf(`{"tenant_id":"%d","revision":"%s","retention_days":45}`, tenantID, system.Retention.Revision))
+	badRetention := httptest.NewRequest(http.MethodPatch, "http://127.0.0.1/v1/system/retention", bytes.NewReader(badRetentionBody))
+	badRetention.AddCookie(success.cookie)
+	badRetention.Header.Set("Origin", "http://127.0.0.1")
+	badRetention.Header.Set("Content-Type", "application/json")
+	badRetentionResponse := httptest.NewRecorder()
+	mux.ServeHTTP(badRetentionResponse, badRetention)
+	if badRetentionResponse.Code != http.StatusForbidden {
+		t.Fatalf("retention without CSRF status=%d body=%s", badRetentionResponse.Code, badRetentionResponse.Body.String())
+	}
+	retentionRequest := httptest.NewRequest(http.MethodPatch, "http://127.0.0.1/v1/system/retention", bytes.NewReader(badRetentionBody))
+	retentionRequest.AddCookie(success.cookie)
+	retentionRequest.Header.Set("Origin", "http://127.0.0.1")
+	retentionRequest.Header.Set("Content-Type", "application/json")
+	retentionRequest.Header.Set("X-CSRF-Token", session.CsrfToken)
+	retentionResponse := httptest.NewRecorder()
+	mux.ServeHTTP(retentionResponse, retentionRequest)
+	var retention generated.Retention
+	if retentionResponse.Code != http.StatusOK || json.Unmarshal(retentionResponse.Body.Bytes(), &retention) != nil || retention.Days != 45 || retention.Revision == system.Retention.Revision {
+		t.Fatalf("retention status=%d retention=%#v body=%s", retentionResponse.Code, retention, retentionResponse.Body.String())
+	}
+
 	loginBody := []byte(`{"email":"missing@example.invalid","password":"not the right password"}`)
 	for attempt := 1; attempt <= 6; attempt++ {
 		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/v1/sessions", bytes.NewReader(loginBody))
