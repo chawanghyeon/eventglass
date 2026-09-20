@@ -13,7 +13,8 @@ func TestLoadConfigAndRejectUnknownRoles(t *testing.T) {
 		"EVENTGLASS_DATABASE_URL": "postgres://eventglass.invalid/db", "EVENTGLASS_PUBLIC_URL": "https://events.invalid",
 		"EVENTGLASS_ROLES": "api", "EVENTGLASS_SCRATCH_DIR": t.TempDir(), "EVENTGLASS_S3_REGION": "us-east-1",
 		"EVENTGLASS_S3_BUCKET": "eventglass", "EVENTGLASS_S3_ENDPOINT": "http://127.0.0.1:9000/", "EVENTGLASS_AUTH_HASH_KEY_FILE": "/run/secrets/eventglass-auth-hash-key",
-		"EVENTGLASS_TOKEN_KEY_FILE": "/run/secrets/eventglass-token-key",
+		"EVENTGLASS_TOKEN_KEY_FILE":            "/run/secrets/eventglass-token-key",
+		"EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE": "/run/secrets/eventglass-alert-encryption-key",
 	}
 	lookup := func(key string) (string, bool) { value, ok := values[key]; return value, ok }
 	config, err := LoadConfigFromEnv(lookup)
@@ -23,6 +24,11 @@ func TestLoadConfigAndRejectUnknownRoles(t *testing.T) {
 	if config.HTTPAddr != ":8080" || !config.Roles[RoleAPI] || !config.S3.PathStyle || config.S3.Endpoint != "http://127.0.0.1:9000" || config.DrainTimeout != 30*time.Second {
 		t.Fatalf("config=%#v", config)
 	}
+	delete(values, "EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE")
+	if _, err := LoadConfigFromEnv(lookup); err == nil {
+		t.Fatal("API role accepted a missing alert encryption key")
+	}
+	values["EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE"] = "/run/secrets/eventglass-alert-encryption-key"
 	values["EVENTGLASS_ROLES"] = "api,mystery"
 	if _, err := LoadConfigFromEnv(lookup); err == nil {
 		t.Fatal("unknown role was accepted")

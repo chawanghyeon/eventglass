@@ -17,6 +17,7 @@ import (
 	"time"
 
 	generated "github.com/chawanghyeon/eventglass/api/generated"
+	"github.com/chawanghyeon/eventglass/internal/alerts"
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/google/uuid"
 )
@@ -47,6 +48,8 @@ type ManagementConfig struct {
 	OnSetupComplete func()
 	Now             func() time.Time
 	Queries         PublicQueryService
+	Alerts          *control.AlertOperations
+	AlertCipher     *alerts.SecretCipher
 }
 
 type ManagementHandler struct {
@@ -92,6 +95,9 @@ func (handler *ManagementHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/projects/{id}/keys", handler.listProjectKeys)
 	mux.HandleFunc("POST /v1/projects/{id}/keys", handler.createProjectKey)
 	mux.HandleFunc("DELETE /v1/projects/{id}/keys/{key_id}", handler.revokeProjectKey)
+	if handler.config.Alerts != nil && handler.config.AlertCipher != nil {
+		handler.registerAlertRoutes(mux)
+	}
 	if handler.config.Queries != nil {
 		handler.registerQueryRoutes(mux)
 	}

@@ -88,7 +88,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest) != 8 {
+	if len(manifest) != 9 {
 		t.Fatalf("migration count=%d", len(manifest))
 	}
 	conn, err := pgx.Connect(ctx, env["EVENTGLASS_DATABASE_URL"])
@@ -118,6 +118,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 		exec("ROLLBACK TO SAVEPOINT negative")
 		exec("RELEASE SAVEPOINT negative")
 	}
+	exec(manifest[8].DownSQL)
 	exec(manifest[7].DownSQL)
 	exec(manifest[6].DownSQL)
 	exec(manifest[3].DownSQL)

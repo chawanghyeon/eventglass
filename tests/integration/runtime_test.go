@@ -138,7 +138,7 @@ func TestRuntimeStartsDurableIngressAndDrains(t *testing.T) {
 	}
 	config := app.Config{
 		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
-		ScratchDir: filepath.Join(t.TempDir(), "runtime"), AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), InsecureCookie: true,
+		ScratchDir: filepath.Join(t.TempDir(), "runtime"), AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), AlertEncryptionKeyFile: authHashKeyFile(t), InsecureCookie: true,
 		Roles: map[app.Role]bool{app.RoleAPI: true}, S3: s3Config, DrainTimeout: time.Second,
 	}
 	if _, err := app.NewRuntime(context.Background(), config); err == nil {
@@ -246,7 +246,7 @@ func TestRuntimeExposesOnlySetupSurfaceUntilInitializationCompletes(t *testing.T
 	config := app.Config{
 		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
 		ScratchDir: filepath.Join(t.TempDir(), "runtime-setup"), BootstrapTokenFile: bootstrapPath,
-		AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), InsecureCookie: true, Roles: map[app.Role]bool{app.RoleAPI: true},
+		AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), AlertEncryptionKeyFile: authHashKeyFile(t), InsecureCookie: true, Roles: map[app.Role]bool{app.RoleAPI: true},
 		S3: s3Config, DrainTimeout: time.Second,
 	}
 	runtime, err := app.NewRuntime(context.Background(), config)
@@ -321,7 +321,7 @@ func TestRuntimeWorkerPublishesEmptyAckedBatch(t *testing.T) {
 	}
 	config := app.Config{
 		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
-		ScratchDir: filepath.Join(t.TempDir(), "runtime-worker"), AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), InsecureCookie: true,
+		ScratchDir: filepath.Join(t.TempDir(), "runtime-worker"), AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), AlertEncryptionKeyFile: authHashKeyFile(t), InsecureCookie: true,
 		Roles: map[app.Role]bool{app.RoleAPI: true, app.RoleWorker: true}, S3: s3Config, DrainTimeout: 3 * time.Second,
 	}
 	runtime, err := app.NewRuntime(ctx, config)

@@ -22,6 +22,7 @@ type RuntimeInstallation struct {
 	GlobalScrubPolicySHA      string
 	GlobalScrubPolicyRevision int64
 	SetupState                SetupState
+	AlertEncryptionKeyID      *string
 }
 
 // RuntimeDatabase owns the PostgreSQL driver pool. App assembly configures its
@@ -66,6 +67,9 @@ func (database *RuntimeDatabase) AuthOperations() (*AuthOperations, error) {
 func (database *RuntimeDatabase) QueryOperations() (*QueryOperations, error) {
 	return NewQueryOperations(database.pool)
 }
+func (database *RuntimeDatabase) AlertOperations() (*AlertOperations, error) {
+	return NewAlertOperations(database.pool)
+}
 
 // VerifyRuntimeSchema is read-only. Runtime never races migrations into a live
 // deployment: its ledger must exactly match this binary's embedded manifest.
@@ -109,11 +113,11 @@ func LoadRuntimeInstallation(ctx context.Context, pool *pgxpool.Pool) (RuntimeIn
 	}
 	var installation RuntimeInstallation
 	err := pool.QueryRow(ctx, `SELECT installation_id::text,storage_generation,storage_identity,schema_version,
-		topology_version,lane_count,global_scrub_policy_sha,global_scrub_policy_revision,setup_state
+		topology_version,lane_count,global_scrub_policy_sha,global_scrub_policy_revision,setup_state,alert_encryption_key_id
 		FROM installations WHERE singleton`).Scan(
 		&installation.InstallationID, &installation.StorageGeneration, &installation.StorageIdentity,
 		&installation.SchemaVersion, &installation.TopologyVersion, &installation.LaneCount,
-		&installation.GlobalScrubPolicySHA, &installation.GlobalScrubPolicyRevision, &installation.SetupState)
+		&installation.GlobalScrubPolicySHA, &installation.GlobalScrubPolicyRevision, &installation.SetupState, &installation.AlertEncryptionKeyID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return RuntimeInstallation{}, errors.New("installation is not initialized")
 	}

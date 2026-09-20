@@ -21,17 +21,18 @@ const (
 )
 
 type Config struct {
-	DatabaseURL        string
-	HTTPAddr           string
-	PublicURL          string
-	ScratchDir         string
-	BootstrapTokenFile string
-	AuthHashKeyFile    string
-	TokenKeyFile       string
-	InsecureCookie     bool
-	Roles              map[Role]bool
-	S3                 storage.S3Config
-	DrainTimeout       time.Duration
+	DatabaseURL            string
+	HTTPAddr               string
+	PublicURL              string
+	ScratchDir             string
+	BootstrapTokenFile     string
+	AuthHashKeyFile        string
+	TokenKeyFile           string
+	AlertEncryptionKeyFile string
+	InsecureCookie         bool
+	Roles                  map[Role]bool
+	S3                     storage.S3Config
+	DrainTimeout           time.Duration
 }
 
 func LoadConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
@@ -55,7 +56,7 @@ func LoadConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		DatabaseURL: value("EVENTGLASS_DATABASE_URL"), HTTPAddr: value("EVENTGLASS_HTTP_ADDR"),
 		PublicURL: value("EVENTGLASS_PUBLIC_URL"), ScratchDir: value("EVENTGLASS_SCRATCH_DIR"),
 		BootstrapTokenFile: value("EVENTGLASS_BOOTSTRAP_TOKEN_FILE"), AuthHashKeyFile: value("EVENTGLASS_AUTH_HASH_KEY_FILE"),
-		TokenKeyFile: value("EVENTGLASS_TOKEN_KEY_FILE"), Roles: roles,
+		TokenKeyFile: value("EVENTGLASS_TOKEN_KEY_FILE"), AlertEncryptionKeyFile: value("EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE"), Roles: roles,
 		S3:           storage.S3Config{Endpoint: endpoint, Region: value("EVENTGLASS_S3_REGION"), Bucket: value("EVENTGLASS_S3_BUCKET"), Prefix: value("EVENTGLASS_S3_PREFIX"), PathStyle: pathStyle},
 		DrainTimeout: 30 * time.Second,
 	}
@@ -86,8 +87,8 @@ func (config Config) Validate() error {
 			return fmt.Errorf("unsupported role %q", role)
 		}
 	}
-	if config.Roles[RoleAPI] && (config.AuthHashKeyFile == "" || config.TokenKeyFile == "") {
-		return errors.New("EVENTGLASS_AUTH_HASH_KEY_FILE and EVENTGLASS_TOKEN_KEY_FILE are required for the API role")
+	if config.Roles[RoleAPI] && (config.AuthHashKeyFile == "" || config.TokenKeyFile == "" || config.AlertEncryptionKeyFile == "") {
+		return errors.New("EVENTGLASS_AUTH_HASH_KEY_FILE, EVENTGLASS_TOKEN_KEY_FILE, and EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE are required for the API role")
 	}
 	parsed, err := url.Parse(config.PublicURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {

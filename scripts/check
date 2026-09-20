@@ -25,8 +25,8 @@ check_go_version() {
 
 unit() {
   check_go_version
-  go test ./tests/architecture ./internal/api ./internal/app ./internal/control ./internal/ingest ./internal/issues ./internal/model ./internal/query ./internal/resource ./internal/sdk ./internal/storage ./cmd/eventglass-go
-  go vet ./internal/api ./internal/app ./internal/control ./internal/ingest ./internal/issues ./internal/model ./internal/query ./internal/resource ./internal/sdk ./internal/storage ./cmd/eventglass-go
+  go test ./tests/architecture ./internal/alerts ./internal/api ./internal/app ./internal/control ./internal/ingest ./internal/issues ./internal/model ./internal/query ./internal/resource ./internal/sdk ./internal/storage ./cmd/eventglass-go
+  go vet ./internal/alerts ./internal/api ./internal/app ./internal/control ./internal/ingest ./internal/issues ./internal/model ./internal/query ./internal/resource ./internal/sdk ./internal/storage ./cmd/eventglass-go
   python3 -m unittest deploy/test_layout.py
   test "$(sha256sum docs/observe/source-design.md | awk '{print $1}')" = "4cccddc98f76d5c38099958587386c55756a08cf366c26ed9e65eeedec0526e5"
 }

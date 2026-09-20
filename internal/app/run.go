@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chawanghyeon/eventglass/internal/alerts"
 	"github.com/chawanghyeon/eventglass/internal/api"
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/ingest"
@@ -24,28 +25,31 @@ import (
 )
 
 type Runtime struct {
-	config       Config
-	resources    Resources
-	database     *control.RuntimeDatabase
-	store        *storage.S3Store
-	batcher      *ingest.Batcher
-	publication  *control.PublicationOperations
-	queryControl *control.QueryOperations
-	queryWorker  *DurableQueryWorkflow
-	queryPlanner *DurableQueryCoordinator
-	converter    *DurableConversionWorkflow
-	publisher    *DurablePublicationWorkflow
-	workerOwner  string
-	handler      http.Handler
-	installation control.RuntimeInstallation
-	markerKey    string
-	markerBytes  int64
-	markerSHA    string
-	ready        atomic.Bool
-	started      chan struct{}
-	startOnce    sync.Once
-	addrMu       sync.RWMutex
-	addr         string
+	config         Config
+	resources      Resources
+	database       *control.RuntimeDatabase
+	store          *storage.S3Store
+	batcher        *ingest.Batcher
+	publication    *control.PublicationOperations
+	queryControl   *control.QueryOperations
+	alertControl   *control.AlertOperations
+	alertCipher    *alerts.SecretCipher
+	alertEvaluator *alerts.Evaluator
+	queryWorker    *DurableQueryWorkflow
+	queryPlanner   *DurableQueryCoordinator
+	converter      *DurableConversionWorkflow
+	publisher      *DurablePublicationWorkflow
+	workerOwner    string
+	handler        http.Handler
+	installation   control.RuntimeInstallation
+	markerKey      string
+	markerBytes    int64
+	markerSHA      string
+	ready          atomic.Bool
+	started        chan struct{}
+	startOnce      sync.Once
+	addrMu         sync.RWMutex
+	addr           string
 }
 
 func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
@@ -97,6 +101,27 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			return fail(fmt.Errorf("initialize setup authority: %w", err))
 		}
 	}
+	var runtimeAlertCipher *alerts.SecretCipher
+	var runtimeAlertOperations *control.AlertOperations
+	if config.Roles[RoleAPI] {
+		alertKey, err := readHexSecret(config.AlertEncryptionKeyFile)
+		if err != nil {
+			return fail(fmt.Errorf("read alert encryption key: %w", err))
+		}
+		alertCipher, err := alerts.NewSecretCipher(alertKey)
+		if err != nil {
+			return fail(err)
+		}
+		alertOperations, err := database.AlertOperations()
+		if err != nil {
+			return fail(err)
+		}
+		if err := alertOperations.BindEncryptionKey(ctx, alertCipher.KeyID()); err != nil {
+			return fail(err)
+		}
+		runtimeAlertCipher = alertCipher
+		runtimeAlertOperations = alertOperations
+	}
 	installation, err := database.LoadInstallation(ctx)
 	if err != nil {
 		return fail(fmt.Errorf("load installation: %w", err))
@@ -125,6 +150,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	runtime := &Runtime{
 		config: config, resources: resources, database: database, store: store, installation: installation,
 		markerKey: markerKey, markerBytes: int64(len(marker)), markerSHA: markerSHA, started: make(chan struct{}),
+		alertControl: runtimeAlertOperations, alertCipher: runtimeAlertCipher,
 	}
 	nativeTasks := NewNativeTaskGate()
 	mux := http.NewServeMux()
@@ -167,6 +193,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 				runtime.ready.Store(true)
 			},
 			Queries: publicQueries,
+			Alerts:  runtime.alertControl, AlertCipher: runtime.alertCipher,
 		})
 		if err != nil {
 			return fail(err)
@@ -229,6 +256,20 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			}
 			runtime.queryControl = operations
 		}
+	}
+	if config.Roles[RoleScheduler] {
+		if runtime.alertControl == nil {
+			operations, operationsErr := database.AlertOperations()
+			if operationsErr != nil {
+				return fail(operationsErr)
+			}
+			runtime.alertControl = operations
+		}
+		owner, ownerErr := randomUUID()
+		if ownerErr != nil {
+			return fail(ownerErr)
+		}
+		runtime.alertEvaluator = &alerts.Evaluator{Alerts: runtime.alertControl, Queries: runtime.queryControl, Objects: store, Results: AlertCountReader{Store: store, Exporter: ProcessQueryExportRunner{Gate: nativeTasks}, ScratchDir: filepath.Join(config.ScratchDir, "alert-results")}, Owner: owner, PublicURL: strings.TrimRight(config.PublicURL, "/"), StorageGeneration: installation.StorageGeneration}
 	}
 	if config.Roles[RoleWorker] {
 		runtime.queryWorker = &DurableQueryWorkflow{
@@ -298,7 +339,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		go func() { workerResult <- runtime.runWorker(workerContext) }()
 	}
 	schedulerResult := make(chan error, 1)
-	if runtime.queryControl != nil {
+	if runtime.config.Roles[RoleScheduler] {
 		go func() { schedulerResult <- runtime.runRetentionScheduler(workerContext) }()
 	}
 
@@ -342,7 +383,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 			cause = errors.Join(cause, drainCtx.Err())
 		}
 	}
-	if runtime.queryControl != nil {
+	if runtime.config.Roles[RoleScheduler] {
 		select {
 		case schedulerErr := <-schedulerResult:
 			cause = errors.Join(cause, schedulerErr)

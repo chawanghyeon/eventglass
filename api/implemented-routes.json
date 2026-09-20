@@ -15,5 +15,11 @@
   "DELETE /v1/query-jobs/{id}",
   "POST /v1/snapshots/{id}/heartbeat",
   "DELETE /v1/snapshots/{id}",
-  "GET /v1/live"
+  "GET /v1/live",
+  "GET /v1/destinations",
+  "POST /v1/destinations",
+  "PATCH /v1/destinations/{id}",
+  "GET /v1/alerts",
+  "POST /v1/alerts",
+  "PATCH /v1/alerts/{id}"
 ]
