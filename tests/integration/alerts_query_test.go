@@ -15,6 +15,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/query"
 	"github.com/chawanghyeon/eventglass/internal/resource"
+	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
 func TestPublicQueryEndToEndAlertEvaluation(t *testing.T) {

@@ -67,8 +67,9 @@ test("SDK ACK becomes safe Issue UI while logs and breadcrumbs keep their roles"
   await expect(page.locator("img, script:not([type='module']), svg")).toHaveCount(0);
 
   await page.goto("/system");
-  await expect(page.getByText("network_error")).toBeVisible();
-  await expect(page.getByText("3", { exact: true })).toBeVisible();
+  const sdkOutcome = page.getByRole("row").filter({ hasText: "network_error" });
+  await expect(sdkOutcome).toBeVisible();
+  await expect(sdkOutcome.getByRole("cell", { name: "3", exact: true })).toBeVisible();
   await expect(page.getByText("missing", { exact: true })).toBeVisible();
   await page.getByLabel("Installation-wide days").fill("45");
   await page.getByRole("button", { name: "Update policy" }).click();

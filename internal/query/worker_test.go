@@ -120,6 +120,26 @@ func TestDurableQueryWorkflowUsesRangeCacheAndCommitsFencedOutput(t *testing.T) 
 	}
 }
 
+func TestEmptyReducerDoesNotStartCapabilityGateway(t *testing.T) {
+	disk := resource.NewBudget(1 << 20)
+	cache, err := storage.NewBlockCache(filepath.Join(t.TempDir(), "cache"), 1<<19, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflow := Workflow{Disk: disk, Cache: cache, InstallationID: "installation"}
+	task := control.QueryTask{Authority: control.QueryTaskAuthority{Key: model.QueryTaskKey{Stage: model.QueryTaskReduce}}}
+	inputs, payloads, release, err := workflow.prepareQueryInputs(context.Background(), task, TaskManifest{}, engine.QueryOperation{Kind: "rows"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 || len(payloads) != 0 || release == nil {
+		t.Fatalf("inputs=%v payloads=%v release=%v", inputs, payloads, release != nil)
+	}
+	if cacheBytes, err := release(); err != nil || cacheBytes != 0 {
+		t.Fatalf("cache bytes=%d err=%v", cacheBytes, err)
+	}
+}
+
 type workflowStoreFixture struct {
 	journal       []byte
 	objects       map[string][]byte

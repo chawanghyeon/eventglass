@@ -34,7 +34,7 @@ func newWebHandler(directory string) (http.Handler, error) {
 		if !asset {
 			section := strings.Split(name, "/")[0]
 			switch section {
-			case "", "login", "setup", "logs", "explore", "issues", "projects", "alerts", "system":
+			case "", "login", "setup", "logs", "explore", "issues", "projects", "alerts", "system", "users", "account":
 				name = "index.html"
 			default:
 				http.NotFound(w, r)

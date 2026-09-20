@@ -26,6 +26,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/query"
 	"github.com/chawanghyeon/eventglass/internal/resource"
+	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
 func TestPublicQueryEndToEndHTTPResumeWithIndependentWorker(t *testing.T) {

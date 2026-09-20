@@ -88,7 +88,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest) != 12 {
+	if len(manifest) != 14 {
 		t.Fatalf("migration count=%d", len(manifest))
 	}
 	conn, err := pgx.Connect(ctx, env["EVENTGLASS_DATABASE_URL"])

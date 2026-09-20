@@ -25,8 +25,9 @@ a provider benchmark or proof of end-to-end search speed.
 architecture checks detect missing entries and stale paths. Test-source existence
 does not prove semantic coverage. U4's user/system/editor routes and frontend flows
 are implemented; unit, codegen, architecture, Vitest, typecheck and production build
-pass locally. G05 remains open until the Docker-backed PostgreSQL/MinIO integration
-and final ARM64 image Playwright flow execute successfully.
+pass locally. On 2026-09-21, `./scripts/check integration` passed against disposable
+PostgreSQL/MinIO and `./scripts/check-browser` passed the final non-root ARM64 image
+Playwright flow in 2.6 seconds. These runs close U4/G05, not a release gate.
 `check-browser` now uses the final non-root ARM64 image and production assets,
 not a Vite development server. Release still requires M4/R1-R4 evidence.
 
@@ -89,10 +90,14 @@ Pure tests show one remote block read for a cold task and zero additional remote
 reads for an identical warm task; they also cover singleflight, active-pin
 eviction refusal, restart reuse, cached corruption reload, short/changed ranges,
 and canceled waiters. Query status persists bytes served from cache. The earlier
-Q5 cold/warm figures above predate this cache and remain a baseline only. Docker
-was unavailable for this packet, so the pinned DuckDB/MinIO request-count,
-transfer-byte, latency and RSS comparison is still required before claiming the
-M3 operational evidence or any performance improvement.
+Q5 cold/warm figures above predate this cache and remain a baseline only. On
+2026-09-21 the pinned DuckDB/MinIO integration recorded cold HEAD=3, full GET=2
+(5,264 bytes), Range GET=1 (3,120 bytes), 101ms and warm HEAD=3, full GET=2
+(5,264 bytes), Range GET=0 (0 bytes), 94ms. Full GETs are result/export reads;
+query inputs use the Range gateway. This closes M3's request/byte gate only. The
+small correctness fixture did not isolate peak RSS or allocations; R1 owns Linux
+cgroup memory evidence, and these numbers are not a general latency or throughput
+improvement claim.
 
 ## Release and workflow
 

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -290,16 +292,39 @@ func prepareQueryPaths(request QueryRequest) error {
 	seen := map[string]bool{}
 	allPaths := append(append([]string(nil), request.InputPaths...), request.PayloadPaths...)
 	for _, path := range allPaths {
-		if !filepath.IsAbs(path) || path == request.OutputPath || seen[path] {
+		if path == request.OutputPath || seen[path] {
 			return errors.New("invalid query input path")
 		}
 		seen[path] = true
+		if validGatewayInput(path) {
+			continue
+		}
+		if !filepath.IsAbs(path) {
+			return errors.New("invalid query input path")
+		}
 		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxBundleFileBytes {
 			return errors.New("query input file is invalid")
 		}
 	}
 	return nil
+}
+
+func validGatewayInput(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "http" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.RawPath != "" {
+		return false
+	}
+	port := parsed.Port()
+	if port == "" {
+		return false
+	}
+	address := net.ParseIP(parsed.Hostname())
+	if address == nil || !address.Equal(net.IPv4(127, 0, 0, 1)) {
+		return false
+	}
+	capability := strings.TrimPrefix(parsed.Path, "/objects/")
+	return capability != parsed.Path && capability != "" && !strings.Contains(capability, "/")
 }
 
 func safeQueryStatement(statement string, hasInput bool) bool {

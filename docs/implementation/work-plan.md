@@ -2,8 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U3 and A1–A2, and M1–M2 have implementations and scoped tests. Repository review reopened G05 closure:
-U4 below contains missing operator surfaces; M3 remains the next backend packet.
+G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, and M1–M3 have implementations and scoped tests. M4 is the next backend packet.
 M2 physical GC stays frozen until M4 provides a fresh coordinated backup attestation.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
@@ -79,7 +78,7 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 | A1 / Q5 — complete | api-ui alerts, control G05 | migrations/0009_alerts.sql; alerts/evaluate.go; control/alerts.go; api rules/destinations | Cut barrier concurrent Accept, pending batch not zero, delayed complete window, revision/disable/cooldown/retention-expired window, issue transition exactly one outbox row |
 | A2 / A1 — complete | api-ui delivery | alerts/deliver.go,destination.go; control/deliveries.go | Local receiver only: duplicate after lost send reply, signature stable body, retries12, permanent4xx, DNS rebinding/private IPv6/redirects denied, no secret logs, credential rotation fail-closed |
 | U3 / U2,A2 — connected subset verified | UI routes/system | project/Issue/SDK-outcome screens and Playwright flows | Real SDK->ACK->publication->UI, error-level log not Issue, breadcrumbs not rows, frame/raw XSS, role enforcement, no external alerts; does not close missing system/user/editor surfaces |
-| U4 / U3 — implemented; Docker-backed PG/browser evidence pending | api-ui complete operator contract; api/capabilities.json | User/membership APIs and UI, password UI, alert/destination editors, delivery retry UI, GET /v1/system and installation-admin retention API | Pure Go and frontend contracts cover authority/revision/CSRF/pagination wiring and show cuts/limits/backup degradation. The real PostgreSQL and final-image Playwright flows are implemented but remain unexecuted while Docker is unavailable; **G05 is not closed until those commands pass**. |
+| U4 / U3 — complete | api-ui complete operator contract; api/capabilities.json | User/membership APIs and UI, password UI, alert/destination editors, delivery retry UI, GET /v1/system and installation-admin retention API | Pure Go and frontend contracts cover authority/revision/CSRF/pagination wiring and show cuts/limits/backup degradation. Disposable PostgreSQL/MinIO integration and the final non-root ARM64 image Playwright flow pass; **G05 complete**. |
 
 ## Packets G06: safe automatic operation
 
@@ -87,7 +86,7 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 |---|---|---|---|
 | M1 / U3 — complete | operations compaction, control G06 | migrations/0010_maintenance.sql; maintenance/compact.go; control/maintenance.go | Concurrent publication does not starve swap; exact reserved inputs only; identity preserved; crash before/after swap and reader pinned old generation |
 | M2 / M1 — implemented; operational backup dependency M4 | operations retention/GC | maintenance/retain.go,gc.go; control/retention.go; migrations/0012_gc_interlock.sql | Mixed-retention rewrite, snapshot floor stable, widening cannot resurrect, journal protect8days+backup horizon, current/pinned/prepared file never deleted, latePUT tombstone resweep; unknown/stale backup health freezes deletion; stale GC attempts cannot confirm; completed producer FK cleanup and expired swap leases tested |
-| M3 / M2 — implemented; Docker-backed native/MinIO evidence pending | operations cache/child | storage/cache.go; integrated capability gateway and durable query block manifests | Pure tests cover singleflight/pin eviction, corrupt cached blocks, short/changed ranges, restart reuse and shared disk quotas. Scan, payload and reducer inputs have no default full GET; pins release after the joined child returns. The real pinned-DuckDB/MinIO cold/warm request/byte comparison remains unexecuted while Docker is unavailable. |
+| M3 / M2 — complete | operations cache/child | storage/cache.go; integrated capability gateway and durable query block manifests | Pure tests cover singleflight/pin eviction, corrupt cached blocks, short/changed ranges, restart reuse and shared disk quotas. Scan, payload and reducer inputs have no default full GET; pins release after the joined child returns. Pinned-DuckDB/MinIO cold/warm assertions prove one cold Range read and no additional warm Range read. |
 | M4 / M3 | operations recovery | maintenance/recovery.go; CLI doctor/repair/restore; deploy pgBackRest config/runbook | Actual isolated PG base+WAL+S3 restore, referenced set verification, fresh generation reads old verified files, no newer-object adoption, sessions invalid, outgoing paused, missingfile unhealthy; **G06 complete** |
 
 ## Packets G07/G08: measurable release

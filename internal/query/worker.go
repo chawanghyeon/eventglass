@@ -195,7 +195,7 @@ func (workflow Workflow) prepareQueryInputs(ctx context.Context, task control.Qu
 			}
 		}
 	case model.QueryTaskReduce:
-		if len(manifest.Files) != 0 || len(task.Inputs) != len(manifest.Inputs) || len(task.Inputs) < 1 || len(task.Inputs) > ReduceFanIn {
+		if len(manifest.Files) != 0 || len(task.Inputs) != len(manifest.Inputs) || len(task.Inputs) > ReduceFanIn {
 			return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query reducer inputs are invalid"))
 		}
 		inputs = make([]string, len(task.Inputs))
@@ -216,6 +216,9 @@ func (workflow Workflow) prepareQueryInputs(ctx context.Context, task control.Qu
 		}
 	default:
 		return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query task stage is invalid"))
+	}
+	if len(manifests) == 0 {
+		return inputs, payloads, func() (int64, error) { return 0, nil }, nil
 	}
 	gateway, err := storage.NewGatewayWithCache(workflow.Store, workflow.Cache, manifests)
 	if err != nil {

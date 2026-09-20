@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -143,7 +144,7 @@ func (operations *AuthOperations) CreateUser(ctx context.Context, command Create
 	result.Role = &command.Role
 	result.ProjectGrants = append([]ProjectGrant(nil), command.ProjectGrants...)
 	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(tenant_id,audit_id,actor_user_id,action,target_type,target_id,target_revision,request_id)
-		VALUES($1,$2,$3,'user_created','user',$4,$5,$6)`, command.TenantID, command.AuditID, command.ActorUserID, result.UserID, result.Revision, command.RequestID); err != nil {
+		VALUES($1,$2,$3,'user_created','user',$4,$5,$6)`, command.TenantID, command.AuditID, command.ActorUserID, strconv.FormatInt(result.UserID, 10), result.Revision, command.RequestID); err != nil {
 		return ManagedUser{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -274,7 +275,7 @@ func (operations *AuthOperations) UpdateUser(ctx context.Context, command Update
 	result.Revision++
 	result.Role, result.ProjectGrants = newRole, grants
 	if _, err := tx.Exec(ctx, `INSERT INTO audit_events(tenant_id,audit_id,actor_user_id,action,target_type,target_id,target_revision,request_id)
-		VALUES($1,$2,$3,'membership_updated','user',$4,$5,$6)`, command.TenantID, command.AuditID, command.ActorUserID, command.TargetUserID, result.Revision, command.RequestID); err != nil {
+		VALUES($1,$2,$3,'membership_updated','user',$4,$5,$6)`, command.TenantID, command.AuditID, command.ActorUserID, strconv.FormatInt(command.TargetUserID, 10), result.Revision, command.RequestID); err != nil {
 		return ManagedUser{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

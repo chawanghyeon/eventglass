@@ -35,7 +35,7 @@ func TestWebAssetsDoNotHideMissingAPIsOrEscapeRoot(t *testing.T) {
 		status    int
 		immutable bool
 	}{
-		{"/logs/abc", 200, false}, {"/assets/app-hash.js", 200, true}, {"/v1/missing", 404, false}, {"/api/missing", 404, false}, {"/assets/missing.js", 404, false}, {"/assets/escape", 404, false}, {"/assets/../index.html", 404, false},
+		{"/logs/abc", 200, false}, {"/users", 200, false}, {"/account", 200, false}, {"/assets/app-hash.js", 200, true}, {"/v1/missing", 404, false}, {"/api/missing", 404, false}, {"/assets/missing.js", 404, false}, {"/assets/escape", 404, false}, {"/assets/../index.html", 404, false},
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest("GET", test.path, nil))
