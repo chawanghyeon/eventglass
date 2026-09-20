@@ -10,11 +10,39 @@ import (
 
 const (
 	ConversionProtocolVersion     = 1
+	CompactionProtocolVersion     = 1
 	QueryExecutionProtocolVersion = 1
 	DefaultNativeMemoryBytes      = int64(256 << 20)
 	DefaultNativeSpillBytes       = int64(2 << 30)
 	MaxBundleFileBytes            = int64(128 << 20)
 )
+
+type CompactionInput struct {
+	BundleID       string `json:"bundle_id"`
+	AnalyticsPath  string `json:"analytics_path"`
+	PayloadPath    string `json:"payload_path"`
+	IdentitySHA256 string `json:"identity_sha256"`
+}
+
+type CompactionRequest struct {
+	Version           int               `json:"version"`
+	TenantID          int64             `json:"tenant_id"`
+	LaneID            int               `json:"lane_id"`
+	SchemaVersion     int               `json:"schema_version"`
+	GroupingVersion   int               `json:"grouping_version"`
+	EventDay          string            `json:"event_day"`
+	Kind              model.Kind        `json:"kind"`
+	Inputs            []CompactionInput `json:"inputs"`
+	OutputDirectory   string            `json:"output_directory"`
+	SpillDirectory    string            `json:"spill_directory"`
+	NativeMemoryBytes int64             `json:"native_memory_bytes"`
+	NativeSpillBytes  int64             `json:"native_spill_bytes"`
+}
+
+type CompactionResult struct {
+	DuckDBVersion string          `json:"duckdb_version"`
+	Bundle        ConvertedBundle `json:"bundle"`
+}
 
 // StageRecord is the private supervisor-to-child format. It is disposable,
 // versioned, and contains only records selected by durable receipt state.

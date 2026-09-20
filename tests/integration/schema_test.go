@@ -88,7 +88,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest) != 9 {
+	if len(manifest) != 10 {
 		t.Fatalf("migration count=%d", len(manifest))
 	}
 	conn, err := pgx.Connect(ctx, env["EVENTGLASS_DATABASE_URL"])
@@ -118,6 +118,14 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 		exec("ROLLBACK TO SAVEPOINT negative")
 		exec("RELEASE SAVEPOINT negative")
 	}
+	// The suite may already have exercised migration 0010. Remove its produced
+	// fixture objects inside this rollback-only transaction before restoring the
+	// pre-0010 producer constraint shape.
+	exec(`DELETE FROM file_blocks WHERE file_id IN (SELECT f.file_id FROM files f JOIN object_intents oi ON oi.intent_id=f.intent_id WHERE oi.maintenance_task_id IS NOT NULL)`)
+	exec(`DELETE FROM files WHERE intent_id IN (SELECT intent_id FROM object_intents WHERE maintenance_task_id IS NOT NULL)`)
+	exec(`DELETE FROM object_intents WHERE maintenance_task_id IS NOT NULL`)
+	exec(`DELETE FROM maintenance_tasks`)
+	exec(manifest[9].DownSQL)
 	exec(manifest[8].DownSQL)
 	exec(manifest[7].DownSQL)
 	exec(manifest[6].DownSQL)

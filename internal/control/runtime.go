@@ -70,6 +70,9 @@ func (database *RuntimeDatabase) QueryOperations() (*QueryOperations, error) {
 func (database *RuntimeDatabase) AlertOperations() (*AlertOperations, error) {
 	return NewAlertOperations(database.pool)
 }
+func (database *RuntimeDatabase) MaintenanceOperations() (*MaintenanceOperations, error) {
+	return NewMaintenanceOperations(database.pool)
+}
 
 // VerifyRuntimeSchema is read-only. Runtime never races migrations into a live
 // deployment: its ledger must exactly match this binary's embedded manifest.

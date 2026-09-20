@@ -16,6 +16,7 @@ import (
 type ChildRequest struct {
 	Operation   string              `json:"operation"`
 	Conversion  *ConversionRequest  `json:"conversion,omitempty"`
+	Compaction  *CompactionRequest  `json:"compaction,omitempty"`
 	Query       *QueryRequest       `json:"query,omitempty"`
 	QueryExport *QueryExportRequest `json:"query_export,omitempty"`
 }
@@ -36,7 +37,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 	}
 	switch request.Operation {
 	case "probe":
-		if request.Conversion != nil || request.Query != nil || request.QueryExport != nil {
+		if request.Conversion != nil || request.Compaction != nil || request.Query != nil || request.QueryExport != nil {
 			return errors.New("probe request cannot contain conversion input")
 		}
 		db, err := Open(ctx, "")
@@ -50,7 +51,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(response)
 	case "convert":
-		if request.Conversion == nil || request.Query != nil || request.QueryExport != nil {
+		if request.Conversion == nil || request.Compaction != nil || request.Query != nil || request.QueryExport != nil {
 			return errors.New("convert request requires conversion input")
 		}
 		encoder := json.NewEncoder(output)
@@ -61,8 +62,17 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 			return err
 		}
 		return encoder.Encode(ConversionMessage{Version: ConversionProtocolVersion, Type: "summary", Summary: &summary})
+	case "compact":
+		if request.Compaction == nil || request.Conversion != nil || request.Query != nil || request.QueryExport != nil {
+			return errors.New("compact request requires only compaction input")
+		}
+		result, err := Compact(ctx, *request.Compaction)
+		if err != nil {
+			return err
+		}
+		return json.NewEncoder(output).Encode(result)
 	case "query":
-		if request.Query == nil || request.Conversion != nil || request.QueryExport != nil {
+		if request.Query == nil || request.Conversion != nil || request.Compaction != nil || request.QueryExport != nil {
 			return errors.New("query operation requires only query input")
 		}
 		summary, err := ExecuteQuery(ctx, *request.Query)
@@ -71,7 +81,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(QueryMessage{Version: QueryExecutionProtocolVersion, Type: "summary", Summary: summary})
 	case "query_export":
-		if request.QueryExport == nil || request.Query != nil || request.Conversion != nil {
+		if request.QueryExport == nil || request.Query != nil || request.Conversion != nil || request.Compaction != nil {
 			return errors.New("query export requires only export input")
 		}
 		summary, err := ExportQueryResult(ctx, *request.QueryExport)

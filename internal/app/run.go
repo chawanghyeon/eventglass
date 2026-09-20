@@ -20,6 +20,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/api"
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/ingest"
+	"github.com/chawanghyeon/eventglass/internal/maintenance"
 	"github.com/chawanghyeon/eventglass/internal/query"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
@@ -31,6 +32,8 @@ type Runtime struct {
 	store          *storage.S3Store
 	batcher        *ingest.Batcher
 	publication    *control.PublicationOperations
+	maintenance    *control.MaintenanceOperations
+	compactor      *maintenance.Workflow
 	queryControl   *control.QueryOperations
 	alertControl   *control.AlertOperations
 	alertCipher    *alerts.SecretCipher
@@ -248,6 +251,15 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		runtime.publication, runtime.workerOwner = operations, owner
 		runtime.converter = &DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{Gate: nativeTasks}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
 		runtime.publisher = &DurablePublicationWorkflow{Control: operations, Store: store}
+		maintenanceOperations, err := database.MaintenanceOperations()
+		if err != nil {
+			return fail(err)
+		}
+		runtime.maintenance = maintenanceOperations
+		runtime.compactor = &maintenance.Workflow{
+			Control: maintenanceOperations, Store: store, Runner: ProcessCompactionRunner{Gate: nativeTasks},
+			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "compaction-worker"),
+		}
 		runtime.deliveryWorker = &alerts.DeliveryWorker{Control: runtime.alertControl, Cipher: runtime.alertCipher, Sender: alerts.Sender{}, InstallationID: installation.InstallationID, StorageGeneration: installation.StorageGeneration, Owner: owner}
 	}
 	if config.Roles[RoleScheduler] || config.Roles[RoleWorker] {
@@ -260,6 +272,13 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		}
 	}
 	if config.Roles[RoleScheduler] {
+		if runtime.maintenance == nil {
+			operations, operationsErr := database.MaintenanceOperations()
+			if operationsErr != nil {
+				return fail(operationsErr)
+			}
+			runtime.maintenance = operations
+		}
 		if runtime.alertControl == nil {
 			operations, operationsErr := database.AlertOperations()
 			if operationsErr != nil {

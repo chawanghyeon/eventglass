@@ -17,7 +17,7 @@ const (
 )
 
 func (runtime *Runtime) runWorker(ctx context.Context) error {
-	work := []func(context.Context) (bool, error){runtime.runOnePublication, runtime.runOneDelivery, runtime.runOneConversion, runtime.runOneQueryCoordinator, runtime.runOneQuery}
+	work := []func(context.Context) (bool, error){runtime.runOnePublication, runtime.runOneDelivery, runtime.runOneConversion, runtime.runOneQueryCoordinator, runtime.runOneQuery, runtime.runOneCompaction}
 	next := 0
 	for ctx.Err() == nil {
 		var progressed bool
@@ -50,6 +50,51 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (runtime *Runtime) runOneCompaction(ctx context.Context) (bool, error) {
+	if runtime.maintenance == nil || runtime.compactor == nil {
+		return false, nil
+	}
+	task, err := runtime.maintenance.ClaimCompaction(ctx, runtime.installation.InstallationID, runtime.workerOwner, workerLease)
+	if err != nil || task == nil {
+		return false, err
+	}
+	err = runtime.withCompactionHeartbeat(ctx, task.Authority, func(taskContext context.Context) error {
+		if task.Prepared {
+			_, swapErr := runtime.compactor.Swap(taskContext, *task)
+			return swapErr
+		}
+		return runtime.compactor.CompactAndPrepare(taskContext, *task)
+	})
+	if err != nil && ctx.Err() == nil {
+		failErr := runtime.maintenance.FailCompaction(ctx, task.Authority, "compaction_worker_failed", true)
+		return true, errors.Join(err, failErr)
+	}
+	return true, err
+}
+
+func (runtime *Runtime) withCompactionHeartbeat(ctx context.Context, authority control.MaintenanceAuthority, task func(context.Context) error) error {
+	taskContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	result := make(chan error, 1)
+	go func() { result <- task(taskContext) }()
+	ticker := time.NewTicker(workerHeartbeat)
+	defer ticker.Stop()
+	for {
+		select {
+		case err := <-result:
+			return err
+		case <-ctx.Done():
+			cancel()
+			return errors.Join(ctx.Err(), <-result)
+		case <-ticker.C:
+			if err := runtime.maintenance.HeartbeatCompaction(ctx, authority, workerLease); err != nil {
+				cancel()
+				return errors.Join(err, <-result)
+			}
+		}
+	}
 }
 
 func (runtime *Runtime) runOneDelivery(ctx context.Context) (bool, error) {
