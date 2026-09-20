@@ -13,6 +13,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/query"
+	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
 func TestQueryPlanTasksWinningAttemptsAndFixedReduction(t *testing.T) {
@@ -67,6 +68,11 @@ func TestQueryPlanTasksWinningAttemptsAndFixedReduction(t *testing.T) {
 	reducer, err := operations.ClaimQueryTask(ctx, acceptInstallationID, 1, "worker-c")
 	if err != nil || reducer == nil || reducer.Authority.Key.Stage != model.QueryTaskReduce || len(reducer.Inputs) != 2 {
 		t.Fatalf("reducer=%#v err=%v", reducer, err)
+	}
+	for _, input := range reducer.Inputs {
+		if len(input.BlockSHA256) != 1 {
+			t.Fatalf("reducer input block manifest=%#v", input.BlockSHA256)
+		}
 	}
 	completion := completeQueryTaskFixture(t, ctx, operations, reducer, 3)
 	if err := operations.CompleteQueryTask(ctx, completion); err != nil {
@@ -380,5 +386,9 @@ func uploadedQueryTaskBytes(t *testing.T, ctx context.Context, operations *contr
 	if err := operations.MarkQueryIntentUploaded(ctx, task.Authority, intent); err != nil {
 		t.Fatal(err)
 	}
-	return control.CompleteQueryTaskCommand{Authority: task.Authority, IntentID: intent.IntentID, SHA256: checksum, Rows: 1, Bytes: byteCount}
+	blocks := make([]string, int((byteCount+storage.DefaultBlockSize-1)/storage.DefaultBlockSize))
+	for index := range blocks {
+		blocks[index] = checksum
+	}
+	return control.CompleteQueryTaskCommand{Authority: task.Authority, IntentID: intent.IntentID, SHA256: checksum, BlockSHA256: blocks, Rows: 1, Bytes: byteCount}
 }

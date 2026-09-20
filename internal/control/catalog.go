@@ -107,7 +107,11 @@ func catalogPageRows(ctx context.Context, tx pgx.Tx, command CatalogCommand, ret
 		f.min_batch_seq,f.max_batch_seq,b.lane_id,b.kind,
 		COALESCE(array_agg(fb.sha256 ORDER BY fb.block_index) FILTER (WHERE fb.file_id IS NOT NULL),ARRAY[]::text[]),
 		COALESCE(min(fb.block_index),-1),COALESCE(max(fb.block_index),-1),count(fb.file_id),
-		pf.file_id::text,poi.object_key,pf.bytes,pf.full_sha256
+		pf.file_id::text,poi.object_key,pf.bytes,pf.full_sha256,
+		COALESCE((SELECT array_agg(pfb.sha256 ORDER BY pfb.block_index) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),ARRAY[]::text[]),
+		COALESCE((SELECT min(pfb.block_index) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),-1),
+		COALESCE((SELECT max(pfb.block_index) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),-1),
+		(SELECT count(*) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id)
 		FROM snapshot_lanes sl
 		JOIN bundles b ON b.tenant_id=sl.tenant_id AND b.lane_id=sl.lane_id
 		JOIN files f ON f.tenant_id=b.tenant_id AND f.bundle_id=b.bundle_id AND f.role='analytics'
@@ -134,11 +138,12 @@ func catalogPageRows(ctx context.Context, tx pgx.Tx, command CatalogCommand, ret
 	result := make([]model.CatalogFile, 0, command.Limit)
 	for rows.Next() {
 		var file model.CatalogFile
-		var firstBlock, lastBlock, blockCount int
+		var firstBlock, lastBlock, blockCount, payloadFirstBlock, payloadLastBlock, payloadBlockCount int
 		if err := rows.Scan(&file.FileID, &file.BundleID, &file.ObjectKey, &file.Bytes, &file.SHA256, &file.RowCount,
 			&file.MinEventTimeUS, &file.MaxEventTimeUS, &file.MinReceivedTimeUS, &file.MaxReceivedTimeUS,
 			&file.MinBatchSeq, &file.MaxBatchSeq, &file.LaneID, &file.Kind, &file.BlockSHA256, &firstBlock, &lastBlock, &blockCount,
-			&file.PayloadFileID, &file.PayloadObjectKey, &file.PayloadBytes, &file.PayloadSHA256); err != nil {
+			&file.PayloadFileID, &file.PayloadObjectKey, &file.PayloadBytes, &file.PayloadSHA256,
+			&file.PayloadBlockSHA256, &payloadFirstBlock, &payloadLastBlock, &payloadBlockCount); err != nil {
 			return nil, err
 		}
 		if blockCount < 1 || firstBlock != 0 || lastBlock != blockCount-1 || len(file.BlockSHA256) != blockCount {
@@ -151,6 +156,14 @@ func catalogPageRows(ctx context.Context, tx pgx.Tx, command CatalogCommand, ret
 		}
 		if uuid.Validate(file.PayloadFileID) != nil || file.PayloadObjectKey == "" || file.PayloadBytes <= 0 || !validSHA(file.PayloadSHA256) {
 			return nil, errors.New("catalog payload file manifest is invalid")
+		}
+		if payloadBlockCount < 1 || payloadFirstBlock != 0 || payloadLastBlock != payloadBlockCount-1 || len(file.PayloadBlockSHA256) != payloadBlockCount {
+			return nil, errors.New("catalog payload block manifest is not contiguous")
+		}
+		for _, checksum := range file.PayloadBlockSHA256 {
+			if !validSHA(checksum) {
+				return nil, errors.New("catalog payload block checksum is invalid")
+			}
 		}
 		result = append(result, file)
 	}

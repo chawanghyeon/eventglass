@@ -3,14 +3,16 @@ package control
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
+	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
 func (operations *QueryOperations) CompleteQueryTask(ctx context.Context, command CompleteQueryTaskCommand) error {
-	if err := validateQueryTaskAuthority(command.Authority); err != nil || uuid.Validate(command.IntentID) != nil || !validSHA(command.SHA256) || command.Rows < 0 || command.Rows > 20000 || command.Bytes <= 0 || command.Bytes > 64<<20 {
+	if err := validateQueryTaskAuthority(command.Authority); err != nil || uuid.Validate(command.IntentID) != nil || !validSHA(command.SHA256) || command.Rows < 0 || command.Rows > 20000 || command.Bytes <= 0 || command.Bytes > 64<<20 || command.CacheBytes < 0 || command.CacheBytes > 4<<30 || !validBlockManifest(command.Bytes, command.BlockSHA256) {
 		return ErrQueryFenceStale
 	}
 	var existingIntent, existingSHA *string
@@ -22,7 +24,11 @@ func (operations *QueryOperations) CompleteQueryTask(ctx context.Context, comman
 	if err == nil {
 		if existingIntent != nil && existingSHA != nil && existingRows != nil && existingBytes != nil &&
 			*existingIntent == command.IntentID && *existingSHA == command.SHA256 && *existingRows == command.Rows && *existingBytes == command.Bytes {
-			return nil
+			var blocks []string
+			if err := operations.pool.QueryRow(ctx, `SELECT COALESCE(array_agg(sha256 ORDER BY block_index),ARRAY[]::text[]) FROM query_task_blocks WHERE tenant_id=$1 AND query_id=$2 AND stage=$3 AND level=$4 AND partition_id=$5`,
+				command.Authority.TenantID, command.Authority.QueryID, command.Authority.Key.Stage, command.Authority.Key.Level, command.Authority.Key.PartitionID).Scan(&blocks); err == nil && slices.Equal(blocks, command.BlockSHA256) {
+				return nil
+			}
 		}
 		return ErrQueryFenceStale
 	}
@@ -99,6 +105,15 @@ func (operations *QueryOperations) CompleteQueryTask(ctx context.Context, comman
 	if err != nil || result.RowsAffected() != 1 {
 		return errors.Join(ErrQueryFenceStale, err)
 	}
+	for index, checksum := range command.BlockSHA256 {
+		if _, err := tx.Exec(ctx, `INSERT INTO query_task_blocks(tenant_id,query_id,stage,level,partition_id,block_index,sha256) VALUES($1,$2,$3,$4,$5,$6,$7)`,
+			command.Authority.TenantID, command.Authority.QueryID, command.Authority.Key.Stage, command.Authority.Key.Level, command.Authority.Key.PartitionID, index, checksum); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(ctx, `UPDATE query_jobs SET cache_bytes=cache_bytes+$3 WHERE tenant_id=$1 AND query_id=$2`, command.Authority.TenantID, command.Authority.QueryID, command.CacheBytes); err != nil {
+		return err
+	}
 	var hasConsumer bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM query_task_inputs WHERE tenant_id=$1 AND query_id=$2
 		AND producer_stage=$3 AND producer_level=$4 AND producer_partition_id=$5)`, command.Authority.TenantID,
@@ -115,6 +130,18 @@ func (operations *QueryOperations) CompleteQueryTask(ctx context.Context, comman
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+func validBlockManifest(size int64, blocks []string) bool {
+	if len(blocks) != int((size+model.FileBlockBytes-1)/model.FileBlockBytes) {
+		return false
+	}
+	for _, checksum := range blocks {
+		if !validSHA(checksum) {
+			return false
+		}
+	}
+	return true
 }
 
 func (operations *QueryOperations) FailQueryTask(ctx context.Context, authority QueryTaskAuthority, errorCode string, transient bool) error {

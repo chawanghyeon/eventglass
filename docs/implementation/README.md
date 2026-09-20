@@ -9,8 +9,10 @@ Do not start by redesigning the system or implementing every gate at once.
 Current handoff: architecture/query/Live lifetime hardening, the complete G05 operator
 surface implementation, M1 compaction, and M2 retention/GC are present. U4's local
 unit/web evidence passes, but real PG/MinIO and final-image browser execution remains
-pending while Docker is unavailable, so G05 is not closed. M3 is the next backend
-implementation packet, not a new architecture rewrite. Physical GC remains fail-closed
+pending while Docker is unavailable, so G05 is not closed. M3's bounded verified
+Range/block cache is connected to actual scan/payload/reducer child reads; its real
+MinIO and pinned-DuckDB cold/warm execution remains pending while Docker is unavailable.
+M4 is the next backend implementation packet. Physical GC remains fail-closed
 until M4 provides a fresh verified backup horizon. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises
 the actual ingest/publication/query runtime. Check `api/implemented-routes.json` before wiring a feature.

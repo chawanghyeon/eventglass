@@ -355,11 +355,6 @@
   ],
   "pending": [
     {
-      "id": "range-cache",
-      "packet": "M3",
-      "description": "Production verified block cache, capability gateway and no default full-GET query path."
-    },
-    {
       "id": "coordinated-recovery",
       "packet": "M4",
       "description": "PG/WAL/S3 restore and verified GC attestation; GC stays frozen without this evidence."

@@ -4,7 +4,7 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00–G04 have implemented baselines and scoped executable evidence. G05 now connects user/membership and password management, alert/destination editing, delivery retry, system diagnostics and installation retention in addition to the earlier operator surfaces. U4's pure-Go and frontend checks pass, but its disposable PostgreSQL/MinIO and final-image Playwright evidence remains pending because Docker was unavailable; G05 is therefore not closed. M1/M2 compaction and retention/GC are implemented, but physical GC is frozen until M4 supplies a fresh coordinated backup attestation. M3 (production Range/block cache), M4 (recovery), and R1–R4 (sustained resources/scaling/cost/release) remain incomplete. Neither performance superiority nor a deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
+Current status: G00–G04 have implemented baselines and scoped executable evidence. G05 now connects user/membership and password management, alert/destination editing, delivery retry, system diagnostics and installation retention in addition to the earlier operator surfaces. U4's pure-Go and frontend checks pass, but its disposable PostgreSQL/MinIO and final-image Playwright evidence remains pending because Docker was unavailable; G05 is therefore not closed. M1/M2 compaction and retention/GC are implemented. M3 now connects the verified bounded Range/block cache to scan, payload and reduction reads, but its pinned-DuckDB/MinIO cold/warm evidence remains pending for the same Docker limitation. Physical GC is frozen until M4 supplies a fresh coordinated backup attestation. M4 (recovery) and R1–R4 (sustained resources/scaling/cost/release) remain incomplete. Neither performance superiority nor a deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
@@ -48,15 +48,15 @@ and an atomic generation swap that preserves old readers without blocking
 unrelated publication. M2 adds received-time retention rewrites and full expiry,
 snapshot- and backup-interlocked mark/delete/confirm GC, journal retirement summaries,
 an eight-day recovery grace, and late-PUT resweeps. Physical deletion requires an unexpired verified backup horizon; it does not
-interpret an empty backup inventory as safety. Block cache and backup/PITR
-recovery remain later gates.
+interpret an empty backup inventory as safety. The block cache is implemented;
+its real MinIO/DuckDB measurement and backup/PITR recovery remain open gates.
 Pure-Go checks do not rebuild DuckDB.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the
 [`work plan`](docs/implementation/work-plan.md) breaks remaining work into ordered
 packets with files, prerequisites, negative tests and completion gates. These are
-design contracts, not evidence that M3–G08 have been implemented or verified.
+design contracts, not evidence that M4–G08 have been implemented or verified.
 
 The handoff also includes [cross-boundary correctness contracts](docs/implementation/correctness.md)
 and [fixed machine-readable examples](docs/implementation/contract-cases.json)

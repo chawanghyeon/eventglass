@@ -43,6 +43,8 @@ type S3Store struct {
 	headRequests    atomic.Uint64
 	fullGetRequests atomic.Uint64
 	fullGetBytes    atomic.Uint64
+	rangeRequests   atomic.Uint64
+	rangeBytes      atomic.Uint64
 }
 
 type OperationCounts struct {
@@ -50,12 +52,15 @@ type OperationCounts struct {
 	HeadRequests    uint64
 	FullGetRequests uint64
 	FullGetBytes    uint64
+	RangeRequests   uint64
+	RangeBytes      uint64
 }
 
 func (s *S3Store) OperationCounts() OperationCounts {
 	return OperationCounts{
 		PutRequests: s.putRequests.Load(), HeadRequests: s.headRequests.Load(),
 		FullGetRequests: s.fullGetRequests.Load(), FullGetBytes: s.fullGetBytes.Load(),
+		RangeRequests: s.rangeRequests.Load(), RangeBytes: s.rangeBytes.Load(),
 	}
 }
 
@@ -298,6 +303,7 @@ func (s *S3Store) ReadRange(ctx context.Context, key string, offset, length int6
 		return nil, err
 	}
 	rangeHeader := "bytes=" + strconv.FormatInt(offset, 10) + "-" + strconv.FormatInt(offset+length-1, 10)
+	s.rangeRequests.Add(1)
 	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{Bucket: aws.String(s.bucket), Key: aws.String(objectKey), Range: aws.String(rangeHeader)})
 	if err != nil {
 		return nil, fmt.Errorf("range GET S3 object: %w", err)
@@ -310,6 +316,7 @@ func (s *S3Store) ReadRange(ctx context.Context, key string, offset, length int6
 	if int64(len(data)) != length {
 		return nil, io.ErrUnexpectedEOF
 	}
+	s.rangeBytes.Add(uint64(len(data)))
 	return data, nil
 }
 

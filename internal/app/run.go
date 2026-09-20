@@ -41,6 +41,7 @@ type Runtime struct {
 	alertEvaluator *alerts.Evaluator
 	deliveryWorker *alerts.DeliveryWorker
 	queryWorker    *query.Workflow
+	blockCache     *storage.BlockCache
 	queryPlanner   *query.Coordinator
 	converter      *ingest.DurableConversionWorkflow
 	publisher      *ingest.DurablePublicationWorkflow
@@ -344,8 +345,13 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		runtime.alertEvaluator = &alerts.Evaluator{Alerts: runtime.alertControl, Queries: runtime.queryControl, Objects: store, Results: AlertCountReader{Store: store, Exporter: ProcessQueryExportRunner{Gate: nativeTasks}, ScratchDir: filepath.Join(config.ScratchDir, "alert-results")}, Owner: owner, PublicURL: strings.TrimRight(config.PublicURL, "/"), StorageGeneration: installation.StorageGeneration}
 	}
 	if config.Roles[RoleWorker] {
+		blockCache, cacheErr := storage.NewBlockCache(filepath.Join(config.ScratchDir, "block-cache"), storage.DefaultCacheBytes, resources.Disk)
+		if cacheErr != nil {
+			return fail(cacheErr)
+		}
+		runtime.blockCache = blockCache
 		runtime.queryWorker = &query.Workflow{
-			Disk:    resources.Disk,
+			Disk: resources.Disk, Cache: blockCache,
 			Control: runtime.queryControl, Store: store, Runner: ProcessQueryRunner{Gate: nativeTasks},
 			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "query-worker"),
 		}
@@ -353,6 +359,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		if publicQueries != nil {
 			syncOwner, err := randomUUID()
 			if err != nil {
+				blockCache.Close()
 				return fail(err)
 			}
 			publicQueries.Sync = &DurableQuerySyncExecutor{
@@ -394,6 +401,9 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	if err != nil {
 		if runtime.batcher != nil {
 			_ = runtime.batcher.Drain(context.Background())
+		}
+		if runtime.blockCache != nil {
+			runtime.blockCache.Close()
 		}
 		runtime.database.Close()
 		return err
@@ -455,6 +465,9 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	drainErr := <-drainResult
 	workingErr := runtime.resources.Working.Drain(drainCtx)
 	ingressErr := runtime.resources.Ingress.Drain(drainCtx)
+	if runtime.blockCache != nil {
+		runtime.blockCache.Close()
+	}
 	diskErr := runtime.resources.Disk.Drain(drainCtx)
 	select {
 	case serveErr := <-serveResult:

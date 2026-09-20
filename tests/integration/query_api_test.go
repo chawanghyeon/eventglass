@@ -36,7 +36,12 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker := &query.Workflow{Disk: resource.NewBudget(4 << 30),
+	disk := resource.NewBudget(4 << 30)
+	cache, err := storage.NewBlockCache(filepath.Join(t.TempDir(), "cache"), storage.DefaultCacheBytes, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &query.Workflow{Disk: disk, Cache: cache,
 		Control: operations, Store: store, Runner: app.ProcessQueryRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"]},
 		InstallationID: acceptInstallationID, ScratchDir: filepath.Join(t.TempDir(), "worker"),
 	}
@@ -69,6 +74,9 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 		Rows       []map[string]any `json:"rows"`
 		ReadToken  string           `json:"read_token"`
 		NextCursor *string          `json:"next_cursor"`
+		Stats      struct {
+			CacheBytes string `json:"cache_bytes"`
+		} `json:"stats"`
 	}
 	decodeWire(t, search.Result, &searchWire)
 	if len(searchWire.Rows) != 1 || searchWire.ReadToken == "" || searchWire.NextCursor == nil || searchWire.Rows[0]["message_truncated"] != true {
@@ -81,6 +89,15 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 		t.Fatalf("warm search=%#v err=%v", warm, err)
 	}
 	warmFinished, warmElapsed := store.OperationCounts(), time.Since(warmStarted)
+	var warmWire struct {
+		Stats struct {
+			CacheBytes string `json:"cache_bytes"`
+		} `json:"stats"`
+	}
+	decodeWire(t, warm.Result, &warmWire)
+	if coldFinished.RangeRequests <= before.RangeRequests || warmFinished.RangeRequests != coldFinished.RangeRequests || warmWire.Stats.CacheBytes == "0" {
+		t.Fatalf("range cache cold=%d warm=%d cache_bytes=%q", coldFinished.RangeRequests-before.RangeRequests, warmFinished.RangeRequests-coldFinished.RangeRequests, warmWire.Stats.CacheBytes)
+	}
 
 	aggregate, err := service.Aggregate(ctx, principal, tokenHash, query.PublicAggregateRequest{
 		Dataset: dataset, ReadToken: searchWire.ReadToken, Mode: query.ModeSync,
@@ -206,9 +223,9 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 		t.Fatalf("revoked live events=%v err=%v", revokedEvents, err)
 	}
 	after := store.OperationCounts()
-	t.Logf("query evidence cold: HEAD=%d full_GET=%d bytes=%d elapsed_ms=%d", coldFinished.HeadRequests-before.HeadRequests, coldFinished.FullGetRequests-before.FullGetRequests, coldFinished.FullGetBytes-before.FullGetBytes, coldElapsed.Milliseconds())
-	t.Logf("query evidence warm: HEAD=%d full_GET=%d bytes=%d elapsed_ms=%d", warmFinished.HeadRequests-coldFinished.HeadRequests, warmFinished.FullGetRequests-coldFinished.FullGetRequests, warmFinished.FullGetBytes-coldFinished.FullGetBytes, warmElapsed.Milliseconds())
-	t.Logf("query evidence total: HEAD=%d full_GET=%d bytes=%d", after.HeadRequests-before.HeadRequests, after.FullGetRequests-before.FullGetRequests, after.FullGetBytes-before.FullGetBytes)
+	t.Logf("query evidence cold: HEAD=%d full_GET=%d full_bytes=%d range_GET=%d range_bytes=%d elapsed_ms=%d", coldFinished.HeadRequests-before.HeadRequests, coldFinished.FullGetRequests-before.FullGetRequests, coldFinished.FullGetBytes-before.FullGetBytes, coldFinished.RangeRequests-before.RangeRequests, coldFinished.RangeBytes-before.RangeBytes, coldElapsed.Milliseconds())
+	t.Logf("query evidence warm: HEAD=%d full_GET=%d full_bytes=%d range_GET=%d range_bytes=%d elapsed_ms=%d", warmFinished.HeadRequests-coldFinished.HeadRequests, warmFinished.FullGetRequests-coldFinished.FullGetRequests, warmFinished.FullGetBytes-coldFinished.FullGetBytes, warmFinished.RangeRequests-coldFinished.RangeRequests, warmFinished.RangeBytes-coldFinished.RangeBytes, warmElapsed.Milliseconds())
+	t.Logf("query evidence total: HEAD=%d full_GET=%d full_bytes=%d range_GET=%d range_bytes=%d", after.HeadRequests-before.HeadRequests, after.FullGetRequests-before.FullGetRequests, after.FullGetBytes-before.FullGetBytes, after.RangeRequests-before.RangeRequests, after.RangeBytes-before.RangeBytes)
 }
 
 type limitExportRunner struct{}

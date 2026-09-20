@@ -83,6 +83,17 @@ teardown/late submission/heartbeat/StrictMode, operation token reuse and actual
 reconnect headers. These are not Playwright ingestion-to-browser evidence or a
 multi-process sustained-load benchmark; U3/G07 still own those gates.
 
+M3 replaces default full-object query input downloads with localhost capability
+Range reads backed by a 1 GiB soft-cap block cache inside the shared disk budget.
+Pure tests show one remote block read for a cold task and zero additional remote
+reads for an identical warm task; they also cover singleflight, active-pin
+eviction refusal, restart reuse, cached corruption reload, short/changed ranges,
+and canceled waiters. Query status persists bytes served from cache. The earlier
+Q5 cold/warm figures above predate this cache and remain a baseline only. Docker
+was unavailable for this packet, so the pinned DuckDB/MinIO request-count,
+transfer-byte, latency and RSS comparison is still required before claiming the
+M3 operational evidence or any performance improvement.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

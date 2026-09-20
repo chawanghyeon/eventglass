@@ -9,8 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/engine"
@@ -33,6 +36,7 @@ type Workflow struct {
 	InstallationID string
 	ScratchDir     string
 	Disk           *resource.Budget
+	Cache          *storage.BlockCache
 }
 
 func (workflow Workflow) Execute(ctx context.Context, task control.QueryTask) (retErr error) {
@@ -79,7 +83,7 @@ func (workflow Workflow) Execute(ctx context.Context, task control.QueryTask) (r
 	}
 	// The runner joins its child before returning. Remove owned files before
 	// releasing their shared disk reservation, including failure/cancellation.
-	inputs, payloads, err := workflow.downloadQueryInputs(ctx, taskDirectory, task, manifest, operation)
+	inputs, payloads, releaseInputs, err := workflow.prepareQueryInputs(ctx, task, manifest, operation)
 	if err != nil {
 		return err
 	}
@@ -89,8 +93,12 @@ func (workflow Workflow) Execute(ctx context.Context, task control.QueryTask) (r
 		SpillDirectory: filepath.Join(taskDirectory, "spill"),
 	}
 	summary, err := workflow.Runner.Run(ctx, request)
+	cacheBytes, releaseErr := releaseInputs()
 	if err != nil {
-		return err
+		return errors.Join(err, releaseErr)
+	}
+	if releaseErr != nil {
+		return releaseErr
 	}
 	intentUUID, err := uuid.NewRandom()
 	if err != nil {
@@ -119,96 +127,133 @@ func (workflow Workflow) Execute(ctx context.Context, task control.QueryTask) (r
 		return err
 	}
 	return workflow.Control.CompleteQueryTask(ctx, control.CompleteQueryTaskCommand{
-		Authority: task.Authority, IntentID: intent.IntentID, SHA256: intent.SHA256, Rows: summary.Rows, Bytes: intent.Bytes,
+		Authority: task.Authority, IntentID: intent.IntentID, SHA256: intent.SHA256, BlockSHA256: summary.Evidence.BlockSHA256, Rows: summary.Rows, Bytes: intent.Bytes, CacheBytes: cacheBytes,
 	})
 }
 
 func queryDiskReservation(task control.QueryTask, manifest TaskManifest, operation engine.QueryOperation) (int64, error) {
 	bytes := engine.DefaultNativeSpillBytes + engine.MaxQueryOutputBytes
-	add := func(size int64) error {
-		if size <= 0 || size > engine.MaxBundleFileBytes {
-			return engine.ErrQueryExecutionInvalid
-		}
-		bytes += size
-		return nil
-	}
 	if len(manifest.Files) > MaxFilesPerScan || len(task.Inputs) > ReduceFanIn {
 		return 0, engine.ErrQueryExecutionInvalid
 	}
+	// Scan inputs are streamed through the bounded range cache. Cache bytes have
+	// their own reservations in the same shared disk budget.
 	for _, file := range manifest.Files {
-		if err := add(file.Bytes); err != nil {
-			return 0, err
-		}
-		if operation.Kind == "detail" {
-			if err := add(file.PayloadBytes); err != nil {
-				return 0, err
-			}
+		if file.Bytes <= 0 || file.Bytes > engine.MaxBundleFileBytes || operation.Kind == "detail" && (file.PayloadBytes <= 0 || file.PayloadBytes > engine.MaxBundleFileBytes) {
+			return 0, engine.ErrQueryExecutionInvalid
 		}
 	}
 	for _, input := range task.Inputs {
-		if err := add(input.Bytes); err != nil {
-			return 0, err
+		if input.Bytes <= 0 || input.Bytes > engine.MaxQueryOutputBytes || len(input.BlockSHA256) != int((input.Bytes+storage.DefaultBlockSize-1)/storage.DefaultBlockSize) {
+			return 0, engine.ErrQueryExecutionInvalid
 		}
 	}
 	return bytes, nil
 }
 
-func (workflow Workflow) downloadQueryInputs(ctx context.Context, directory string, task control.QueryTask, manifest TaskManifest, operation engine.QueryOperation) ([]string, []string, error) {
-	type input struct {
-		key      string
-		bytes    int64
-		checksum string
+func (workflow Workflow) prepareQueryInputs(ctx context.Context, task control.QueryTask, manifest TaskManifest, operation engine.QueryOperation) ([]string, []string, func() (int64, error), error) {
+	if workflow.Cache == nil {
+		return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query range cache is required"))
 	}
-	var selected []input
+	manifests := make([]storage.ObjectManifest, 0, len(manifest.Files)*2+len(task.Inputs))
+	var inputs []string
+	var payloads []string
 	switch task.Authority.Key.Stage {
 	case model.QueryTaskScan:
 		if len(task.Inputs) != 0 || len(manifest.Files) < 1 || len(manifest.Files) > MaxFilesPerScan {
-			return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query scan inputs are invalid"))
+			return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query scan inputs are invalid"))
 		}
-		for _, file := range manifest.Files {
-			selected = append(selected, input{file.ObjectKey, file.Bytes, file.SHA256})
+		inputs = make([]string, len(manifest.Files))
+		if operation.Kind == "detail" {
+			payloads = make([]string, len(manifest.Files))
+		}
+		for index, file := range manifest.Files {
+			capability, err := uuid.NewRandom()
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			manifests = append(manifests, storage.ObjectManifest{
+				InstallationID: workflow.InstallationID, ObjectID: file.FileID, Capability: capability.String(),
+				ObjectKey: file.ObjectKey, Size: file.Bytes, SHA256: file.SHA256,
+				BlockSize: storage.DefaultBlockSize, BlockSHA256: file.BlockSHA256,
+			})
+			inputs[index] = capability.String()
+			if operation.Kind == "detail" {
+				if file.PayloadFileID == "" || file.PayloadObjectKey == "" || file.PayloadBytes <= 0 || len(file.PayloadBlockSHA256) == 0 {
+					return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query payload block manifest is invalid"))
+				}
+				payloadCapability, err := uuid.NewRandom()
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				manifests = append(manifests, storage.ObjectManifest{
+					InstallationID: workflow.InstallationID, ObjectID: file.PayloadFileID, Capability: payloadCapability.String(),
+					ObjectKey: file.PayloadObjectKey, Size: file.PayloadBytes, SHA256: file.PayloadSHA256,
+					BlockSize: storage.DefaultBlockSize, BlockSHA256: file.PayloadBlockSHA256,
+				})
+				payloads[index] = payloadCapability.String()
+			}
 		}
 	case model.QueryTaskReduce:
-		if len(manifest.Files) != 0 || len(task.Inputs) != len(manifest.Inputs) || len(task.Inputs) > ReduceFanIn {
-			return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query reducer inputs are invalid"))
+		if len(manifest.Files) != 0 || len(task.Inputs) != len(manifest.Inputs) || len(task.Inputs) < 1 || len(task.Inputs) > ReduceFanIn {
+			return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query reducer inputs are invalid"))
 		}
+		inputs = make([]string, len(task.Inputs))
 		for index, artifact := range task.Inputs {
-			if artifact.Ordinal != index || manifest.Inputs[index].Producer != artifact.Producer {
-				return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query reducer input order is invalid"))
+			if artifact.Ordinal != index || manifest.Inputs[index].Producer != artifact.Producer || len(artifact.BlockSHA256) == 0 {
+				return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query reducer input order or blocks are invalid"))
 			}
-			selected = append(selected, input{artifact.ObjectKey, artifact.Bytes, artifact.SHA256})
+			capability, err := uuid.NewRandom()
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			manifests = append(manifests, storage.ObjectManifest{
+				InstallationID: workflow.InstallationID, ObjectID: artifact.IntentID, Capability: capability.String(),
+				ObjectKey: artifact.ObjectKey, Size: artifact.Bytes, SHA256: artifact.SHA256,
+				BlockSize: storage.DefaultBlockSize, BlockSHA256: artifact.BlockSHA256,
+			})
+			inputs[index] = capability.String()
 		}
 	default:
-		return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query task stage is invalid"))
+		return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query task stage is invalid"))
 	}
-	paths := make([]string, len(selected))
-	for index, item := range selected {
-		path := filepath.Join(directory, fmt.Sprintf("input-%03d.parquet", index))
-		if err := workflow.Store.DownloadToFile(ctx, item.key, path, item.bytes, item.checksum); err != nil {
-			return nil, nil, err
+	gateway, err := storage.NewGatewayWithCache(workflow.Store, workflow.Cache, manifests)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	server := &http.Server{Handler: gateway, ReadHeaderTimeout: 5 * time.Second}
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	baseURL := "http://" + listener.Addr().String() + "/objects/"
+	for index := range inputs {
+		inputs[index] = baseURL + inputs[index]
+	}
+	for index := range payloads {
+		payloads[index] = baseURL + payloads[index]
+	}
+	return inputs, payloads, func() (int64, error) {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		shutdownErr := server.Shutdown(shutdownCtx)
+		if shutdownErr != nil {
+			shutdownErr = errors.Join(shutdownErr, server.Close())
 		}
-		paths[index] = path
-	}
-	var payloads []string
-	if task.Authority.Key.Stage == model.QueryTaskScan && operation.Kind == "detail" {
-		payloads = make([]string, len(manifest.Files))
-		for index, file := range manifest.Files {
-			if file.PayloadObjectKey == "" || file.PayloadBytes <= 0 || len(file.PayloadSHA256) != 64 {
-				return nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query payload manifest is invalid"))
-			}
-			path := filepath.Join(directory, fmt.Sprintf("payload-%03d.parquet", index))
-			if err := workflow.Store.DownloadToFile(ctx, file.PayloadObjectKey, path, file.PayloadBytes, file.PayloadSHA256); err != nil {
-				return nil, nil, err
-			}
-			payloads[index] = path
+		serveErr := <-serveDone
+		gateway.ReleasePins()
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			serveErr = nil
 		}
-	}
-	return paths, payloads, nil
+		return gateway.CacheBytes(), errors.Join(shutdownErr, serveErr)
+	}, nil
 }
 
 // WorkerStore is the verified I/O required by query execution, not a repository.
 type WorkerStore interface {
-	DownloadToFile(context.Context, string, string, int64, string) error
+	ReadRange(context.Context, string, int64, int64) ([]byte, error)
 	PutStream(context.Context, string, io.ReadSeeker, int64, string) (storage.ObjectInfo, error)
 }
 type QueryRunner interface {

@@ -25,12 +25,13 @@ type QueryTaskAuthority struct {
 }
 
 type QueryInputArtifact struct {
-	Ordinal   int
-	Producer  model.QueryTaskKey
-	IntentID  string
-	ObjectKey string
-	Bytes     int64
-	SHA256    string
+	Ordinal     int
+	Producer    model.QueryTaskKey
+	IntentID    string
+	ObjectKey   string
+	Bytes       int64
+	SHA256      string
+	BlockSHA256 []string
 }
 
 type QueryTask struct {
@@ -42,11 +43,13 @@ type QueryTask struct {
 }
 
 type CompleteQueryTaskCommand struct {
-	Authority QueryTaskAuthority
-	IntentID  string
-	SHA256    string
-	Rows      int64
-	Bytes     int64
+	Authority   QueryTaskAuthority
+	IntentID    string
+	SHA256      string
+	Rows        int64
+	Bytes       int64
+	BlockSHA256 []string
+	CacheBytes  int64
 }
 
 func (operations *QueryOperations) ClaimQueryCoordinator(ctx context.Context, installationID string, generation int64, owner string) (*QueryJob, error) {
@@ -185,7 +188,9 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 		return nil, err
 	}
 	inputRows, err := tx.Query(ctx, `SELECT i.ordinal,i.producer_stage,i.producer_level,i.producer_partition_id,
-		p.result_intent_id::text,oi.object_key,p.result_bytes,p.result_sha256
+		p.result_intent_id::text,oi.object_key,p.result_bytes,p.result_sha256,
+		COALESCE((SELECT array_agg(qb.sha256 ORDER BY qb.block_index) FROM query_task_blocks qb
+			WHERE qb.tenant_id=p.tenant_id AND qb.query_id=p.query_id AND qb.stage=p.stage AND qb.level=p.level AND qb.partition_id=p.partition_id),ARRAY[]::text[])
 		FROM query_task_inputs i JOIN query_tasks p ON p.tenant_id=i.tenant_id AND p.query_id=i.query_id
 		AND p.stage=i.producer_stage AND p.level=i.producer_level AND p.partition_id=i.producer_partition_id
 		JOIN object_intents oi ON oi.tenant_id=p.tenant_id AND oi.intent_id=p.result_intent_id AND oi.state='referenced'
@@ -197,7 +202,7 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 	for inputRows.Next() {
 		var input QueryInputArtifact
 		if err := inputRows.Scan(&input.Ordinal, &input.Producer.Stage, &input.Producer.Level, &input.Producer.PartitionID,
-			&input.IntentID, &input.ObjectKey, &input.Bytes, &input.SHA256); err != nil {
+			&input.IntentID, &input.ObjectKey, &input.Bytes, &input.SHA256, &input.BlockSHA256); err != nil {
 			inputRows.Close()
 			return nil, err
 		}

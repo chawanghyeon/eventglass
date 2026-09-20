@@ -40,7 +40,12 @@ func TestPublicQueryEndToEndAlertEvaluation(t *testing.T) {
 	if err := fixture.pool.QueryRow(ctx, `SELECT installation_id::text FROM installations WHERE singleton`).Scan(&installationID); err != nil {
 		t.Fatal(err)
 	}
-	worker := &query.Workflow{Disk: resource.NewBudget(4 << 30), Control: queryOps, Store: store, Runner: app.ProcessQueryRunner{BinaryPath: env["EVENTGLASS_TEST_BINARY"]}, InstallationID: installationID, ScratchDir: filepath.Join(t.TempDir(), "worker")}
+	disk := resource.NewBudget(4 << 30)
+	cache, err := storage.NewBlockCache(filepath.Join(t.TempDir(), "cache"), storage.DefaultCacheBytes, disk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := &query.Workflow{Disk: disk, Cache: cache, Control: queryOps, Store: store, Runner: app.ProcessQueryRunner{BinaryPath: env["EVENTGLASS_TEST_BINARY"]}, InstallationID: installationID, ScratchDir: filepath.Join(t.TempDir(), "worker")}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan error, 1)
 	go func() {

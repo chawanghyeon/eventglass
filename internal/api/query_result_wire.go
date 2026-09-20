@@ -113,7 +113,7 @@ func queryStats(status control.QueryStatus, snapshot model.QuerySnapshot, operat
 	if operationKind == "detail" {
 		objects *= 2
 	}
-	return generated.QueryStats{ScannedBytes: strconv.FormatInt(status.PlanInputBytes, 10), Objects: strconv.Itoa(objects), CacheBytes: "0", ElapsedMs: strconv.FormatInt(elapsed, 10), Cut: cuts, VisibilityLagMs: nil}
+	return generated.QueryStats{ScannedBytes: strconv.FormatInt(status.PlanInputBytes, 10), Objects: strconv.Itoa(objects), CacheBytes: strconv.FormatInt(status.CacheBytes, 10), ElapsedMs: strconv.FormatInt(elapsed, 10), Cut: cuts, VisibilityLagMs: nil}
 }
 
 func openJSONLines(path string) (*bufio.Scanner, func() error, error) {

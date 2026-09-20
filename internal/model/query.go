@@ -60,25 +60,26 @@ type QuerySnapshot struct {
 }
 
 type CatalogFile struct {
-	FileID            string
-	BundleID          string
-	ObjectKey         string
-	Bytes             int64
-	SHA256            string
-	RowCount          int64
-	MinEventTimeUS    int64
-	MaxEventTimeUS    int64
-	MinReceivedTimeUS int64
-	MaxReceivedTimeUS int64
-	MinBatchSeq       int64
-	MaxBatchSeq       int64
-	LaneID            int
-	Kind              Kind
-	BlockSHA256       []string
-	PayloadFileID     string `json:",omitempty"`
-	PayloadObjectKey  string `json:",omitempty"`
-	PayloadBytes      int64  `json:",omitempty"`
-	PayloadSHA256     string `json:",omitempty"`
+	FileID             string
+	BundleID           string
+	ObjectKey          string
+	Bytes              int64
+	SHA256             string
+	RowCount           int64
+	MinEventTimeUS     int64
+	MaxEventTimeUS     int64
+	MinReceivedTimeUS  int64
+	MaxReceivedTimeUS  int64
+	MinBatchSeq        int64
+	MaxBatchSeq        int64
+	LaneID             int
+	Kind               Kind
+	BlockSHA256        []string
+	PayloadFileID      string   `json:",omitempty"`
+	PayloadObjectKey   string   `json:",omitempty"`
+	PayloadBytes       int64    `json:",omitempty"`
+	PayloadSHA256      string   `json:",omitempty"`
+	PayloadBlockSHA256 []string `json:",omitempty"`
 }
 
 func QueryPrincipalHash(userID int64, sessionTokenHash [32]byte) string {

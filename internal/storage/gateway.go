@@ -11,9 +11,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+
+	"github.com/chawanghyeon/eventglass/internal/model"
 )
 
-const DefaultBlockSize int64 = 1 << 20
+const DefaultBlockSize int64 = model.FileBlockBytes
 
 var ErrObjectNotFound = errors.New("object not found")
 
@@ -22,12 +26,14 @@ type RangeStore interface {
 }
 
 type ObjectManifest struct {
-	Capability  string
-	ObjectKey   string
-	Size        int64
-	SHA256      string
-	BlockSize   int64
-	BlockSHA256 []string
+	InstallationID string
+	ObjectID       string
+	Capability     string
+	ObjectKey      string
+	Size           int64
+	SHA256         string
+	BlockSize      int64
+	BlockSHA256    []string
 }
 
 func (m ObjectManifest) validate() error {
@@ -54,11 +60,19 @@ func (m ObjectManifest) validate() error {
 
 type Gateway struct {
 	store        RangeStore
+	cache        *BlockCache
 	byCapability map[string]ObjectManifest
+	pinsMu       sync.Mutex
+	pins         []func()
+	cacheBytes   atomic.Int64
 }
 
 func NewGateway(store RangeStore, manifests []ObjectManifest) (*Gateway, error) {
-	gateway := &Gateway{store: store, byCapability: make(map[string]ObjectManifest, len(manifests))}
+	return NewGatewayWithCache(store, nil, manifests)
+}
+
+func NewGatewayWithCache(store RangeStore, cache *BlockCache, manifests []ObjectManifest) (*Gateway, error) {
+	gateway := &Gateway{store: store, cache: cache, byCapability: make(map[string]ObjectManifest, len(manifests))}
 	for _, manifest := range manifests {
 		if err := manifest.validate(); err != nil {
 			return nil, err
@@ -70,6 +84,20 @@ func NewGateway(store RangeStore, manifests []ObjectManifest) (*Gateway, error) 
 	}
 	return gateway, nil
 }
+
+// ReleasePins is called only after the native child has exited. It makes blocks
+// evictable but does not remove reusable verified cache data.
+func (g *Gateway) ReleasePins() {
+	g.pinsMu.Lock()
+	pins := g.pins
+	g.pins = nil
+	g.pinsMu.Unlock()
+	for _, release := range pins {
+		release()
+	}
+}
+
+func (g *Gateway) CacheBytes() int64 { return g.cacheBytes.Load() }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -130,6 +158,33 @@ func (g *Gateway) readVerified(ctx context.Context, manifest ObjectManifest, sta
 	expandedEnd := (lastBlock + 1) * manifest.BlockSize
 	if expandedEnd > manifest.Size {
 		expandedEnd = manifest.Size
+	}
+	if g.cache != nil {
+		if manifest.InstallationID == "" || manifest.ObjectID == "" {
+			return nil, errors.New("cached gateway manifest lacks immutable identity")
+		}
+		data := make([]byte, 0, expandedEnd-expandedStart)
+		for block := firstBlock; block <= lastBlock; block++ {
+			blockStart := block * manifest.BlockSize
+			blockEnd := min(blockStart+manifest.BlockSize, manifest.Size)
+			blockBytes, release, hit, err := g.cache.Read(ctx, CacheBlockKey{
+				InstallationID: manifest.InstallationID, ObjectID: manifest.ObjectID,
+				ContentSHA256: manifest.SHA256, BlockIndex: block,
+			}, blockEnd-blockStart, manifest.BlockSHA256[block], func(ctx context.Context) ([]byte, error) {
+				return g.store.ReadRange(ctx, manifest.ObjectKey, blockStart, blockEnd-blockStart)
+			})
+			if err != nil {
+				return nil, err
+			}
+			if hit {
+				g.cacheBytes.Add(int64(len(blockBytes)))
+			}
+			g.pinsMu.Lock()
+			g.pins = append(g.pins, release)
+			g.pinsMu.Unlock()
+			data = append(data, blockBytes...)
+		}
+		return append([]byte(nil), data[start-expandedStart:end-expandedStart]...), nil
 	}
 	data, err := g.store.ReadRange(ctx, manifest.ObjectKey, expandedStart, expandedEnd-expandedStart)
 	if err != nil {
