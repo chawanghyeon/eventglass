@@ -396,7 +396,7 @@ func writePartition(ctx context.Context, db *sql.DB, outputDirectory string, ind
 		record_id,
 		json_extract(stage_json,'$.record.raw')::VARCHAR AS raw_json,
 		json_extract(stage_json,'$.record.envelope_sdk_json')::VARCHAR AS envelope_sdk_json,
-		COALESCE(json_extract(stage_json,'$.record.warnings')::VARCHAR,'[]') AS normalization_warnings_json,
+		COALESCE(NULLIF(json_extract(stage_json,'$.record.warnings')::VARCHAR,'null'),'[]') AS normalization_warnings_json,
 		json_extract(stage_json,'$.canonical_metadata')::VARCHAR AS canonical_metadata_json
 	FROM staged` + where + order + `) TO '` + quoteSQLString(payloadPath) + `' (FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,ROW_GROUP_SIZE 16384)`
 	for _, statement := range []string{analyticsSQL, payloadSQL} {

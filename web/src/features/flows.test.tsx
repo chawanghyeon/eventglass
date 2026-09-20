@@ -46,7 +46,7 @@ describe("operator component contracts", () => {
     }], next_cursor: null });
     render(<Providers><SessionProvider session={session}><ProjectsPage /></SessionProvider></Providers>);
     expect(await screen.findByText("Payments")).toBeInTheDocument();
-    expect(screen.getByText((_, element) => element?.textContent?.replaceAll(/\D/g, "") === "9007199254740993")).toBeInTheDocument();
+    expect(screen.getByText("9,007,199,254,740,993")).toBeInTheDocument();
   });
 
   it("runs a URL-owned log query and renders server state as text", async () => {

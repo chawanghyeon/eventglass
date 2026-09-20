@@ -5,6 +5,9 @@
   "GET /v1/session",
   "DELETE /v1/session",
   "POST /v1/session/password",
+  "GET /v1/projects",
+  "POST /v1/projects",
+  "PATCH /v1/projects/{id}",
   "GET /v1/projects/{id}/keys",
   "POST /v1/projects/{id}/keys",
   "DELETE /v1/projects/{id}/keys/{key_id}",
@@ -16,6 +19,10 @@
   "POST /v1/snapshots/{id}/heartbeat",
   "DELETE /v1/snapshots/{id}",
   "GET /v1/live",
+  "GET /v1/issues",
+  "GET /v1/issues/{id}",
+  "PATCH /v1/issues/{id}",
+  "GET /v1/issues/{id}/occurrences",
   "GET /v1/destinations",
   "POST /v1/destinations",
   "PATCH /v1/destinations/{id}",
@@ -23,5 +30,6 @@
   "POST /v1/alerts",
   "PATCH /v1/alerts/{id}",
   "GET /v1/deliveries",
-  "POST /v1/deliveries/{id}/retry"
+  "POST /v1/deliveries/{id}/retry",
+  "GET /v1/system/sdk-outcomes"
 ]

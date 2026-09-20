@@ -225,6 +225,11 @@ func decodeJSONArrayString(value json.RawMessage) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Older bundles encoded an absent warnings slice as JSON null. Treat that
+	// representation as the same empty collection produced by current writers.
+	if encoded == "null" {
+		return []any{}, nil
+	}
 	decoder := json.NewDecoder(strings.NewReader(encoded))
 	decoder.UseNumber()
 	var result []any

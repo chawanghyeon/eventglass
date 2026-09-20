@@ -193,7 +193,7 @@ func (handler *ManagementHandler) authError(writer http.ResponseWriter, request 
 		handler.error(writer, request, http.StatusUnauthorized, "unauthenticated", false)
 	case errors.Is(err, control.ErrForbidden):
 		handler.error(writer, request, http.StatusForbidden, "forbidden", false)
-	case errors.Is(err, control.ErrRevisionConflict):
+	case errors.Is(err, control.ErrRevisionConflict), errors.Is(err, control.ErrIssueRevisionStale):
 		handler.error(writer, request, http.StatusConflict, "revision_conflict", false)
 	default:
 		handler.error(writer, request, http.StatusServiceUnavailable, "dependency_unavailable", true)

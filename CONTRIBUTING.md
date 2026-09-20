@@ -14,6 +14,7 @@ The active product is the root Go module. Use Go 1.26.5 exactly and run commands
 ./scripts/check sdk
 ./scripts/check crash
 ./scripts/check web
+./scripts/check-browser
 ```
 
 Commands for later implementation gates intentionally fail until their gate is implemented. `./scripts/check codegen` regenerates the Go and TypeScript wire contracts in a temporary tree and requires byte-identical output; install its exact tool lock with `npm ci --prefix tools/codegen --ignore-scripts` when changing `api/openapi.yaml`, then run `./scripts/generate-api`. `./scripts/check sdk` replays committed captures and runs the pinned SDK applications against a localhost Go handler; run `tools/sdk-fixtures/bootstrap.sh` once to install its locked tools. Docker is required for the PostgreSQL/S3 integration environment and Linux ARM64 image checks. Tests must use temporary databases, buckets, prefixes, directories, and localhost receivers. Linux AMD64 is not a currently verified or supported release target.
@@ -22,6 +23,10 @@ The operator UI uses the exact Node/npm versions in `web/package.json`. Install
 its locked dependencies with `npm ci --prefix web --ignore-scripts`; then
 `./scripts/check web` runs Vitest, strict TypeScript, and the Vite production
 build. Generated API types remain owned by `./scripts/generate-api`.
+`./scripts/check-browser` builds and runs the real ARM64 API, worker and scheduler
+against disposable PostgreSQL and MinIO, then executes the Playwright SDK-to-UI
+flow. It never sends an external alert and requires local Docker plus the locked
+Playwright Chromium installation.
 
 Complete and verify one gate at a time, then commit directly to `main` and run `git push origin main`. Use commit subjects such as `feat: 한국어 변경 요약`, selecting `fix`, `perf`, `test`, `docs`, or `chore` as appropriate. Do not bypass hooks or rewrite published history merely to normalize messages.
 

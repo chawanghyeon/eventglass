@@ -16,6 +16,8 @@ body { margin: 0; min-width: 320px; min-height: 100vh; }
 button, input, select { font: inherit; }
 button { border: 0; border-radius: .55rem; background: var(--accent); color: white; padding: .7rem 1rem; cursor: pointer; }
 button:disabled { opacity: .55; cursor: wait; }
+.secondary { background: #59645d; }
+.danger { background: var(--danger); }
 input, select { width: 100%; border: 1px solid var(--line); border-radius: .5rem; background: white; color: var(--ink); padding: .65rem .75rem; }
 label { display: grid; gap: .35rem; font-size: .85rem; font-weight: 650; }
 a { color: var(--accent); }
@@ -60,10 +62,18 @@ table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: .8rem 1rem; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .06em; }
 .json-text { max-height: 28rem; overflow: auto; padding: 1rem; border-radius: .6rem; background: #18211b; color: #e8f3ec; white-space: pre-wrap; word-break: break-word; }
+.compact { padding: 1.2rem; }
+.row-between, .button-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.row-between dl, .button-row { display: flex; gap: .75rem; }
+.editor-grid, .inline-form { display: grid; grid-template-columns: repeat(3, minmax(10rem, 1fr)) auto; align-items: end; gap: .75rem; margin-bottom: 1rem; padding: 1rem; border: 1px solid var(--line); border-radius: .75rem; background: var(--surface); }
+.inline-form { grid-template-columns: minmax(12rem, 1fr) auto; margin-top: 1rem; }
+.one-time { margin: 1rem 0; padding: 1rem; border: 2px solid var(--accent); border-radius: .75rem; background: var(--accent-soft); }
 @media (max-width: 720px) {
   .app-shell > header { height: auto; padding-block: .75rem; flex-wrap: wrap; }
   .app-shell > header label { order: 3; width: 100%; margin: 0; }
   .page-heading, .issue-card { align-items: start; flex-direction: column; }
   .search-bar { grid-template-columns: 1fr; }
+  .editor-grid, .inline-form { grid-template-columns: 1fr; }
+  .row-between, .button-row { align-items: start; flex-direction: column; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }

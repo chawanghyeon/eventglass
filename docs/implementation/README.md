@@ -6,11 +6,11 @@ implementation and release gates are not complete. Product baseline inspected:
 for an implementing agent, including GPT Luna, without conversation history.
 Do not start by redesigning the system or implementing every gate at once.
 
-Current handoff: architecture/query/Live lifetime hardening and A1–A2 alert
-evaluation/delivery are implemented; continue with U3 in work-plan.md, not a new
-architecture rewrite. U1 means the
-UI foundation and component contracts, not working project/Issue backend routes.
-Those remain U3. Check `api/implemented-routes.json` before wiring a feature.
+Current handoff: architecture/query/Live lifetime hardening and all G05 operator
+surface packets are implemented; continue with M1 in work-plan.md, not a new
+architecture rewrite. Project, key, Issue, retained-occurrence and SDK-outcome
+screens now use implemented backend routes, and the ARM64 browser gate exercises
+the actual ingest/publication/query runtime. Check `api/implemented-routes.json` before wiring a feature.
 Reuse `query.Submission`/`query.Awaiter` for the existing session-authorized
 query path. A1 has a separate revision-bound rule principal and creates durable
 delivery rows without network I/O. A2 claims and sends those rows with fenced
@@ -112,7 +112,7 @@ without it, finish local packets and report the exact unverified gate.
 Suggested continuation instruction:
 
 > Read docs/implementation/README.md and work-plan.md. Inspect the current tree
-> and complete the first incomplete packet only, including its negative tests,
+> and complete M1, the first incomplete packet, including its negative tests,
 > relevant verification, documentation, commit and push. Preserve DESIGN.md and
 > ARCHITECTURE.md contracts. Use ARM64 and the pinned DuckDB 2.0 build. Do not
 > mark a gate complete from stubs, mocks alone, skipped tests or design text.

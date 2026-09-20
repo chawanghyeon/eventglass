@@ -48,3 +48,10 @@ func TestDecodeJSONLineRejectsTrailingJSON(t *testing.T) {
 		t.Fatal("trailing JSON accepted")
 	}
 }
+
+func TestDecodeJSONArrayStringTreatsStoredNullAsEmpty(t *testing.T) {
+	result, err := decodeJSONArrayString([]byte(`"null"`))
+	if err != nil || len(result) != 0 {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}

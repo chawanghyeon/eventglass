@@ -6,7 +6,11 @@ import { SetupPage } from "../features/auth/SetupPage";
 import { ExplorePage } from "../features/explore/ExplorePage";
 import { LogsPage } from "../features/logs/LogsPage";
 import { RecordDetailPage } from "../features/logs/RecordDetailPage";
-import { PlannedPage } from "../shared/ui/PlannedPage";
+import { ProjectsPage } from "../features/projects/ProjectsPage";
+import { IssuesPage } from "../features/issues/IssuesPage";
+import { IssueDetailPage } from "../features/issues/IssueDetailPage";
+import { AlertsPage } from "../features/alerts/AlertsPage";
+import { SystemPage } from "../features/system/SystemPage";
 
 export const router = createBrowserRouter([
   { path: "/setup", element: <SetupPage /> },
@@ -17,12 +21,14 @@ export const router = createBrowserRouter([
       element: <AppShell />,
       children: [
         { index: true, element: <Navigate to="/logs" replace /> },
-        { path: "/projects", element: <PlannedPage title="Projects" /> },
-        { path: "/issues", element: <PlannedPage title="Issues" /> },
-        { path: "/issues/:id", element: <PlannedPage title="Issue detail" /> },
+        { path: "/projects", element: <ProjectsPage /> },
+        { path: "/issues", element: <IssuesPage /> },
+        { path: "/issues/:id", element: <IssueDetailPage /> },
         { path: "/logs", element: <LogsPage /> },
         { path: "/logs/:id", element: <RecordDetailPage /> },
         { path: "/explore", element: <ExplorePage /> },
+        { path: "/alerts", element: <AlertsPage /> },
+        { path: "/system", element: <SystemPage /> },
       ],
     }],
   },

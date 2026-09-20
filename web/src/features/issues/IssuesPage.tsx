@@ -8,15 +8,18 @@ import { StatusPanel } from "../../shared/ui/StatusPanel";
 
 export function IssuesPage() {
   const { session, tenant } = useSession();
-  const projectIDs = tenant.project_grants.map((grant) => grant.project_id).sort();
+  const projects = useQuery({ queryKey: ["projects", session.user_id, tenant.tenant_id], queryFn: () => api.projects(tenant.tenant_id), enabled: tenant.role === "admin" });
+  const projectIDs = (tenant.role === "admin" ? projects.data?.items.filter((project) => project.state === "active").map((project) => project.project_id) ?? [] : tenant.project_grants.map((grant) => grant.project_id)).sort();
   const issues = useQuery({
     queryKey: ["issues", session.user_id, tenant.tenant_id, projectIDs],
     queryFn: () => api.issues(tenant.tenant_id, projectIDs),
-    enabled: projectIDs.length > 0,
+    enabled: projectIDs.length > 0 && (tenant.role !== "admin" || projects.isSuccess),
   });
   return <section>
     <div className="page-heading"><div><p className="eyebrow">Live catalog state</p><h1>Issues</h1></div><p>Counts are lifetime published occurrences; retained detail may expire.</p></div>
-    {!projectIDs.length ? <StatusPanel empty="No project grants are available." /> : null}
+    {projects.isPending && tenant.role === "admin" ? <p role="status">Loading project scope…</p> : null}
+    <StatusPanel error={projects.error} onRetry={() => void projects.refetch()} />
+    {!projectIDs.length && !projects.isPending ? <StatusPanel empty="No active projects are available." /> : null}
     {issues.isPending && projectIDs.length ? <p role="status">Loading issues…</p> : null}
     <StatusPanel error={issues.error} onRetry={() => void issues.refetch()} />
     {issues.data?.items.length === 0 ? <StatusPanel empty="No issues match this scope." /> : null}

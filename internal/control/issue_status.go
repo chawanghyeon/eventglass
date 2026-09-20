@@ -28,12 +28,22 @@ type IssueStatusCommand struct {
 	ExpectedRevision int64
 	Action           IssueAction
 	ActorUserID      *int64
+	RequestID        string
+	AuditID          string
+	OperationID      string
 }
 
 type IssueStatusResult struct {
 	Status   issues.Status
 	Revision int64
 	Changed  bool
+}
+
+func (operations *AuthOperations) ChangeIssueStatus(ctx context.Context, command IssueStatusCommand) (IssueStatusResult, error) {
+	if operations == nil {
+		return IssueStatusResult{}, errors.New("Issue operations are required")
+	}
+	return ChangeIssueStatus(ctx, operations.pool, command)
 }
 
 func ChangeIssueStatus(ctx context.Context, pool *pgxpool.Pool, command IssueStatusCommand) (IssueStatusResult, error) {
@@ -48,7 +58,28 @@ func ChangeIssueStatus(ctx context.Context, pool *pgxpool.Pool, command IssueSta
 	if _, err := tx.Exec(ctx, "SET LOCAL synchronous_commit = on"); err != nil {
 		return IssueStatusResult{}, err
 	}
-	if _, err := tx.Exec(ctx, `SELECT project_id FROM projects WHERE tenant_id=$1 AND project_id=$2 FOR SHARE`, command.TenantID, command.ProjectID); err != nil {
+	if command.ActorUserID != nil {
+		if *command.ActorUserID <= 0 || command.RequestID == "" || command.AuditID == "" {
+			return IssueStatusResult{}, errors.New("invalid Issue actor")
+		}
+		if err := requireTenantRole(ctx, tx, command.TenantID, *command.ActorUserID, false, command.ProjectID, true); err != nil {
+			return IssueStatusResult{}, err
+		}
+		if command.OperationID != "" {
+			var status issues.Status
+			var revision int64
+			err := tx.QueryRow(ctx, `SELECT i.status,i.revision FROM issue_transitions t JOIN issues i
+				ON i.tenant_id=t.tenant_id AND i.project_id=t.project_id AND i.issue_id=t.issue_id
+				WHERE t.tenant_id=$1 AND t.actor_user_id=$2 AND t.operation_id=$3 AND t.project_id=$4 AND t.issue_id=$5`,
+				command.TenantID, *command.ActorUserID, command.OperationID, command.ProjectID, command.IssueID).Scan(&status, &revision)
+			if err == nil {
+				return IssueStatusResult{Status: status, Revision: revision}, tx.Commit(ctx)
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				return IssueStatusResult{}, err
+			}
+		}
+	} else if _, err := tx.Exec(ctx, `SELECT project_id FROM projects WHERE tenant_id=$1 AND project_id=$2 FOR SHARE`, command.TenantID, command.ProjectID); err != nil {
 		return IssueStatusResult{}, err
 	}
 	var cut []int64
@@ -95,9 +126,15 @@ func ChangeIssueStatus(ctx context.Context, pool *pgxpool.Pool, command IssueSta
 	if err := tx.QueryRow(ctx, `SELECT floor(extract(epoch FROM clock_timestamp())*1000000)::bigint`).Scan(&receivedUS); err != nil {
 		return IssueStatusResult{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO issue_transitions(transition_id,tenant_id,project_id,issue_id,issue_revision,type,received_time_us,actor_user_id)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, deterministicTransitionID(command.IssueID, state.Revision), command.TenantID, command.ProjectID, command.IssueID, state.Revision, *transition, receivedUS, command.ActorUserID); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO issue_transitions(transition_id,tenant_id,project_id,issue_id,issue_revision,type,received_time_us,actor_user_id,operation_id)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, deterministicTransitionID(command.IssueID, state.Revision), command.TenantID, command.ProjectID, command.IssueID, state.Revision, *transition, receivedUS, command.ActorUserID, nullableText(command.OperationID)); err != nil {
 		return IssueStatusResult{}, err
+	}
+	if command.ActorUserID != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO audit_events(tenant_id,audit_id,actor_user_id,action,target_type,target_id,target_revision,request_id,operation_id)
+			VALUES($1,$2,$3,'issue_status_changed','issue',$4,$5,$6,$7)`, command.TenantID, command.AuditID, *command.ActorUserID, command.IssueID, state.Revision, command.RequestID, nullableText(command.OperationID)); err != nil {
+			return IssueStatusResult{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return IssueStatusResult{}, err

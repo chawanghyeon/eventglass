@@ -9,6 +9,8 @@ __pycache__/
 /data/
 node_modules/
 web/dist/
+web/playwright-report/
+web/test-results/
 .env
 .env.local
 .env.*.local

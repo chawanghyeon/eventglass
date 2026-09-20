@@ -1,0 +1,79 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) echo "browser verification supports ARM64 only" >&2; exit 1 ;;
+esac
+docker info >/dev/null 2>&1 || { echo "Docker is required for browser verification" >&2; exit 1; }
+
+project="eventglass-go-browser-$$"
+api_port=$((18000 + $$ % 1000))
+web_port=$((19000 + $$ % 1000))
+runtime_dir=$(mktemp -d "$ROOT/.tools/eventglass-browser.XXXXXX")
+app_container="$project-app"
+diagnose() {
+  docker logs "$app_container" >&2 || true
+  docker compose -p "$project" -f deploy/compose.yaml exec -T postgres \
+    psql -U eventglass -d eventglass -c \
+    "SELECT query_id,operation_kind,state,error_code,created_at FROM query_jobs ORDER BY created_at DESC LIMIT 10" >&2 || true
+}
+cleanup() {
+  docker rm -f "$app_container" >/dev/null 2>&1 || true
+  docker compose -p "$project" -f deploy/compose.yaml down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$runtime_dir"
+}
+trap cleanup EXIT INT TERM
+
+for name in bootstrap auth token alert
+do
+  openssl rand -hex 32 >"$runtime_dir/$name.hex"
+  chmod 600 "$runtime_dir/$name.hex"
+done
+
+docker compose -p "$project" -f deploy/compose.yaml up -d postgres minio
+docker compose -p "$project" -f deploy/compose.yaml run --rm minio-init
+docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:browser-build .
+
+database_url="postgres://eventglass:local-test-only@postgres:5432/eventglass?sslmode=disable" # pragma: allowlist secret
+docker run --rm --platform linux/arm64 --network "${project}_default" -e EVENTGLASS_DATABASE_URL="$database_url" eventglass-go:browser-build /out/eventglass-go migrate
+docker run -d --name "$app_container" --platform linux/arm64 --network "${project}_default" -p "127.0.0.1:${api_port}:8080" \
+  -v "$runtime_dir:/run/eventglass:ro" \
+  -e EVENTGLASS_DATABASE_URL="$database_url" \
+  -e EVENTGLASS_PUBLIC_URL="http://127.0.0.1:${web_port}" \
+  -e EVENTGLASS_ROLES=api,worker,scheduler \
+  -e EVENTGLASS_SCRATCH_DIR=/tmp/eventglass \
+  -e EVENTGLASS_S3_ENDPOINT=http://minio:9000 \
+  -e EVENTGLASS_S3_REGION=us-east-1 \
+  -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
+  -e EVENTGLASS_INSECURE_COOKIE=true \
+  -e EVENTGLASS_BOOTSTRAP_TOKEN_FILE=/run/eventglass/bootstrap.hex \
+  -e EVENTGLASS_AUTH_HASH_KEY_FILE=/run/eventglass/auth.hex \
+  -e EVENTGLASS_TOKEN_KEY_FILE=/run/eventglass/token.hex \
+  -e EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE=/run/eventglass/alert.hex \
+  -e AWS_ACCESS_KEY_ID=eventglass-local \
+  -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+  eventglass-go:browser-build /out/eventglass-go run >/dev/null
+
+attempt=0
+until curl -fsS "http://127.0.0.1:${api_port}/livez" >/dev/null
+do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 60 ]; then
+    diagnose
+    exit 1
+  fi
+  sleep 1
+done
+
+if ! EVENTGLASS_WEB_API_ORIGIN="http://127.0.0.1:${api_port}" \
+  EVENTGLASS_WEB_PORT="$web_port" \
+  EVENTGLASS_E2E_BOOTSTRAP_TOKEN=$(tr -d '\n' <"$runtime_dir/bootstrap.hex") \
+  npm run e2e --prefix web
+then
+  diagnose
+  exit 1
+fi
