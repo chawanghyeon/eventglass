@@ -54,8 +54,8 @@ func (operations *AuthOperations) ReadSystemStatus(ctx context.Context, tenantID
 		return SystemStatus{}, err
 	}
 	var result SystemStatus
-	if err := tx.QueryRow(ctx, `SELECT installation_id::text,storage_generation,recovery_state,alerts_paused,retention_days,retention_revision,retention_floor_us,gc_safe_before,gc_verified_until FROM installations WHERE singleton`).Scan(
-		&result.InstallationID, &result.Generation, &result.RecoveryState, &result.AlertsPaused, &result.RetentionDays, &result.RetentionRevision, &result.RetentionFloorUS, &result.GCSafeBefore, &result.GCVerifiedUntil); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT installation_id::text,storage_generation,recovery_state,alerts_paused,retention_days,retention_revision,retention_floor_us,gc_safe_before,gc_verified_until,last_restore_at FROM installations WHERE singleton`).Scan(
+		&result.InstallationID, &result.Generation, &result.RecoveryState, &result.AlertsPaused, &result.RetentionDays, &result.RetentionRevision, &result.RetentionFloorUS, &result.GCSafeBefore, &result.GCVerifiedUntil, &result.Backup.LastRestoreAt); err != nil {
 		return SystemStatus{}, err
 	}
 	rows, err := tx.Query(ctx, `SELECT l.lane_id,l.accepted_seq,l.published_seq,

@@ -12,6 +12,7 @@ The active product is the root Go module. Use Go 1.26.5 exactly and run commands
 ./scripts/check perf
 ./scripts/check contracts
 ./scripts/check integration
+./scripts/check recovery
 ./scripts/check sdk
 ./scripts/check crash
 ./scripts/check web
@@ -29,6 +30,11 @@ production UI, and runs API/worker/scheduler non-root with a read-only root and
 bounded scratch against disposable PostgreSQL and MinIO. Playwright exercises
 SDK-to-UI on the same origin without Vite. It never sends an external alert and requires local Docker plus the locked
 Playwright Chromium installation.
+
+`./scripts/check recovery` builds the pinned pgBackRest source, performs an
+actual PostgreSQL base+WAL restore into isolated volumes, verifies restored S3
+references, imports a signed rehearsal report, and exercises the missing-object
+fail-closed path. It uses only disposable Colima/Docker resources.
 
 Complete and verify one gate at a time, then commit directly to `main` and run `git push origin main`. Use commit subjects such as `feat: 한국어 변경 요약`, selecting `fix`, `perf`, `test`, `docs`, or `chore` as appropriate. Do not bypass hooks or rewrite published history merely to normalize messages.
 

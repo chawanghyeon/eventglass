@@ -355,11 +355,6 @@
   ],
   "pending": [
     {
-      "id": "coordinated-recovery",
-      "packet": "M4",
-      "description": "PG/WAL/S3 restore and verified GC attestation; GC stays frozen without this evidence."
-    },
-    {
       "id": "sustained-performance",
       "packet": "R1-R3",
       "description": "512MiB mixed load, p95/p99, 1/2/4 worker scaling/fairness and whole-installation costs."

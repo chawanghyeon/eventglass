@@ -2,8 +2,8 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, and M1–M3 have implementations and scoped tests. M4 is the next backend packet.
-M2 physical GC stays frozen until M4 provides a fresh coordinated backup attestation.
+G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, and M1–M4 have implementations and scoped tests. R1 is the next packet.
+M2 physical GC stays frozen whenever M4's signed coordinated backup attestation is absent or older than 24 hours.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
 in the implementation commit, not by making per-packet diary files.
@@ -85,9 +85,9 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 | ID / depends on | Read | Files | Required tests and done condition |
 |---|---|---|---|
 | M1 / U3 — complete | operations compaction, control G06 | migrations/0010_maintenance.sql; maintenance/compact.go; control/maintenance.go | Concurrent publication does not starve swap; exact reserved inputs only; identity preserved; crash before/after swap and reader pinned old generation |
-| M2 / M1 — implemented; operational backup dependency M4 | operations retention/GC | maintenance/retain.go,gc.go; control/retention.go; migrations/0012_gc_interlock.sql | Mixed-retention rewrite, snapshot floor stable, widening cannot resurrect, journal protect8days+backup horizon, current/pinned/prepared file never deleted, latePUT tombstone resweep; unknown/stale backup health freezes deletion; stale GC attempts cannot confirm; completed producer FK cleanup and expired swap leases tested |
+| M2 / M1 — complete with M4 interlock | operations retention/GC | maintenance/retain.go,gc.go; control/retention.go; migrations/0012_gc_interlock.sql | Mixed-retention rewrite, snapshot floor stable, widening cannot resurrect, journal protect8days+backup horizon, current/pinned/prepared file never deleted, latePUT tombstone resweep; unknown/stale backup health freezes deletion; stale GC attempts cannot confirm; completed producer FK cleanup and expired swap leases tested |
 | M3 / M2 — complete | operations cache/child | storage/cache.go; integrated capability gateway and durable query block manifests | Pure tests cover singleflight/pin eviction, corrupt cached blocks, short/changed ranges, restart reuse and shared disk quotas. Scan, payload and reducer inputs have no default full GET; pins release after the joined child returns. Pinned-DuckDB/MinIO cold/warm assertions prove one cold Range read and no additional warm Range read. |
-| M4 / M3 | operations recovery | maintenance/recovery.go; CLI doctor/repair/restore; deploy pgBackRest config/runbook | Actual isolated PG base+WAL+S3 restore, referenced set verification, fresh generation reads old verified files, no newer-object adoption, sessions invalid, outgoing paused, missingfile unhealthy; **G06 complete** |
+| M4 / M3 — complete | operations recovery | maintenance/recovery.go; CLI doctor/backup/restore; deploy/recovery; docs/operations/recovery.md | Actual isolated PG base+WAL+S3 restore verifies WAL-only rows and the restored authority's complete object set. Signed rehearsal import refreshes live GC evidence without changing its generation. Activation increments generation, invalidates sessions, leaves outgoing alerts paused, reads verified old files, never adopts newer objects, and missing files remain unhealthy; **G06 complete**. |
 
 ## Packets G07/G08: measurable release
 

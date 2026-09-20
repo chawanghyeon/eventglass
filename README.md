@@ -4,7 +4,7 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00–G05 have implemented baselines and scoped executable evidence. G05 connects user/membership and password management, alert/destination editing, delivery retry, system diagnostics and installation retention in addition to the earlier operator surfaces; its disposable PostgreSQL/MinIO integration and final non-root ARM64 image Playwright flow pass. M1/M2 compaction and retention/GC are implemented. M3 connects the verified bounded Range/block cache to scan, payload and reduction reads and passes its pinned-DuckDB/MinIO cold/warm request and byte checks. Physical GC is frozen until M4 supplies a fresh coordinated backup attestation. M4 (recovery) and R1–R4 (sustained resources/scaling/cost/release) remain incomplete. The small M3 correctness fixture is not a sustained RSS test or evidence of general performance superiority, and no deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
+Current status: G00–G06 have implemented baselines and scoped executable evidence. G05 connects user/membership and password management, alert/destination editing, delivery retry, system diagnostics and installation retention in addition to the earlier operator surfaces; its disposable PostgreSQL/MinIO integration and final non-root ARM64 image Playwright flow pass. M1/M2 compaction and retention/GC are implemented, and M3 connects the verified bounded Range/block cache to scan, payload and reduction reads. M4 uses pinned pgBackRest 2.59.1 to verify an actual PostgreSQL 17 base+continuous-WAL restore together with every restored S3 reference, then imports a signed isolated-rehearsal report to refresh the fail-closed GC horizon. Physical GC remains frozen whenever that evidence is absent or older than 24 hours. R1–R4 (sustained resources/scaling/cost/release) remain incomplete. The small M3 correctness fixture and M4 recovery fixture are not sustained performance or production-HA evidence, and no deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
@@ -48,15 +48,16 @@ and an atomic generation swap that preserves old readers without blocking
 unrelated publication. M2 adds received-time retention rewrites and full expiry,
 snapshot- and backup-interlocked mark/delete/confirm GC, journal retirement summaries,
 an eight-day recovery grace, and late-PUT resweeps. Physical deletion requires an unexpired verified backup horizon; it does not
-interpret an empty backup inventory as safety. The block cache is implemented;
-its real MinIO/DuckDB measurement and backup/PITR recovery remain open gates.
+interpret an empty backup inventory as safety. M3's block-cache gate and M4's
+coordinated PostgreSQL/WAL/S3 recovery gate pass on Linux ARM64; sustained
+resource and provider release evidence remain open.
 Pure-Go checks do not rebuild DuckDB.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the
 [`work plan`](docs/implementation/work-plan.md) breaks remaining work into ordered
 packets with files, prerequisites, negative tests and completion gates. These are
-design contracts, not evidence that M4–G08 have been implemented or verified.
+design contracts, not evidence that R1–R4 have been implemented or verified.
 
 The handoff also includes [cross-boundary correctness contracts](docs/implementation/correctness.md)
 and [fixed machine-readable examples](docs/implementation/contract-cases.json)

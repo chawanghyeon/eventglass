@@ -1,0 +1,129 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+project="eventglass-recovery-$$"
+artifacts=$(mktemp -d "$ROOT/.tools/eventglass-recovery.XXXXXX")
+dd if=/dev/urandom of="$artifacts/attestation.key" bs=32 count=1 2>/dev/null
+chmod 600 "$artifacts/attestation.key"
+compose="deploy/recovery/compose.yaml"
+network="${project}_default"
+cert_volume="${project}_minio-certs"
+cleanup() {
+  docker compose -p "$project" -f "$compose" --profile restore down --volumes --remove-orphans >/dev/null 2>&1 || true
+  rm -rf "$artifacts"
+}
+trap cleanup EXIT INT TERM
+
+docker compose -p "$project" -f "$compose" up -d --build --wait postgres minio
+docker compose -p "$project" -f "$compose" run --rm minio-init
+docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:recovery-build .
+
+run_eventglass() {
+  database_host=$1
+  shift
+  database_url="postgres://postgres:local-test-only@${database_host}:5432/eventglass?sslmode=disable" # pragma: allowlist secret -- disposable fixture
+  docker run --rm --platform linux/arm64 --network "$network" \
+    -e EVENTGLASS_DATABASE_URL="$database_url" \
+    -e EVENTGLASS_S3_ENDPOINT=https://minio:9000 \
+    -e EVENTGLASS_S3_REGION=us-east-1 \
+    -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
+    -e EVENTGLASS_S3_PREFIX=recovery-test \
+    -e AWS_ACCESS_KEY_ID=eventglass-local \
+    -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+    -e AWS_CA_BUNDLE=/certs/public.crt \
+    -v "$cert_volume:/certs:ro" -v "$artifacts:/reports" \
+    eventglass-go:recovery-build /out/eventglass-go "$@"
+}
+
+run_eventglass postgres migrate
+object_sha=$(printf %s restored-reference | sha256sum | awk '{print $1}')
+docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -v ON_ERROR_STOP=1 \
+  -c "INSERT INTO installations(singleton,installation_id,storage_generation,schema_version,storage_identity) VALUES(true,'00000000-0000-4000-8000-00000000a001',1,1,'recovery-fixture')" \
+  -c "INSERT INTO tenants(tenant_id,name) VALUES(7001,'Recovery tenant')" \
+  -c "INSERT INTO users(user_id,email_normalized,password_phc,is_installation_admin) VALUES(7001,'recovery@example.invalid','placeholder-password-hash-for-recovery-test',true)" \
+  -c "INSERT INTO memberships(tenant_id,user_id,role) VALUES(7001,7001,'admin')" \
+  -c "INSERT INTO sessions(token_hash,user_id,csrf_hash,credential_revision,storage_generation,expires_at) VALUES(decode(repeat('11',32),'hex'),7001,decode(repeat('22',32),'hex'),1,1,clock_timestamp()+interval '1 day')" \
+  -c "INSERT INTO object_intents(intent_id,installation_id,tenant_id,storage_generation,object_key,kind,state,owner,fence,expires_at,expected_bytes,expected_sha256,uploaded_bytes,uploaded_sha256) VALUES('00000000-0000-4000-8000-00000000b001','00000000-0000-4000-8000-00000000a001',7001,1,'referenced.bin','journal','referenced','recovery-seed',1,clock_timestamp()+interval '30 days',18,'$object_sha',18,'$object_sha')"
+printf %s restored-reference | docker compose -p "$project" -f "$compose" run --rm -T --entrypoint /bin/sh minio-init -c \
+  "mc --insecure alias set local https://minio:9000 eventglass-local eventglass-local-secret >/dev/null && mc --insecure pipe local/eventglass-g00/recovery-test/referenced.bin" >/dev/null
+
+backup_id=00000000-0000-4000-8000-00000000c001
+verification_id=00000000-0000-4000-8000-00000000d001
+run_eventglass postgres backup register --backup-id "$backup_id" --external-tool-id "eventglass/$backup_id" \
+  --installation-id 00000000-0000-4000-8000-00000000a001 --generation 1 \
+  --base-start 2026-01-01T00:00:00Z --base-end 2026-01-02T00:00:00Z \
+  --earliest-recoverable 2026-01-01T00:00:00Z --latest-recoverable 2099-01-01T00:00:00Z \
+  --protected-until 2099-01-01T00:00:00Z
+
+docker compose -p "$project" -f "$compose" exec -T --user postgres postgres pgbackrest --stanza=eventglass stanza-create
+docker compose -p "$project" -f "$compose" exec -T postgres touch /var/lib/postgresql/data/.pgbackrest-ready
+docker compose -p "$project" -f "$compose" exec -T --user postgres postgres pgbackrest --stanza=eventglass check
+backup_started=$(date +%s)
+docker compose -p "$project" -f "$compose" exec -T --user postgres postgres pgbackrest --stanza=eventglass --type=full backup
+backup_seconds=$(($(date +%s)-backup_started))
+
+docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -v ON_ERROR_STOP=1 \
+  -c "CREATE TABLE recovery_wal_probe(id integer primary key,value text not null)" \
+  -c "INSERT INTO recovery_wal_probe VALUES(1,'wal-restored')"
+target_lsn=$(docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -At -c "SELECT pg_current_wal_lsn()" | tr -d '\r')
+docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -At -c "SELECT pg_switch_wal()" >/dev/null
+docker compose -p "$project" -f "$compose" exec -T --user postgres postgres pgbackrest --stanza=eventglass check
+printf %s newer-not-authorized | docker compose -p "$project" -f "$compose" run --rm -T --entrypoint /bin/sh minio-init -c \
+  "mc --insecure alias set local https://minio:9000 eventglass-local eventglass-local-secret >/dev/null && mc --insecure pipe local/eventglass-g00/recovery-test/newer-unreferenced.bin" >/dev/null
+
+docker compose -p "$project" -f "$compose" stop postgres
+docker compose -p "$project" -f "$compose" --profile restore up -d restored-postgres missing-postgres
+restore_started=$(date +%s)
+for service in restored-postgres missing-postgres; do
+  docker compose -p "$project" -f "$compose" exec -T --user postgres "$service" \
+    pgbackrest --stanza=eventglass --type=lsn --target="$target_lsn" --target-action=promote restore
+  docker compose -p "$project" -f "$compose" exec -T --detach --user postgres "$service" \
+    postgres -D /var/lib/postgresql/data -c listen_addresses='*'
+done
+for service in restored-postgres missing-postgres; do
+  ready=0
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if docker compose -p "$project" -f "$compose" exec -T "$service" pg_isready -U postgres -d eventglass >/dev/null 2>&1; then ready=1; break; fi
+    sleep 1
+  done
+  test "$ready" = 1
+  test "$(docker compose -p "$project" -f "$compose" exec -T "$service" psql -U postgres -d eventglass -At -c "SELECT value FROM recovery_wal_probe WHERE id=1" | tr -d '\r')" = wal-restored
+done
+restore_seconds=$(($(date +%s)-restore_started))
+
+run_eventglass restored-postgres restore verify --backup-id "$backup_id" --expected-generation 1 \
+  --verification-id "$verification_id" --recovery-lsn "$target_lsn" --report /reports/recovery.json \
+  --attestation-key-file /reports/attestation.key
+run_eventglass restored-postgres restore activate --expected-generation 1 --report /reports/recovery.json \
+  --attestation-key-file /reports/attestation.key
+restored_database_url="postgres://postgres:local-test-only@restored-postgres:5432/eventglass?sslmode=disable" # pragma: allowlist secret -- disposable fixture
+docker run --rm --platform linux/arm64 --network "$network" \
+  -e EVENTGLASS_RECOVERY_REQUIRED=1 \
+  -e EVENTGLASS_DATABASE_URL="$restored_database_url" \
+  -e EVENTGLASS_S3_ENDPOINT=https://minio:9000 \
+  -e AWS_ACCESS_KEY_ID=eventglass-local -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+  -e AWS_CA_BUNDLE=/certs/public.crt -v "$cert_volume:/certs:ro" -w /src \
+  eventglass-go:recovery-build go test -tags=recovery -count=1 -v ./tests/recovery
+
+docker compose -p "$project" -f "$compose" up -d --wait postgres
+run_eventglass postgres backup verify --expected-generation 1 --report /reports/recovery.json \
+  --attestation-key-file /reports/attestation.key
+live_state=$(docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -At \
+  -c "SELECT recovery_state||':'||storage_generation::text||':'||(gc_verified_until>clock_timestamp())::text FROM installations WHERE singleton" | tr -d '\r')
+test "$live_state" = ready:1:true
+
+docker compose -p "$project" -f "$compose" run --rm -T --entrypoint /bin/sh minio-init -c \
+  "mc --insecure alias set local https://minio:9000 eventglass-local eventglass-local-secret >/dev/null && mc --insecure rm --force local/eventglass-g00/recovery-test/referenced.bin" >/dev/null
+if run_eventglass missing-postgres restore verify --backup-id "$backup_id" --expected-generation 1 \
+  --verification-id 00000000-0000-4000-8000-00000000d002 --recovery-lsn "$target_lsn" --report /reports/missing.json \
+  --attestation-key-file /reports/attestation.key; then
+  echo "missing referenced object unexpectedly verified" >&2
+  exit 1
+fi
+state=$(docker compose -p "$project" -f "$compose" exec -T missing-postgres psql -U postgres -d eventglass -At \
+  -c "SELECT recovery_state||':'||alerts_paused::text FROM installations WHERE singleton" | tr -d '\r')
+test "$state" = verification_required:true
+
+echo "recovery evidence: pgbackrest=2.59.1 backup_seconds=$backup_seconds restore_two_clusters_seconds=$restore_seconds target_lsn=$target_lsn referenced_objects=1 referenced_bytes=18 missing_object=fail_closed"

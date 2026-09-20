@@ -185,8 +185,8 @@ object protection time. Any retained manual/base backup extends horizon until
 explicitly expired; never claim8days protects an indefinitely retained backup.
 
 The implemented gate is installation `gc_safe_before` plus `gc_verified_until`:
-both default NULL. M4 must establish the horizon and freshness under coordinated
-backup verification. There is deliberately no CLI/env switch to bypass it.
+both default NULL. A signed M4 isolated-restore report establishes the horizon
+for at most 24 hours. There is deliberately no CLI/env switch to bypass it.
 GC chooses bounded eligible candidates before lane locking, rechecks eligibility
 after locks, and confirms the exact `gc_attempt`; it never updates the entire
 retired-intent table ahead of lane locks. Tombstone resweeps remain fail-closed
@@ -219,15 +219,16 @@ status degraded (ingestion can remain ready with explicit RPO warning); oldest
 restorable age and last isolated rehearsal displayed. Every24h perform isolated
 restore rehearsal with outgoing network denied and alerts paused.
 
-Planned CLI:
+Implemented recovery CLI (see the [operator runbook](../operations/recovery.md)):
 
 ```text
 eventglass-go doctor --read-only
 eventglass-go repair inspect --tenant <id> --lane <0..15>
 eventglass-go repair retry --job <uuid> --expected-fence <n>
-eventglass-go backup verify --backup-id <id>
-eventglass-go restore verify --report <owned-local-path>
-eventglass-go restore activate --expected-generation <n> --verification <id>
+eventglass-go backup register --backup-id <uuid> ...
+eventglass-go restore verify --backup-id <uuid> --expected-generation <n> --verification-id <uuid> --recovery-lsn <lsn> --report <new-private-path> --attestation-key-file <private-key>
+eventglass-go backup verify --expected-generation <n> --report <private-path> --attestation-key-file <private-key>
+eventglass-go restore activate --expected-generation <n> --report <private-path> --attestation-key-file <private-key>
 ```
 
 Inspect is default; retry never skips a seq/changes selected records. No force

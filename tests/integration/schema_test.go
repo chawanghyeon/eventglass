@@ -88,7 +88,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest) != 14 {
+	if len(manifest) != 15 {
 		t.Fatalf("migration count=%d", len(manifest))
 	}
 	conn, err := pgx.Connect(ctx, env["EVENTGLASS_DATABASE_URL"])
@@ -138,6 +138,9 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	exec(`DELETE FROM object_intents WHERE intent_id='00000000-0000-4000-8000-000000000399'`)
 	exec(manifest[10].DownSQL)
 	exec(`DELETE FROM ingest_batches WHERE recovery_state='retired'`)
+	// Recovery verification references the 0010 backup table. Preserve the
+	// real reverse-migration order while exercising the older upgrade shape.
+	exec(manifest[14].DownSQL)
 	exec(manifest[9].DownSQL)
 	exec(manifest[8].DownSQL)
 	exec(manifest[7].DownSQL)

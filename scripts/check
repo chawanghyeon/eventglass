@@ -207,6 +207,7 @@ case "${1:-}" in
   resource) docker_required resource; missing "resource verification" ;;
   scale) docker_required scale; missing "scale verification" ;;
   comparison) docker_required comparison; missing "comparison verification" ;;
+  recovery) docker_required recovery; ./scripts/check-recovery ;;
   release) docker_required release; missing "release verification" ;;
-  *) echo "usage: ./scripts/check {unit|codegen|architecture|focused PACKAGE|journal-bench|perf|contracts|integration|sdk|crash|web|resource|scale|comparison|release}" >&2; exit 2 ;;
+  *) echo "usage: ./scripts/check {unit|codegen|architecture|focused PACKAGE|journal-bench|perf|contracts|integration|sdk|crash|web|recovery|resource|scale|comparison|release}" >&2; exit 2 ;;
 esac

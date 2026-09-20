@@ -1,0 +1,97 @@
+services:
+  postgres:
+    build:
+      context: ../..
+      dockerfile: deploy/recovery/Dockerfile
+    image: eventglass-pgbackrest:2.59.1
+    environment:
+      POSTGRES_DB: eventglass
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local-test-only # pragma: allowlist secret -- disposable fixture
+      PGBACKREST_REPO1_S3_KEY: eventglass-local
+      PGBACKREST_REPO1_S3_KEY_SECRET: eventglass-local-secret # pragma: allowlist secret -- disposable fixture
+    command: ["postgres", "-c", "synchronous_commit=on", "-c", "archive_mode=on", "-c", "archive_command=test ! -f /var/lib/postgresql/data/.pgbackrest-ready || pgbackrest --stanza=eventglass archive-push %p"]
+    ports:
+      - "127.0.0.1::5432"
+    volumes:
+      - source-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d eventglass"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  restored-postgres:
+    image: eventglass-pgbackrest:2.59.1
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      PGBACKREST_REPO1_S3_KEY: eventglass-local
+      PGBACKREST_REPO1_S3_KEY_SECRET: eventglass-local-secret # pragma: allowlist secret -- disposable fixture
+    entrypoint: ["sleep", "infinity"]
+    ports:
+      - "127.0.0.1::5432"
+    volumes:
+      - restored-data:/var/lib/postgresql/data
+    profiles: ["restore"]
+
+  missing-postgres:
+    image: eventglass-pgbackrest:2.59.1
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      PGBACKREST_REPO1_S3_KEY: eventglass-local
+      PGBACKREST_REPO1_S3_KEY_SECRET: eventglass-local-secret # pragma: allowlist secret -- disposable fixture
+    entrypoint: ["sleep", "infinity"]
+    ports:
+      - "127.0.0.1::5432"
+    volumes:
+      - missing-data:/var/lib/postgresql/data
+    profiles: ["restore"]
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: eventglass-local
+      MINIO_ROOT_PASSWORD: eventglass-local-secret # pragma: allowlist secret -- disposable fixture
+    ports:
+      - "127.0.0.1::9000"
+    volumes:
+      - object-data:/data
+      - minio-certs:/root/.minio/certs:ro
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+
+  cert-init:
+    image: eventglass-pgbackrest:2.59.1
+    user: root
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /certs/public.crt ]; then
+          openssl req -x509 -newkey rsa:2048 -nodes -days 2 \
+            -subj /CN=minio -addext subjectAltName=DNS:minio,DNS:localhost,IP:127.0.0.1 \
+            -keyout /certs/private.key -out /certs/public.crt >/dev/null 2>&1
+          chmod 600 /certs/private.key
+        fi
+    volumes:
+      - minio-certs:/certs
+
+  minio-init:
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+    depends_on: [minio]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          mc --insecure alias set local https://minio:9000 eventglass-local eventglass-local-secret >/dev/null 2>&1
+          if mc --insecure mb --ignore-existing local/eventglass-g00 && mc --insecure mb --ignore-existing local/eventglass-backup; then exit 0; fi
+          sleep 1
+        done
+
+volumes:
+  source-data:
+  restored-data:
+  missing-data:
+  object-data:
+  minio-certs:

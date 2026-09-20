@@ -7,13 +7,14 @@ for an implementing agent, including GPT Luna, without conversation history.
 Do not start by redesigning the system or implementing every gate at once.
 
 Current handoff: architecture/query/Live lifetime hardening, G05 including U4,
-M1 compaction, M2 retention/GC, and M3's bounded verified Range/block cache are
-implemented and have their scoped executable evidence. U4 passed disposable
+M1 compaction, M2 retention/GC, M3's bounded verified Range/block cache, and M4
+coordinated PostgreSQL/WAL/S3 recovery are implemented and have scoped executable evidence. U4 passed disposable
 PostgreSQL/MinIO integration and the final non-root ARM64 image browser flow. M3
 passed real MinIO and pinned-DuckDB cold/warm request and byte assertions for scan,
-payload, and reducer child reads. M4 is the next backend implementation packet.
-Physical GC remains fail-closed
-until M4 provides a fresh verified backup horizon. Project, key, Issue, retained-occurrence and SDK-outcome
+payload, and reducer child reads. M4 passed an actual pgBackRest base+WAL restore
+into two independent PGDATA volumes, full referenced-object reads, signed report
+import and missing-object failure. R1 is the next packet. Physical GC remains
+fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises
 the actual ingest/publication/query runtime. Check `api/implemented-routes.json` before wiring a feature.
 Reuse `query.Submission`/`query.Awaiter` for the existing session-authorized
@@ -122,7 +123,7 @@ without it, finish local packets and report the exact unverified gate.
 Suggested continuation instruction:
 
 > Read docs/implementation/README.md and work-plan.md. Inspect the current tree
-> and select M4 (coordinated recovery) from the actual
+> and select R1 (sustained resource limits) from the actual
 > capability gaps, including its negative tests,
 > relevant verification, documentation, commit and push. Preserve DESIGN.md and
 > ARCHITECTURE.md contracts. Use ARM64 and the pinned DuckDB 2.0 build. Do not

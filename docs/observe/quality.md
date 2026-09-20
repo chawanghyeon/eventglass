@@ -29,7 +29,7 @@ pass locally. On 2026-09-21, `./scripts/check integration` passed against dispos
 PostgreSQL/MinIO and `./scripts/check-browser` passed the final non-root ARM64 image
 Playwright flow in 2.6 seconds. These runs close U4/G05, not a release gate.
 `check-browser` now uses the final non-root ARM64 image and production assets,
-not a Vite development server. Release still requires M4/R1-R4 evidence.
+not a Vite development server. Release still requires R1-R4 evidence.
 
 Use `./scripts/check sdk` for pinned offline and live SDK contracts. Use
 `./scripts/check integration` for disposable PostgreSQL/MinIO schema and S3
@@ -98,6 +98,19 @@ query inputs use the Range gateway. This closes M3's request/byte gate only. The
 small correctness fixture did not isolate peak RSS or allocations; R1 owns Linux
 cgroup memory evidence, and these numbers are not a general latency or throughput
 improvement claim.
+
+M4's `./scripts/check recovery` builds the checksum-pinned pgBackRest 2.59.1
+source for Linux ARM64, writes a PostgreSQL 17 full backup and continuous WAL to
+a separate TLS MinIO prefix, and restores two independent PGDATA volumes to the
+same explicit LSN. On 2026-09-21 the full backup took 2 seconds and both restores
+took 2 seconds in the local Colima fixture. The restored WAL-only row and one
+18-byte referenced object passed; a newer unreferenced object was not adopted.
+Activation changed storage generation 1 to 2, revoked sessions, and kept alerts
+paused. A private HMAC-signed report refreshed the live generation-1 GC horizon;
+deleting the referenced object made the second restore fail with S3 404 and stay
+`verification_required`. These timings are fixture observations, not RPO/HA or
+throughput claims. The operational sequence and key separation are documented in
+[`docs/operations/recovery.md`](../operations/recovery.md).
 
 ## Release and workflow
 
