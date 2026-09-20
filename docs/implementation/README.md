@@ -6,16 +6,16 @@ implementation and release gates are not complete. Product baseline inspected:
 for an implementing agent, including GPT Luna, without conversation history.
 Do not start by redesigning the system or implementing every gate at once.
 
-Current handoff: architecture/query/Live lifetime hardening and A1 alert
-evaluation are implemented; continue with A2 in work-plan.md, not a new
+Current handoff: architecture/query/Live lifetime hardening and A1–A2 alert
+evaluation/delivery are implemented; continue with U3 in work-plan.md, not a new
 architecture rewrite. U1 means the
 UI foundation and component contracts, not working project/Issue backend routes.
 Those remain U3. Check `api/implemented-routes.json` before wiring a feature.
 Reuse `query.Submission`/`query.Awaiter` for the existing session-authorized
 query path. A1 has a separate revision-bound rule principal and creates durable
-delivery rows without network I/O. A2 must claim and send those rows with the
-specified retry, signature, redirect, DNS and credential-rotation checks. Keep
-HTTP DTOs and result mapping in api.
+delivery rows without network I/O. A2 claims and sends those rows with fenced
+leases, exact-body signatures, bounded retries, redirect/DNS/IP defenses, and
+fail-closed credential handling. Keep HTTP DTOs and result mapping in api.
 
 ## Reading and authority
 

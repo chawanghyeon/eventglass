@@ -21,5 +21,7 @@
   "PATCH /v1/destinations/{id}",
   "GET /v1/alerts",
   "POST /v1/alerts",
-  "PATCH /v1/alerts/{id}"
+  "PATCH /v1/alerts/{id}",
+  "GET /v1/deliveries",
+  "POST /v1/deliveries/{id}/retry"
 ]

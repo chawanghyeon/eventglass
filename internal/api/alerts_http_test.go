@@ -3,6 +3,7 @@ package api
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAlertListCursorBindsScopeAndPrincipal(t *testing.T) {
@@ -30,6 +31,27 @@ func TestAlertListCursorBindsScopeAndPrincipal(t *testing.T) {
 	}, token[len(token)-1:])
 	if _, err := handler.decodeAlertCursor(tampered, 11, 22, 33); err == nil {
 		t.Fatal("tampered cursor accepted")
+	}
+}
+
+func TestDeliveryListCursorBindsFiltersAndPrincipal(t *testing.T) {
+	handler := &ManagementHandler{config: ManagementConfig{LoginBucketKey: [32]byte{2}}}
+	created := time.UnixMicro(1_700_000_000_123_456).UTC()
+	deliveryID := "00000000-0000-4000-8000-000000000124"
+	alertID := "00000000-0000-4000-8000-000000000125"
+	token, err := handler.encodeDeliveryCursor(11, 22, 33, alertID, "failed", created, deliveryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedTime, decodedID, err := handler.decodeDeliveryCursor(token, 11, 22, 33, alertID, "failed")
+	if err != nil || decodedID != deliveryID || !decodedTime.Equal(created) {
+		t.Fatalf("decoded=%v %q err=%v", decodedTime, decodedID, err)
+	}
+	if _, _, err := handler.decodeDeliveryCursor(token, 11, 22, 33, alertID, "queued"); err == nil {
+		t.Fatal("delivery cursor accepted for another filter")
+	}
+	if _, _, err := handler.decodeDeliveryCursor(token, 11, 22, 34, alertID, "failed"); err == nil {
+		t.Fatal("delivery cursor accepted for another principal")
 	}
 }
 

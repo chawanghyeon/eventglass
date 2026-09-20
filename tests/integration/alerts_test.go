@@ -37,6 +37,10 @@ func setupAlertFixture(t *testing.T, base int64) *alertFixture {
 	}
 	t.Cleanup(pool.Close)
 	f := &alertFixture{pool: pool, tenant: base, project: base*10 + 1, user: base*10 + 2, sequence: base * 100}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `UPDATE deliveries SET state='canceled',owner=NULL,lease_until=NULL WHERE tenant_id=$1 AND state IN ('queued','running')`, f.tenant)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM audit_events WHERE tenant_id=$1`, f.tenant)
+	})
 	f.operations, _ = control.NewAlertOperations(pool)
 	_, err = pool.Exec(ctx, `INSERT INTO installations(singleton,installation_id,storage_generation,schema_version,storage_identity) VALUES(true,'00000000-0000-4000-8000-00000000f001',1,1,'alert-integration') ON CONFLICT(singleton) DO NOTHING`)
 	if err != nil {

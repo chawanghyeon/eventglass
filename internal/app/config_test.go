@@ -28,6 +28,10 @@ func TestLoadConfigAndRejectUnknownRoles(t *testing.T) {
 	if _, err := LoadConfigFromEnv(lookup); err == nil {
 		t.Fatal("API role accepted a missing alert encryption key")
 	}
+	values["EVENTGLASS_ROLES"] = "worker"
+	if _, err := LoadConfigFromEnv(lookup); err == nil {
+		t.Fatal("worker role accepted a missing alert encryption key")
+	}
 	values["EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE"] = "/run/secrets/eventglass-alert-encryption-key"
 	values["EVENTGLASS_ROLES"] = "api,mystery"
 	if _, err := LoadConfigFromEnv(lookup); err == nil {

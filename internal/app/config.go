@@ -87,8 +87,11 @@ func (config Config) Validate() error {
 			return fmt.Errorf("unsupported role %q", role)
 		}
 	}
-	if config.Roles[RoleAPI] && (config.AuthHashKeyFile == "" || config.TokenKeyFile == "" || config.AlertEncryptionKeyFile == "") {
-		return errors.New("EVENTGLASS_AUTH_HASH_KEY_FILE, EVENTGLASS_TOKEN_KEY_FILE, and EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE are required for the API role")
+	if config.Roles[RoleAPI] && (config.AuthHashKeyFile == "" || config.TokenKeyFile == "") {
+		return errors.New("EVENTGLASS_AUTH_HASH_KEY_FILE and EVENTGLASS_TOKEN_KEY_FILE are required for the API role")
+	}
+	if (config.Roles[RoleAPI] || config.Roles[RoleWorker]) && config.AlertEncryptionKeyFile == "" {
+		return errors.New("EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE is required for API and worker roles")
 	}
 	parsed, err := url.Parse(config.PublicURL)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil || (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {

@@ -35,6 +35,7 @@ type Runtime struct {
 	alertControl   *control.AlertOperations
 	alertCipher    *alerts.SecretCipher
 	alertEvaluator *alerts.Evaluator
+	deliveryWorker *alerts.DeliveryWorker
 	queryWorker    *DurableQueryWorkflow
 	queryPlanner   *DurableQueryCoordinator
 	converter      *DurableConversionWorkflow
@@ -103,7 +104,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	}
 	var runtimeAlertCipher *alerts.SecretCipher
 	var runtimeAlertOperations *control.AlertOperations
-	if config.Roles[RoleAPI] {
+	if config.Roles[RoleAPI] || config.Roles[RoleWorker] {
 		alertKey, err := readHexSecret(config.AlertEncryptionKeyFile)
 		if err != nil {
 			return fail(fmt.Errorf("read alert encryption key: %w", err))
@@ -247,6 +248,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		runtime.publication, runtime.workerOwner = operations, owner
 		runtime.converter = &DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{Gate: nativeTasks}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
 		runtime.publisher = &DurablePublicationWorkflow{Control: operations, Store: store}
+		runtime.deliveryWorker = &alerts.DeliveryWorker{Control: runtime.alertControl, Cipher: runtime.alertCipher, Sender: alerts.Sender{}, InstallationID: installation.InstallationID, StorageGeneration: installation.StorageGeneration, Owner: owner}
 	}
 	if config.Roles[RoleScheduler] || config.Roles[RoleWorker] {
 		if runtime.queryControl == nil {

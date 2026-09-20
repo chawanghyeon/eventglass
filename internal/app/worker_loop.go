@@ -17,16 +17,18 @@ const (
 )
 
 func (runtime *Runtime) runWorker(ctx context.Context) error {
+	work := []func(context.Context) (bool, error){runtime.runOnePublication, runtime.runOneDelivery, runtime.runOneConversion, runtime.runOneQueryCoordinator, runtime.runOneQuery}
+	next := 0
 	for ctx.Err() == nil {
-		progressed, err := runtime.runOnePublication(ctx)
-		if err == nil && !progressed {
-			progressed, err = runtime.runOneConversion(ctx)
-		}
-		if err == nil && !progressed {
-			progressed, err = runtime.runOneQueryCoordinator(ctx)
-		}
-		if err == nil && !progressed {
-			progressed, err = runtime.runOneQuery(ctx)
+		var progressed bool
+		var err error
+		for offset := range work {
+			index := (next + offset) % len(work)
+			progressed, err = work[index](ctx)
+			if err != nil || progressed {
+				next = (index + 1) % len(work)
+				break
+			}
 		}
 		if ctx.Err() != nil {
 			break
@@ -48,6 +50,13 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (runtime *Runtime) runOneDelivery(ctx context.Context) (bool, error) {
+	if runtime.deliveryWorker == nil {
+		return false, nil
+	}
+	return runtime.deliveryWorker.RunOnce(ctx)
 }
 
 func (runtime *Runtime) runOneQueryCoordinator(ctx context.Context) (bool, error) {

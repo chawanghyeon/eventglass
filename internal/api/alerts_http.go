@@ -23,6 +23,8 @@ func (handler *ManagementHandler) registerAlertRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/alerts", handler.listAlerts)
 	mux.HandleFunc("POST /v1/alerts", handler.createAlert)
 	mux.HandleFunc("PATCH /v1/alerts/{id}", handler.updateAlert)
+	mux.HandleFunc("GET /v1/deliveries", handler.listDeliveries)
+	mux.HandleFunc("POST /v1/deliveries/{id}/retry", handler.retryDelivery)
 }
 
 func (handler *ManagementHandler) listDestinations(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +323,7 @@ func ruleDTO(value control.AlertRule) (generated.Rule, error) {
 	}
 	return dto, nil
 }
+
 func parsePositiveID(value string) (int64, bool) {
 	parsed, err := strconv.ParseInt(value, 10, 64)
 	return parsed, err == nil && parsed > 0

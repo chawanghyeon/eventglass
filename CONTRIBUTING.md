@@ -47,8 +47,8 @@ exactly migrated PostgreSQL schema and matching S3 identity. Configure
 optional endpoint/prefix/path-style settings. The API role also requires
 `EVENTGLASS_AUTH_HASH_KEY_FILE`, whose file contains one random 32-byte value as
 64 lowercase hexadecimal characters, and `EVENTGLASS_TOKEN_KEY_FILE` with an
-independent value in the same format for signed read/cursor tokens. Alert API
-management additionally requires `EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE` with a
+independent value in the same format for signed read/cursor tokens. API and
+worker roles additionally require `EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE` with a
 third independent value in the same format; PostgreSQL stores only its key ID
 and AES-256-GCM ciphertext for destination secrets. A fresh installation additionally uses
 `EVENTGLASS_BOOTSTRAP_TOKEN_FILE` in the same format; startup stores only its
@@ -56,8 +56,9 @@ hash, exposes the recoverable setup surface, and keeps readiness and ingestion
 closed until setup commits. Production management cookies require HTTPS.
 `EVENTGLASS_INSECURE_COOKIE=true` is accepted only with an explicit loopback HTTP
 public URL for local development. AWS credentials use the default SDK chain.
-The scheduler role runs retention and A1 alert evaluation; webhook delivery and
-production deployment remain later gates.
+The scheduler role runs retention and alert evaluation. The worker role runs
+publication, queries, and fenced at-least-once webhook delivery. Production
+deployment remains a later gate.
 
 `./scripts/check crash` cross-compiles the crash and ingress-resource tests for
 Linux ARM64, then runs them with CPU1/512MiB/no-swap limits against disposable
