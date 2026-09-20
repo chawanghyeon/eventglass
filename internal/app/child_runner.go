@@ -30,6 +30,7 @@ func (runner ProcessConversionRunner) Run(ctx context.Context, request engine.Co
 		return engine.ConversionSummary{}, err
 	}
 	defer release()
+	request.NativeMemoryBytes = runner.Gate.memoryLimit(request.NativeMemoryBytes)
 	binary := runner.BinaryPath
 	if binary == "" {
 		var err error

@@ -1,5 +1,5 @@
 import type { Kind } from "../../api/types";
-import { SearchWorkspace } from "../logs/SearchWorkspace";
+import { SearchWorkspace } from "../search/SearchWorkspace";
 
 const exploreKinds: Kind[] = ["error", "log", "transaction"];
 

@@ -56,6 +56,9 @@ func (operations *MaintenanceOperations) SwapCompaction(ctx context.Context, aut
 	if state != "running" || owner != authority.Owner || fence != authority.Fence || storageGeneration != authority.StorageGeneration || manifestSHA == nil || len(encoded) == 0 {
 		return CompactionSwapResult{}, ErrMaintenanceFence
 	}
+	if err := lockRunningMaintenance(ctx, tx, authority); err != nil {
+		return CompactionSwapResult{}, err
+	}
 	digest := sha256.Sum256(encoded)
 	if hex.EncodeToString(digest[:]) != *manifestSHA {
 		return CompactionSwapResult{}, errors.New("compaction output manifest checksum mismatch")

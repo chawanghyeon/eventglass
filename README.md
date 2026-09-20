@@ -4,7 +4,7 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00 engine/storage/isolation contracts, G01 SDK fixture/normalization contracts, all G02 packets I1–I5 (durable ingestion, bounded runtime, lease fencing, and the Linux ARM64 crash/resource gate), all G03 packets P1–P4 (publication catalog, isolated paired-Parquet conversion, fenced Prepare/Publish workers, Issue lifecycle, and publication crash evidence), all G04 packets Q1–Q5 (recoverable setup and auth, generated v1 wire contracts, typed query compilation, authorized snapshots and signed tokens, fenced deterministic query execution and exact aggregation, all public rows/aggregate/detail APIs), all G05 packets U1–U3 and A1–A2 (operator UI, hardened resumable Live, durable alerts and delivery, connected project/Issue/system routes, and real ARM64 browser evidence), M1 (fenced automatic paired-Parquet compaction with generation-safe catalog swaps), and M2 (monotonic retention rewrites, bounded metadata cleanup, backup-aware object GC, and late-PUT tombstone resweeps) are complete. M3 is the first incomplete packet; G06–G08 remain incomplete overall, so the repository does not yet advertise a deployable Go release. OpenAPI alone does not mean a route is implemented. See [`DESIGN.md`](DESIGN.md), [`SDK-SUPPORT.md`](SDK-SUPPORT.md), and [`CONTRIBUTING.md`](CONTRIBUTING.md) for the normative contract, verified SDK scope, and commands.
+Current status: G00–G04 have implemented baselines and scoped executable evidence. G05 has connected setup/login, project/key, Issue, search/Live, SDK-outcome and read-only alert screens, plus durable alert APIs. Repository review reopened G05 closure: U4 tracks missing user/system/editor surfaces. M1/M2 compaction and retention/GC are implemented, but physical GC is frozen until M4 supplies a fresh coordinated backup attestation. M3 (production Range/block cache), M4 (recovery), and R1–R4 (sustained resources/scaling/cost/release) remain incomplete. Neither performance superiority nor a deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
@@ -46,8 +46,9 @@ Chromium. M1 adds pressure-aware bounded compaction reservations, paired-file
 identity verification in the pinned DuckDB 2.0 child, fenced output intents,
 and an atomic generation swap that preserves old readers without blocking
 unrelated publication. M2 adds received-time retention rewrites and full expiry,
-snapshot- and backup-aware mark/delete/confirm GC, journal retirement summaries,
-an eight-day recovery grace, and late-PUT resweeps. Block cache and backup/PITR
+snapshot- and backup-interlocked mark/delete/confirm GC, journal retirement summaries,
+an eight-day recovery grace, and late-PUT resweeps. Physical deletion requires an unexpired verified backup horizon; it does not
+interpret an empty backup inventory as safety. Block cache and backup/PITR
 recovery remain later gates.
 Pure-Go checks do not rebuild DuckDB.
 

@@ -14,10 +14,6 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
-type QueryRunner interface {
-	Run(context.Context, engine.QueryRequest) (engine.QuerySummary, error)
-}
-
 type ProcessQueryRunner struct {
 	BinaryPath string
 	Gate       *NativeTaskGate
@@ -77,6 +73,7 @@ func (runner ProcessQueryRunner) Run(ctx context.Context, request engine.QueryRe
 		return engine.QuerySummary{}, err
 	}
 	defer release()
+	request.NativeMemoryBytes = runner.Gate.memoryLimit(request.NativeMemoryBytes)
 	binary := runner.BinaryPath
 	if binary == "" {
 		var err error

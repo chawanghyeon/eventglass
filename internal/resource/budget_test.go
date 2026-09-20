@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestBudgetSharedOwnershipDrainAndOverflow(t *testing.T) {
@@ -45,5 +46,35 @@ func TestBudgetSharedOwnershipDrainAndOverflow(t *testing.T) {
 	}
 	if err := b.Drain(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBudgetWaitingAdmissionReleaseAndDrain(t *testing.T) {
+	for _, drain := range []bool{false, true} {
+		b := NewBudget(1)
+		owner, _ := b.Acquire(1)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		result := make(chan error, 1)
+		go func() {
+			permit, err := b.AcquireContext(ctx, 1)
+			if permit != nil {
+				permit.Release()
+			}
+			result <- err
+		}()
+		if drain {
+			canceled, stop := context.WithCancel(ctx)
+			stop()
+			_ = b.Drain(canceled)
+		}
+		owner.Release()
+		err := <-result
+		cancel()
+		if drain && !errors.Is(err, ErrDraining) || !drain && err != nil {
+			t.Fatalf("drain=%v admission=%v", drain, err)
+		}
+		if b.Used() != 0 {
+			t.Fatal("waiting admission leaked reservation")
+		}
 	}
 }

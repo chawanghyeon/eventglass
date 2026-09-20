@@ -1,3 +1,5 @@
+import { useCursorPage } from "../../shared/query/useCursorPage";
+import { CursorPager } from "../../shared/ui/CursorPager";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
@@ -17,7 +19,7 @@ export function IssueDetailPage() {
   const key = ["issue", session.user_id, tenant.tenant_id, projectID, id];
   const valid = /^[0-9a-f]{64}$/.test(id) && /^[1-9][0-9]*$/.test(projectID);
   const issue = useQuery({ queryKey: key, queryFn: () => api.issue(tenant.tenant_id, projectID, id), enabled: valid });
-  const occurrences = useQuery({ queryKey: ["issue-occurrences", ...key], queryFn: () => api.issueOccurrences(tenant.tenant_id, projectID, id), enabled: valid });
+  const occurrences = useCursorPage(["issue-occurrences", ...key], (cursor, signal) => api.issueOccurrences(tenant.tenant_id, projectID, id, cursor, signal), valid);
   const operator = tenant.role === "admin" || tenant.project_grants.some((grant) => grant.project_id === projectID && grant.role === "operator");
   const update = useMutation({
     mutationFn: (status: Issue["status"]) => api.updateIssue(tenant.tenant_id, projectID, id, issue.data!.revision, status, session.csrf_token),
@@ -45,6 +47,7 @@ export function IssueDetailPage() {
     {occurrences.isPending ? <p role="status">Loading occurrences…</p> : null}
     <StatusPanel error={occurrences.error} onRetry={() => void occurrences.refetch()} />
     {occurrences.data?.items.length === 0 ? <StatusPanel empty="No retained occurrence metadata is available." /> : null}
+    <CursorPager paging={occurrences.paging} label="Occurrences" />
     <div className="stack">{occurrences.data?.items.map((occurrence) => occurrence.detail_available
       ? <Link className="record-card" key={occurrence.record_id} to={`/logs/${occurrence.record_id}?project=${occurrence.project_id}`}><strong>{occurrence.record_id.slice(0, 16)}</strong><footer><span>Event {formatInt64(occurrence.event_us)}.{occurrence.ns.toString().padStart(3, "0")}</span><span>{occurrence.release || "No release"}</span></footer></Link>
       : <article className="record-card muted" key={occurrence.record_id}><strong>{occurrence.record_id.slice(0, 16)}</strong><p>Detail expired by retention; lifetime Issue state is preserved.</p></article>)}</div>

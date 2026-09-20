@@ -213,6 +213,16 @@ Project retention days/revision are added by0003 because dedupe needs them;
 snapshot floor, recovery state and bootstrap state are added by0005;0006 adds
 installation retention policy and immutable snapshot authority revisions;0010
 adds backup/task state.
+0012 adds `installations.dedupe_retention_days`, a conservative high-water policy
+initialized from installation/project promises and raised on policy widening.
+Accept and cleanup use this installation-authoritative bound; legacy project
+retention fields no longer decide dedupe expiry. Widen-then-shrink cannot shorten
+existing promises before a background extension has visited the rows. This may
+retain metadata longer and must be counted in cost, not advertised as exact purge.
+0012 also adds nullable `gc_safe_before` and `gc_verified_until`. Unknown/expired
+attestations freeze physical deletion. M4's coordinated verifier must populate
+them under installation coordination only after proving the PG/WAL/S3 horizon;
+no environment override, empty inventory or startup default may authorize GC.
 G04 management mutations require
 audit_events: create that table in0005 and extend its action enum in0009.
 G03 Issue mutation operation IDs live in issue_transitions.operation_id with a

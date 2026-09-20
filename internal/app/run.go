@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"runtime/debug"
 	"strings"
@@ -41,10 +40,10 @@ type Runtime struct {
 	alertCipher    *alerts.SecretCipher
 	alertEvaluator *alerts.Evaluator
 	deliveryWorker *alerts.DeliveryWorker
-	queryWorker    *DurableQueryWorkflow
-	queryPlanner   *DurableQueryCoordinator
-	converter      *DurableConversionWorkflow
-	publisher      *DurablePublicationWorkflow
+	queryWorker    *query.Workflow
+	queryPlanner   *query.Coordinator
+	converter      *ingest.DurableConversionWorkflow
+	publisher      *ingest.DurablePublicationWorkflow
 	workerOwner    string
 	handler        http.Handler
 	installation   control.RuntimeInstallation
@@ -52,6 +51,7 @@ type Runtime struct {
 	markerBytes    int64
 	markerSHA      string
 	ready          atomic.Bool
+	stats          operationStats
 	started        chan struct{}
 	startOnce      sync.Once
 	addrMu         sync.RWMutex
@@ -61,6 +61,14 @@ type Runtime struct {
 func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
+	}
+	var web http.Handler
+	if config.Roles[RoleAPI] && config.WebDir != "" {
+		var err error
+		web, err = newWebHandler(config.WebDir)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if !config.Roles[RoleAPI] && !config.Roles[RoleWorker] && !config.Roles[RoleScheduler] {
 		return nil, errors.New("api, worker, or scheduler role is required")
@@ -159,6 +167,12 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		alertControl: runtimeAlertOperations, alertCipher: runtimeAlertCipher,
 	}
 	nativeTasks := NewNativeTaskGate()
+	if len(config.Roles) > 1 {
+		nativeTasks.working, nativeTasks.reservation, nativeTasks.memory = resources.Working, combinedWorkingBytes, combinedWorkingBytes
+	} else if config.Roles[RoleAPI] || config.Roles[RoleScheduler] {
+		// These roles only export bounded query results; they do not run scans.
+		nativeTasks.working, nativeTasks.reservation, nativeTasks.memory = resources.Working, 64<<20, 64<<20
+	}
 	mux := http.NewServeMux()
 	var publicQueries *api.QueryAdapter
 	if config.Roles[RoleAPI] {
@@ -251,18 +265,20 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			return fail(err)
 		}
 		runtime.publication, runtime.workerOwner = operations, owner
-		runtime.converter = &DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{Gate: nativeTasks}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
-		runtime.publisher = &DurablePublicationWorkflow{Control: operations, Store: store}
+		runtime.converter = &ingest.DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{Gate: nativeTasks}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
+		runtime.publisher = &ingest.DurablePublicationWorkflow{Control: operations, Store: store}
 		maintenanceOperations, err := database.MaintenanceOperations()
 		if err != nil {
 			return fail(err)
 		}
 		runtime.maintenance = maintenanceOperations
 		runtime.compactor = &maintenance.Workflow{
+			Disk:    resources.Disk,
 			Control: maintenanceOperations, Store: store, Runner: ProcessCompactionRunner{Gate: nativeTasks},
 			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "compaction-worker"),
 		}
 		runtime.retainer = &maintenance.RetentionWorkflow{
+			Disk:    resources.Disk,
 			Control: maintenanceOperations, Store: store, Runner: ProcessCompactionRunner{Gate: nativeTasks},
 			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "retention-worker"),
 		}
@@ -300,11 +316,12 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		runtime.alertEvaluator = &alerts.Evaluator{Alerts: runtime.alertControl, Queries: runtime.queryControl, Objects: store, Results: AlertCountReader{Store: store, Exporter: ProcessQueryExportRunner{Gate: nativeTasks}, ScratchDir: filepath.Join(config.ScratchDir, "alert-results")}, Owner: owner, PublicURL: strings.TrimRight(config.PublicURL, "/"), StorageGeneration: installation.StorageGeneration}
 	}
 	if config.Roles[RoleWorker] {
-		runtime.queryWorker = &DurableQueryWorkflow{
+		runtime.queryWorker = &query.Workflow{
+			Disk:    resources.Disk,
 			Control: runtime.queryControl, Store: store, Runner: ProcessQueryRunner{Gate: nativeTasks},
 			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "query-worker"),
 		}
-		runtime.queryPlanner = &DurableQueryCoordinator{Control: runtime.queryControl, Objects: store}
+		runtime.queryPlanner = &query.Coordinator{Control: runtime.queryControl, Objects: store}
 		if publicQueries != nil {
 			syncOwner, err := randomUUID()
 			if err != nil {
@@ -318,6 +335,9 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	}
 	mux.HandleFunc("/livez", runtime.livez)
 	mux.HandleFunc("/readyz", runtime.readyz)
+	if web != nil {
+		mux.Handle("/", web)
+	}
 	runtime.handler = mux
 	runtime.ready.Store(installation.SetupState == control.SetupReady)
 	return runtime, nil
@@ -360,14 +380,16 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	}
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- server.Serve(listener) }()
-	workerResult := make(chan error, 1)
+	var workerResult chan error
 	workerContext, stopWorker := context.WithCancel(ctx)
 	defer stopWorker()
 	if runtime.publication != nil {
+		workerResult = make(chan error, 1)
 		go func() { workerResult <- runtime.runWorker(workerContext) }()
 	}
-	schedulerResult := make(chan error, 1)
+	var schedulerResult chan error
 	if runtime.config.Roles[RoleScheduler] {
+		schedulerResult = make(chan error, 1)
 		go func() { schedulerResult <- runtime.runRetentionScheduler(workerContext) }()
 	}
 
@@ -377,6 +399,16 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	case cause = <-serveResult:
 		if errors.Is(cause, http.ErrServerClosed) {
 			cause = nil
+		}
+	case cause = <-workerResult:
+		workerResult = nil
+		if ctx.Err() == nil {
+			cause = errors.Join(errors.New("worker role stopped"), cause)
+		}
+	case cause = <-schedulerResult:
+		schedulerResult = nil
+		if ctx.Err() == nil {
+			cause = errors.Join(errors.New("scheduler role stopped"), cause)
 		}
 	}
 	runtime.ready.Store(false)
@@ -403,7 +435,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		}
 	default:
 	}
-	if runtime.publication != nil {
+	if workerResult != nil {
 		select {
 		case workerErr := <-workerResult:
 			cause = errors.Join(cause, workerErr)
@@ -411,7 +443,7 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 			cause = errors.Join(cause, drainCtx.Err())
 		}
 	}
-	if runtime.config.Roles[RoleScheduler] {
+	if schedulerResult != nil {
 		select {
 		case schedulerErr := <-schedulerResult:
 			cause = errors.Join(cause, schedulerErr)
@@ -461,18 +493,5 @@ func writeReadinessError(writer http.ResponseWriter) {
 }
 
 func ensurePrivateDirectory(path string) error {
-	if path == "" {
-		return errors.New("scratch directory is required")
-	}
-	if err := os.MkdirAll(path, 0o700); err != nil {
-		return err
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		return errors.New("scratch directory must be private")
-	}
-	return nil
+	return storage.EnsurePrivateDirectory(path)
 }

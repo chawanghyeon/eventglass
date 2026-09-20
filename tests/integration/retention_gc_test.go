@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ func TestRetentionMixedRewriteAndPinnedSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	operations, _ := control.NewMaintenanceOperations(fixture.pool)
+	attestTestGC(t, ctx, fixture)
 	candidate, err := operations.FindRetentionCandidateForTenant(ctx, fixture.tenantID)
 	if err != nil || candidate.BundleID != bundleID || candidate.FullyExpired {
 		t.Fatalf("candidate=%#v err=%v", candidate, err)
@@ -56,6 +58,15 @@ func TestRetentionMixedRewriteAndPinnedSnapshot(t *testing.T) {
 	prepared, err := operations.ClaimRetention(ctx, acceptInstallationID, "retention-swap", time.Minute)
 	if err != nil || prepared == nil || !prepared.Prepared {
 		t.Fatalf("prepared=%#v err=%v", prepared, err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `UPDATE maintenance_tasks SET lease_until=clock_timestamp()-interval '1 second' WHERE task_id=$1`, prepared.Authority.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := operations.SwapRetention(ctx, *prepared); !errors.Is(err, control.ErrMaintenanceFence) {
+		t.Fatalf("expired swap: %v", err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `UPDATE maintenance_tasks SET lease_until=clock_timestamp()+interval '1 minute' WHERE task_id=$1`, prepared.Authority.TaskID); err != nil {
+		t.Fatal(err)
 	}
 	result, err := operations.SwapRetention(ctx, *prepared)
 	if err != nil || result.CatalogGeneration != 11 {
@@ -138,6 +149,10 @@ func TestGCProtectionJournalGraceAndLatePutResweep(t *testing.T) {
 	defer cancel()
 	store := integrationStore(t, "retention-gc-1711")
 	operations, _ := control.NewMaintenanceOperations(fixture.pool)
+	if _, err := operations.ClaimGCObjectsForTenant(ctx, fixture.tenantID, 10); !errors.Is(err, control.ErrBackupInterlock) {
+		t.Fatalf("unknown backup health: %v", err)
+	}
+	attestTestGC(t, ctx, fixture)
 	data := []byte("late-put-tombstone")
 	info, err := store.Put(ctx, "orphan.bin", data)
 	if err != nil {
@@ -165,7 +180,7 @@ func TestGCProtectionJournalGraceAndLatePutResweep(t *testing.T) {
 	if err := store.Delete(ctx, []string{objects[0].ObjectKey}); err != nil {
 		t.Fatal(err)
 	}
-	if err := operations.ConfirmGCObjects(ctx, []string{objects[0].IntentID}); err != nil {
+	if err := operations.ConfirmGCObjects(ctx, objects); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Head(ctx, "orphan.bin"); err == nil {
@@ -184,7 +199,12 @@ func TestGCProtectionJournalGraceAndLatePutResweep(t *testing.T) {
 	if err := store.Delete(ctx, []string{objects[0].ObjectKey}); err != nil {
 		t.Fatal(err)
 	}
-	if err := operations.ConfirmGCObjects(ctx, []string{objects[0].IntentID}); err != nil {
+	stale := append([]control.GCObject(nil), objects...)
+	stale[0].Attempt--
+	if err := operations.ConfirmGCObjects(ctx, stale); !errors.Is(err, control.ErrMaintenanceFence) {
+		t.Fatalf("stale GC confirmation: %v", err)
+	}
+	if err := operations.ConfirmGCObjects(ctx, objects); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Head(ctx, "orphan.bin"); err == nil {
@@ -200,6 +220,11 @@ func TestGCProtectionJournalGraceAndLatePutResweep(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := fixture.pool.Exec(ctx, `UPDATE jobs SET state='completed' WHERE tenant_id=$1 AND lane_id=0 AND batch_seq=1`, fixture.tenantID); err != nil {
+		t.Fatal(err)
+	}
+	// A real converter leaves a producer FK even after its output is published.
+	if _, err := fixture.pool.Exec(ctx, `INSERT INTO object_intents(intent_id,installation_id,tenant_id,storage_generation,object_key,kind,state,owner,fence,expires_at,conversion_job_id,producer_generation,producer_fence,expected_bytes,expected_sha256)
+		VALUES($1,$2,$3,1,$4,'analytics','pending','completed-producer',1,clock_timestamp(),$5,1,1,1,repeat('a',64))`, uuid.NewString(), acceptInstallationID, fixture.tenantID, "v1/integration/producer/"+uuid.NewString(), batch.JobID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.pool.Exec(ctx, `UPDATE ingest_batches SET state='published' WHERE tenant_id=$1 AND lane_id=0 AND batch_seq=1`, fixture.tenantID); err != nil {
@@ -227,5 +252,14 @@ func TestGCProtectionJournalGraceAndLatePutResweep(t *testing.T) {
 	}
 	if state != "retired" || journal != nil || !protected {
 		t.Fatalf("state=%s journal=%v protected=%v", state, journal, protected)
+	}
+}
+
+// Test-only attestation. Production remains frozen until M4 verifies a
+// coordinated PG/WAL/object horizon; absence of backups is not verification.
+func attestTestGC(t *testing.T, ctx context.Context, fixture *acceptFixture) {
+	t.Helper()
+	if _, err := fixture.pool.Exec(ctx, `UPDATE installations SET gc_safe_before=clock_timestamp()-interval '8 days',gc_verified_until=clock_timestamp()+interval '1 hour' WHERE singleton`); err != nil {
+		t.Fatal(err)
 	}
 }

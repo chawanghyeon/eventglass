@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/model"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -32,10 +35,11 @@ func setupAcceptFixture(t *testing.T, base int64) *acceptFixture {
 	environment := requiredEnvironment(t, "EVENTGLASS_DATABASE_URL")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
-	if err := control.ApplyMigrations(ctx, environment["EVENTGLASS_DATABASE_URL"]); err != nil {
+	dsn := isolatedDatabaseURL(t, environment["EVENTGLASS_DATABASE_URL"])
+	if err := control.ApplyMigrations(ctx, dsn); err != nil {
 		t.Fatal(err)
 	}
-	pool, err := pgxpool.New(ctx, environment["EVENTGLASS_DATABASE_URL"])
+	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,4 +348,37 @@ func TestAcceptRollbackEmptyMissingSourceExpiryAndSubset(t *testing.T) {
 	if err := fixture.pool.QueryRow(ctx, `SELECT state FROM object_intents WHERE intent_id=$1`, partialMixed.Journal.IntentID).Scan(&state); err != nil || state != "uploaded" {
 		t.Fatalf("partial batch intent state=%q err=%v", state, err)
 	}
+}
+
+func isolatedDatabaseURL(t *testing.T, databaseURL string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// Each fixture owns a schema, including its installation singleton. Fixed
+	// test IDs must not share state across cases, shuffled runs or -count=2.
+	admin, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	schema := "test_" + uuid.New().String()
+	quoted := pgx.Identifier{schema}.Sanitize()
+	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+quoted); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if _, err := admin.Exec(cleanup, "DROP SCHEMA "+quoted+" CASCADE"); err != nil {
+			t.Errorf("remove owned test schema: %v", err)
+		}
+	})
+	dsn, err := url.Parse(databaseURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters := dsn.Query()
+	parameters.Set("search_path", schema)
+	dsn.RawQuery = parameters.Encode()
+	return dsn.String()
 }

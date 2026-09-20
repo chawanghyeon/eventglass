@@ -183,6 +183,15 @@ Backup interlock: freeze physical deletion when backup health/oldest recoverable
 point is unknown. Record verified backup sets/PITR horizon and conservative
 object protection time. Any retained manual/base backup extends horizon until
 explicitly expired; never claim8days protects an indefinitely retained backup.
+
+The implemented gate is installation `gc_safe_before` plus `gc_verified_until`:
+both default NULL. M4 must establish the horizon and freshness under coordinated
+backup verification. There is deliberately no CLI/env switch to bypass it.
+GC chooses bounded eligible candidates before lane locking, rechecks eligibility
+after locks, and confirms the exact `gc_attempt`; it never updates the entire
+retired-intent table ahead of lane locks. Tombstone resweeps remain fail-closed
+when verification expires. Completed conversion producer tuples are cleared
+atomically before deleting completed job metadata; catalog refs remain intact.
 A backup begins under installation coordination before export and registers
 protection before a GC pass can mark needed objects. Snapshot its reference
 inventory, including pending journals/prepared outputs, not only current files.

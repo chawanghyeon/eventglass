@@ -47,6 +47,9 @@ func (operations *MaintenanceOperations) SwapRetention(ctx context.Context, task
 	if state != "running" || owner != authority.Owner || fence != authority.Fence || storageGeneration != authority.StorageGeneration || floor != task.RetentionFloor {
 		return CompactionSwapResult{}, ErrMaintenanceFence
 	}
+	if err := lockRunningMaintenance(ctx, tx, authority); err != nil {
+		return CompactionSwapResult{}, err
+	}
 	work, err := loadCompactionExpectations(ctx, tx, authority.TaskID)
 	if err != nil {
 		return CompactionSwapResult{}, err

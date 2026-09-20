@@ -11,6 +11,28 @@ import (
 
 const ObjectRetirementGrace = 8 * 24 * time.Hour
 
+var ErrBackupInterlock = errors.New("backup verification is missing or stale; garbage collection is frozen")
+
+// This predicate is rechecked after acquiring lane locks and before marking.
+const gcEligibleSQL = `(
+			oi.state='deleting'
+			OR (oi.state='deleted' AND oi.gc_confirmed_at<clock_timestamp()-interval '1 hour')
+			OR (oi.state IN ('pending','uploaded','referenced')
+				AND COALESCE(oi.retired_at,(SELECT max(b.retired_at) FROM files f JOIN bundles b ON b.tenant_id=f.tenant_id AND b.bundle_id=f.bundle_id WHERE f.intent_id=oi.intent_id),oi.expires_at)<clock_timestamp()-interval '8 days'
+				AND COALESCE(oi.retired_at,(SELECT max(b.retired_at) FROM files f JOIN bundles b ON b.tenant_id=f.tenant_id AND b.bundle_id=f.bundle_id WHERE f.intent_id=oi.intent_id),oi.expires_at)<(SELECT gc_safe_before FROM installations WHERE singleton)
+				AND (oi.protect_until IS NULL OR oi.protect_until<=clock_timestamp())
+				AND NOT EXISTS(SELECT 1 FROM ingest_batches ib WHERE ib.journal_intent_id=oi.intent_id AND ib.recovery_state='live')
+				AND NOT EXISTS(SELECT 1 FROM files f JOIN bundles b ON b.tenant_id=f.tenant_id AND b.bundle_id=f.bundle_id WHERE f.intent_id=oi.intent_id AND b.valid_to_generation IS NULL)
+				AND NOT EXISTS(SELECT 1 FROM files f JOIN bundles b ON b.tenant_id=f.tenant_id AND b.bundle_id=f.bundle_id JOIN snapshot_lanes sl ON sl.tenant_id=b.tenant_id AND sl.lane_id=b.lane_id JOIN query_snapshots s ON s.tenant_id=sl.tenant_id AND s.snapshot_id=sl.snapshot_id WHERE f.intent_id=oi.intent_id AND s.state='active' AND s.expires_at>clock_timestamp() AND b.valid_from_generation<=sl.catalog_generation AND (b.valid_to_generation IS NULL OR sl.catalog_generation<b.valid_to_generation))
+				AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.job_id=oi.conversion_job_id AND (
+					j.state='prepared' OR (j.state='running' AND (oi.state='referenced' OR (j.storage_generation=oi.producer_generation AND j.fence=oi.producer_fence)))))
+				AND NOT EXISTS(SELECT 1 FROM query_jobs q WHERE q.query_id=oi.query_id AND q.expires_at>clock_timestamp())
+				AND NOT EXISTS(SELECT 1 FROM maintenance_tasks m WHERE m.task_id=oi.maintenance_task_id AND (
+					m.state='prepared' OR (m.state='running' AND (oi.state='referenced' OR (m.storage_generation=oi.producer_generation AND m.fence=oi.producer_fence)))))
+				AND NOT EXISTS(SELECT 1 FROM backup_sets bs WHERE bs.state='verified' AND bs.protected_until>clock_timestamp())
+			)
+		)`
+
 type GCObject struct {
 	IntentID  string
 	ObjectKey string
@@ -41,20 +63,41 @@ func (operations *MaintenanceOperations) claimGCObjects(ctx context.Context, ten
 	if _, err := tx.Exec(ctx, `SELECT singleton FROM installations WHERE singleton FOR SHARE`); err != nil {
 		return nil, err
 	}
-	if _, err := tx.Exec(ctx, `UPDATE object_intents oi SET retired_at=source.retired_at
-		FROM (SELECT f.intent_id,min(b.retired_at) retired_at FROM files f JOIN bundles b ON b.tenant_id=f.tenant_id AND b.bundle_id=f.bundle_id WHERE b.valid_to_generation IS NOT NULL GROUP BY f.intent_id) source
-		WHERE oi.intent_id=source.intent_id AND oi.retired_at IS NULL`); err != nil {
+	var verified bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(gc_verified_until>clock_timestamp(),false) FROM installations WHERE singleton`).Scan(&verified); err != nil {
 		return nil, err
 	}
-	laneRows, err := tx.Query(ctx, `SELECT l.tenant_id,l.lane_id FROM lanes l WHERE l.tenant_id IN (
-		SELECT tenant_id FROM (
-			SELECT DISTINCT oi.tenant_id FROM object_intents oi
-			WHERE ($1::bigint=0 OR oi.tenant_id=$1) AND (
-				oi.state='deleting' OR (oi.state='deleted' AND oi.gc_confirmed_at<clock_timestamp()-interval '1 hour')
-				OR (oi.state IN ('pending','uploaded','referenced') AND COALESCE(oi.retired_at,oi.expires_at)<clock_timestamp()-interval '8 days'))
-			ORDER BY oi.tenant_id LIMIT 100
-		) candidates
-	) ORDER BY l.tenant_id,l.lane_id FOR UPDATE OF l`, tenantID)
+	if !verified {
+		return nil, ErrBackupInterlock
+	}
+	// Filter authoritative eligibility before limiting candidate tenants: old,
+	// protected objects must not starve collectible objects in later tenants.
+	candidates, err := tx.Query(ctx, `SELECT oi.intent_id::text FROM object_intents oi
+		WHERE ($1::bigint=0 OR oi.tenant_id=$1) AND `+gcEligibleSQL+`
+		ORDER BY CASE oi.state WHEN 'deleting' THEN 0 WHEN 'deleted' THEN 1 ELSE 2 END,oi.intent_id LIMIT $2`, tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	var candidateIDs []string
+	for candidates.Next() {
+		var id string
+		if err := candidates.Scan(&id); err != nil {
+			candidates.Close()
+			return nil, err
+		}
+		candidateIDs = append(candidateIDs, id)
+	}
+	if err := candidates.Err(); err != nil {
+		candidates.Close()
+		return nil, err
+	}
+	candidates.Close()
+	if len(candidateIDs) == 0 {
+		return nil, tx.Commit(ctx)
+	}
+	laneRows, err := tx.Query(ctx, `SELECT l.tenant_id,l.lane_id FROM lanes l
+		WHERE l.tenant_id IN (SELECT tenant_id FROM object_intents WHERE intent_id=ANY($1::uuid[]))
+		ORDER BY l.tenant_id,l.lane_id FOR UPDATE OF l`, candidateIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -82,24 +125,8 @@ func (operations *MaintenanceOperations) claimGCObjects(ctx context.Context, ten
 	}
 	rows, err := tx.Query(ctx, `SELECT oi.intent_id::text,oi.object_key,oi.gc_attempt,oi.state='deleted'
 		FROM object_intents oi
-		WHERE oi.tenant_id=ANY($2::bigint[]) AND (
-			oi.state='deleting'
-			OR (oi.state='deleted' AND oi.gc_confirmed_at<clock_timestamp()-interval '1 hour')
-			OR (oi.state IN ('pending','uploaded','referenced')
-				AND COALESCE(oi.retired_at,oi.expires_at)<clock_timestamp()-interval '8 days'
-				AND (oi.protect_until IS NULL OR oi.protect_until<=clock_timestamp())
-				AND NOT EXISTS(SELECT 1 FROM ingest_batches ib WHERE ib.journal_intent_id=oi.intent_id AND ib.recovery_state='live')
-				AND NOT EXISTS(SELECT 1 FROM files f JOIN bundles b ON b.tenant_id=f.tenant_id AND b.bundle_id=f.bundle_id WHERE f.intent_id=oi.intent_id AND b.valid_to_generation IS NULL)
-				AND NOT EXISTS(SELECT 1 FROM files f JOIN bundles b ON b.tenant_id=f.tenant_id AND b.bundle_id=f.bundle_id JOIN snapshot_lanes sl ON sl.tenant_id=b.tenant_id AND sl.lane_id=b.lane_id JOIN query_snapshots s ON s.tenant_id=sl.tenant_id AND s.snapshot_id=sl.snapshot_id WHERE f.intent_id=oi.intent_id AND s.state='active' AND s.expires_at>clock_timestamp() AND b.valid_from_generation<=sl.catalog_generation AND (b.valid_to_generation IS NULL OR sl.catalog_generation<b.valid_to_generation))
-				AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.job_id=oi.conversion_job_id AND (
-					j.state='prepared' OR (j.state='running' AND (oi.state='referenced' OR (j.storage_generation=oi.producer_generation AND j.fence=oi.producer_fence)))))
-				AND NOT EXISTS(SELECT 1 FROM query_jobs q WHERE q.query_id=oi.query_id AND q.expires_at>clock_timestamp())
-				AND NOT EXISTS(SELECT 1 FROM maintenance_tasks m WHERE m.task_id=oi.maintenance_task_id AND (
-					m.state='prepared' OR (m.state='running' AND (oi.state='referenced' OR (m.storage_generation=oi.producer_generation AND m.fence=oi.producer_fence)))))
-				AND NOT EXISTS(SELECT 1 FROM backup_sets bs WHERE bs.state='verified' AND bs.protected_until>clock_timestamp())
-			)
-		) ORDER BY CASE oi.state WHEN 'deleting' THEN 0 WHEN 'deleted' THEN 1 ELSE 2 END,oi.intent_id
-		LIMIT $1 FOR UPDATE OF oi SKIP LOCKED`, limit, lockedTenants)
+		WHERE oi.intent_id=ANY($2::uuid[]) AND `+gcEligibleSQL+` ORDER BY CASE oi.state WHEN 'deleting' THEN 0 WHEN 'deleted' THEN 1 ELSE 2 END,oi.intent_id
+		LIMIT $1 FOR UPDATE OF oi SKIP LOCKED`, limit, candidateIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -130,26 +157,30 @@ func (operations *MaintenanceOperations) claimGCObjects(ctx context.Context, ten
 	return objects, nil
 }
 
-func (operations *MaintenanceOperations) ConfirmGCObjects(ctx context.Context, intentIDs []string) error {
-	if len(intentIDs) == 0 || len(intentIDs) > 100 {
+func (operations *MaintenanceOperations) ConfirmGCObjects(ctx context.Context, objects []GCObject) error {
+	if len(objects) == 0 || len(objects) > 100 {
 		return errors.New("invalid GC confirmation")
 	}
-	for _, id := range intentIDs {
-		if uuid.Validate(id) != nil {
+	seen := make(map[string]bool, len(objects))
+	for _, object := range objects {
+		if uuid.Validate(object.IntentID) != nil || object.Attempt <= 0 || seen[object.IntentID] {
 			return errors.New("invalid GC intent")
 		}
+		seen[object.IntentID] = true
 	}
 	tx, err := operations.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	result, err := tx.Exec(ctx, `UPDATE object_intents SET state='deleted',gc_confirmed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE intent_id=ANY($1::uuid[]) AND state='deleting'`, intentIDs)
-	if err != nil {
-		return err
-	}
-	if result.RowsAffected() != int64(len(intentIDs)) {
-		return ErrMaintenanceFence
+	for _, object := range objects {
+		result, err := tx.Exec(ctx, `UPDATE object_intents SET state='deleted',gc_confirmed_at=clock_timestamp(),updated_at=clock_timestamp() WHERE intent_id=$1 AND gc_attempt=$2 AND state='deleting'`, object.IntentID, object.Attempt)
+		if err != nil {
+			return err
+		}
+		if result.RowsAffected() != 1 {
+			return ErrMaintenanceFence
+		}
 	}
 	return tx.Commit(ctx)
 }
@@ -164,10 +195,10 @@ func (operations *MaintenanceOperations) RunRetentionCleanup(ctx context.Context
 		AND NOT EXISTS(SELECT 1 FROM query_snapshots s WHERE s.tenant_id=o.tenant_id AND s.state='active' AND s.expires_at>clock_timestamp() AND s.retention_floor_us<=o.received_time_us)
 		UNION ALL
 		SELECT d.tenant_id FROM event_dedupe d JOIN projects p ON p.tenant_id=d.tenant_id AND p.project_id=d.project_id
-		WHERE d.expires_at<=clock_timestamp() AND d.created_at+make_interval(days=>p.retention_days+7)<=clock_timestamp()
+		WHERE d.expires_at<=clock_timestamp() AND d.created_at+make_interval(days=>(SELECT dedupe_retention_days FROM installations WHERE singleton)+7)<=clock_timestamp()
 		UNION ALL
 		SELECT ib.tenant_id FROM ingest_batches ib WHERE ib.state='published' AND ib.recovery_state='live'
-		AND NOT EXISTS(SELECT 1 FROM receipts r JOIN projects p ON p.tenant_id=r.tenant_id AND p.project_id=r.project_id WHERE r.tenant_id=ib.tenant_id AND r.lane_id=ib.lane_id AND r.batch_seq=ib.batch_seq AND r.received_time_us>=floor(extract(epoch FROM (clock_timestamp()-(p.retention_days+7)*interval '1 day'))*1000000)::bigint)
+		AND NOT EXISTS(SELECT 1 FROM receipts r JOIN projects p ON p.tenant_id=r.tenant_id AND p.project_id=r.project_id WHERE r.tenant_id=ib.tenant_id AND r.lane_id=ib.lane_id AND r.batch_seq=ib.batch_seq AND r.received_time_us>=floor(extract(epoch FROM (clock_timestamp()-((SELECT dedupe_retention_days FROM installations WHERE singleton)+7)*interval '1 day'))*1000000)::bigint)
 		AND NOT EXISTS(SELECT 1 FROM event_dedupe d JOIN receipts r ON r.acceptance_id=d.receipt_acceptance_id WHERE r.tenant_id=ib.tenant_id AND r.lane_id=ib.lane_id AND r.batch_seq=ib.batch_seq)
 		AND NOT EXISTS(SELECT 1 FROM issue_occurrences o WHERE o.tenant_id=ib.tenant_id AND o.lane_id=ib.lane_id AND o.batch_seq=ib.batch_seq)
 		AND NOT EXISTS(SELECT 1 FROM backup_sets bs WHERE bs.state='verified' AND bs.protected_until>clock_timestamp())
@@ -224,7 +255,7 @@ func (operations *MaintenanceOperations) runRetentionCleanup(ctx context.Context
 	if _, err := tx.Exec(ctx, `DELETE FROM event_dedupe d WHERE d.ctid IN (
 		SELECT d2.ctid FROM event_dedupe d2 JOIN projects p ON p.tenant_id=d2.tenant_id AND p.project_id=d2.project_id
 		WHERE d2.expires_at<=clock_timestamp()
-		AND d2.created_at+make_interval(days=>p.retention_days+7)<=clock_timestamp()
+		AND d2.created_at+make_interval(days=>(SELECT dedupe_retention_days FROM installations WHERE singleton)+7)<=clock_timestamp()
 		AND ($1::bigint=0 OR d2.tenant_id=$1) ORDER BY d2.expires_at LIMIT 1000)`, onlyTenant); err != nil {
 		return false, err
 	}
@@ -233,7 +264,7 @@ func (operations *MaintenanceOperations) runRetentionCleanup(ctx context.Context
 	err = tx.QueryRow(ctx, `SELECT ib.tenant_id,ib.lane_id,ib.batch_seq FROM ingest_batches ib
 		WHERE ib.state='published' AND ib.recovery_state='live'
 		AND ($1::bigint=0 OR ib.tenant_id=$1)
-		AND NOT EXISTS(SELECT 1 FROM receipts r JOIN projects p ON p.tenant_id=r.tenant_id AND p.project_id=r.project_id WHERE r.tenant_id=ib.tenant_id AND r.lane_id=ib.lane_id AND r.batch_seq=ib.batch_seq AND r.received_time_us>=floor(extract(epoch FROM (clock_timestamp()-(p.retention_days+7)*interval '1 day'))*1000000)::bigint)
+		AND NOT EXISTS(SELECT 1 FROM receipts r JOIN projects p ON p.tenant_id=r.tenant_id AND p.project_id=r.project_id WHERE r.tenant_id=ib.tenant_id AND r.lane_id=ib.lane_id AND r.batch_seq=ib.batch_seq AND r.received_time_us>=floor(extract(epoch FROM (clock_timestamp()-((SELECT dedupe_retention_days FROM installations WHERE singleton)+7)*interval '1 day'))*1000000)::bigint)
 		AND NOT EXISTS(SELECT 1 FROM event_dedupe d JOIN receipts r ON r.acceptance_id=d.receipt_acceptance_id WHERE r.tenant_id=ib.tenant_id AND r.lane_id=ib.lane_id AND r.batch_seq=ib.batch_seq)
 		AND NOT EXISTS(SELECT 1 FROM issue_occurrences o WHERE o.tenant_id=ib.tenant_id AND o.lane_id=ib.lane_id AND o.batch_seq=ib.batch_seq)
 		AND NOT EXISTS(SELECT 1 FROM backup_sets bs WHERE bs.state='verified' AND bs.protected_until>clock_timestamp())
@@ -257,6 +288,12 @@ func (operations *MaintenanceOperations) runRetentionCleanup(ctx context.Context
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM job_outputs WHERE tenant_id=$1 AND job_id IN (SELECT job_id FROM jobs WHERE tenant_id=$1 AND lane_id=$2 AND batch_seq=$3 AND state='completed')`, tenantID, laneID, batchSeq); err != nil {
+		return false, err
+	}
+	// Completed producer links are not permanent pins. Clear the entire authority
+	// tuple before deleting its FK target; current catalog still protects bytes.
+	if _, err := tx.Exec(ctx, `UPDATE object_intents SET conversion_job_id=NULL,producer_generation=NULL,producer_fence=NULL
+		WHERE conversion_job_id IN (SELECT job_id FROM jobs WHERE tenant_id=$1 AND lane_id=$2 AND batch_seq=$3 AND state='completed')`, tenantID, laneID, batchSeq); err != nil {
 		return false, err
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM jobs WHERE tenant_id=$1 AND lane_id=$2 AND batch_seq=$3 AND state='completed'`, tenantID, laneID, batchSeq); err != nil {

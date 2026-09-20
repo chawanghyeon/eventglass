@@ -3,7 +3,10 @@ package query
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/model"
@@ -14,6 +17,95 @@ type catalogPagerFunc func(context.Context, control.CatalogCommand) ([]model.Cat
 
 func (function catalogPagerFunc) CatalogPage(ctx context.Context, command control.CatalogCommand) ([]model.CatalogFile, error) {
 	return function(ctx, command)
+}
+
+type catalogReaderFunc func(context.Context, string) (storage.ObjectInfo, error)
+
+func (f catalogReaderFunc) Head(ctx context.Context, key string) (storage.ObjectInfo, error) {
+	return f(ctx, key)
+}
+
+func TestCatalogVerificationBoundedAndJoined(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := make(chan struct{}, catalogVerificationConcurrency)
+	var active atomic.Int32
+	reader := catalogReaderFunc(func(ctx context.Context, _ string) (storage.ObjectInfo, error) {
+		active.Add(1)
+		defer active.Add(-1)
+		started <- struct{}{}
+		<-ctx.Done()
+		return storage.ObjectInfo{}, ctx.Err()
+	})
+	result := make(chan error, 1)
+	go func() { result <- verifyCatalogPage(ctx, reader, make([]model.CatalogFile, 100)) }()
+	for range catalogVerificationConcurrency {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("bounded readers did not start")
+		}
+	}
+	if active.Load() != catalogVerificationConcurrency {
+		t.Fatal("incorrect metadata concurrency")
+	}
+	cancel()
+	if err := <-result; err == nil {
+		t.Fatal("canceled metadata verification succeeded")
+	}
+	if active.Load() != 0 {
+		t.Fatal("verification returned with live readers")
+	}
+}
+
+func TestCatalogVerificationPreservesOrder(t *testing.T) {
+	files := make([]model.CatalogFile, 17)
+	for i := range files {
+		files[i] = model.CatalogFile{FileID: fmt.Sprint(i), ObjectKey: fmt.Sprint(i), Bytes: 1, SHA256: "sha"}
+	}
+	pager := catalogPagerFunc(func(context.Context, control.CatalogCommand) ([]model.CatalogFile, error) { return files, nil })
+	reader := catalogReaderFunc(func(_ context.Context, key string) (storage.ObjectInfo, error) {
+		return storage.ObjectInfo{Key: key, Size: 1, SHA256: "sha"}, nil
+	})
+	got, err := LoadVerifiedCatalog(context.Background(), pager, reader, control.CatalogCommand{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range got {
+		if got[i].FileID != files[i].FileID {
+			t.Fatal("verification reordered catalog")
+		}
+	}
+}
+
+// Controlled metadata-latency experiment, not an S3 or end-to-end SLO claim.
+func BenchmarkCatalogVerification(b *testing.B) {
+	page := make([]model.CatalogFile, 32)
+	for i := range page {
+		page[i] = model.CatalogFile{Bytes: 1, SHA256: "sha"}
+	}
+	reader := catalogReaderFunc(func(context.Context, string) (storage.ObjectInfo, error) {
+		time.Sleep(time.Millisecond)
+		return storage.ObjectInfo{Size: 1, SHA256: "sha"}, nil
+	})
+	for _, parallel := range []bool{false, true} {
+		b.Run(fmt.Sprintf("bounded_parallel=%v", parallel), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if parallel {
+					if err := verifyCatalogPage(context.Background(), reader, page); err != nil {
+						b.Fatal(err)
+					}
+				} else {
+					for _, file := range page {
+						if err := verifyCatalogFile(context.Background(), reader, file); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			}
+		})
+	}
 }
 
 type catalogHead map[string]storage.ObjectInfo

@@ -12,7 +12,6 @@ docker info >/dev/null 2>&1 || { echo "Docker is required for browser verificati
 
 project="eventglass-go-browser-$$"
 api_port=$((18000 + $$ % 1000))
-web_port=$((19000 + $$ % 1000))
 runtime_dir=$(mktemp -d "$ROOT/.tools/eventglass-browser.XXXXXX")
 app_container="$project-app"
 diagnose() {
@@ -36,14 +35,15 @@ done
 
 docker compose -p "$project" -f deploy/compose.yaml up -d postgres minio
 docker compose -p "$project" -f deploy/compose.yaml run --rm minio-init
-docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:browser-build .
+docker buildx build --platform linux/arm64 --load --tag eventglass-go:browser-build .
 
 database_url="postgres://eventglass:local-test-only@postgres:5432/eventglass?sslmode=disable" # pragma: allowlist secret
-docker run --rm --platform linux/arm64 --network "${project}_default" -e EVENTGLASS_DATABASE_URL="$database_url" eventglass-go:browser-build /out/eventglass-go migrate
+docker run --rm --platform linux/arm64 --network "${project}_default" -e EVENTGLASS_DATABASE_URL="$database_url" eventglass-go:browser-build migrate
 docker run -d --name "$app_container" --platform linux/arm64 --network "${project}_default" -p "127.0.0.1:${api_port}:8080" \
+  --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,nosuid,nodev,size=4g \
   -v "$runtime_dir:/run/eventglass:ro" \
   -e EVENTGLASS_DATABASE_URL="$database_url" \
-  -e EVENTGLASS_PUBLIC_URL="http://127.0.0.1:${web_port}" \
+  -e EVENTGLASS_PUBLIC_URL="http://127.0.0.1:${api_port}" \
   -e EVENTGLASS_ROLES=api,worker,scheduler \
   -e EVENTGLASS_SCRATCH_DIR=/tmp/eventglass \
   -e EVENTGLASS_S3_ENDPOINT=http://minio:9000 \
@@ -56,7 +56,7 @@ docker run -d --name "$app_container" --platform linux/arm64 --network "${projec
   -e EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE=/run/eventglass/alert.hex \
   -e AWS_ACCESS_KEY_ID=eventglass-local \
   -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
-  eventglass-go:browser-build /out/eventglass-go run >/dev/null
+  eventglass-go:browser-build run >/dev/null
 
 attempt=0
 until curl -fsS "http://127.0.0.1:${api_port}/livez" >/dev/null
@@ -69,8 +69,7 @@ do
   sleep 1
 done
 
-if ! EVENTGLASS_WEB_API_ORIGIN="http://127.0.0.1:${api_port}" \
-  EVENTGLASS_WEB_PORT="$web_port" \
+if ! EVENTGLASS_E2E_BASE_URL="http://127.0.0.1:${api_port}" \
   EVENTGLASS_E2E_BOOTSTRAP_TOKEN=$(tr -d '\n' <"$runtime_dir/bootstrap.hex") \
   npm run e2e --prefix web
 then

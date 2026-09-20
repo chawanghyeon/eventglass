@@ -1,7 +1,8 @@
-package app
+package ingest
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -98,7 +99,7 @@ func StageConversion(ctx context.Context, input ConversionInput) (_ *ConversionA
 	if input.TenantID <= 0 || input.LaneID < 0 || input.LaneID >= model.LaneCount || input.BatchSeq <= 0 || input.BatchID == "" || input.JournalPath == "" || input.TaskDir == "" || len(input.Receipts) == 0 {
 		return nil, errors.New("invalid conversion staging input")
 	}
-	if err := ensurePrivateDirectory(input.TaskDir); err != nil {
+	if err := storage.EnsurePrivateDirectory(input.TaskDir); err != nil {
 		return nil, err
 	}
 	if _, err := model.LaneForAcceptance(input.BatchID); err != nil {
@@ -355,13 +356,13 @@ func ReplayOccurrenceSummaries(path string, expectedBytes int64, expectedSHA str
 	var header struct {
 		Version int `json:"version"`
 	}
-	if err := strictAppJSON(scanner.Bytes(), &header); err != nil || header.Version != occurrenceEncodingVersion {
+	if err := strictConversionJSON(scanner.Bytes(), &header); err != nil || header.Version != occurrenceEncodingVersion {
 		return errors.Join(errors.New("unsupported Issue occurrence summary version"), err)
 	}
 	previous := ""
 	for scanner.Scan() {
 		var summary model.IssueOccurrenceSummary
-		if err := strictAppJSON(scanner.Bytes(), &summary); err != nil {
+		if err := strictConversionJSON(scanner.Bytes(), &summary); err != nil {
 			return err
 		}
 		var title string
@@ -380,4 +381,16 @@ func ReplayOccurrenceSummaries(path string, expectedBytes int64, expectedSHA str
 		previous = summary.RecordID
 	}
 	return scanner.Err()
+}
+
+func strictConversionJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return errors.New("trailing conversion JSON")
+	}
+	return nil
 }

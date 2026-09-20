@@ -68,6 +68,54 @@ func TestImplementedManagementRoutesMatchInventory(t *testing.T) {
 	}
 }
 
+func TestCapabilityMapCoversEveryRegisteredRoute(t *testing.T) {
+	root := filepath.Join("..", "..")
+	var inventory []string
+	readJSON := func(path string, target any) {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(root, path))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(data, target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readJSON("api/implemented-routes.json", &inventory)
+	var capabilities struct {
+		Routes []struct {
+			Route, Owner, Backend, UI string
+			Tests                     []string
+		}
+	}
+	readJSON("api/capabilities.json", &capabilities)
+	seen := map[string]bool{}
+	for _, entry := range capabilities.Routes {
+		if seen[entry.Route] || entry.Owner == "" || entry.Backend != "registered" || len(entry.Tests) == 0 {
+			t.Errorf("invalid capability: %+v", entry)
+		}
+		seen[entry.Route] = true
+		switch entry.UI {
+		case "connected", "read-only", "not-exposed", "internal":
+		default:
+			t.Errorf("unknown UI status: %s", entry.UI)
+		}
+		for _, test := range entry.Tests {
+			if _, err := os.Stat(filepath.Join(root, test)); err != nil {
+				t.Errorf("missing declared coverage %s: %v", test, err)
+			}
+		}
+	}
+	if len(seen) != len(inventory) {
+		t.Fatal("capability/route count drift")
+	}
+	for _, route := range inventory {
+		if !seen[route] {
+			t.Errorf("missing capability: %s", route)
+		}
+	}
+}
+
 func TestFrontendOwnershipBoundaries(t *testing.T) {
 	root := filepath.Join("..", "..", "web", "src")
 	imports := regexp.MustCompile(`(?:from\s+|import\s*)["']([^"']+)["']`)

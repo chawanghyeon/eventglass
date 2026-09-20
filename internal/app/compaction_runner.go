@@ -25,6 +25,7 @@ func (runner ProcessCompactionRunner) Run(ctx context.Context, request engine.Co
 		return engine.CompactionResult{}, err
 	}
 	defer release()
+	request.NativeMemoryBytes = runner.Gate.memoryLimit(request.NativeMemoryBytes)
 	binary := runner.BinaryPath
 	if binary == "" {
 		binary, err = os.Executable()

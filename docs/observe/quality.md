@@ -13,6 +13,20 @@ Go unit tests/vet and repository layout/hash checks. `./scripts/check focused
 journal-bench` measures streaming journal allocation/time on the current host;
 allocations are not a claim about Linux peak RSS.
 
+The unit gate discovers packages automatically, with only native engine execution
+excluded and covered by the pinned ARM64 contracts gate. `./scripts/check perf`
+records repeated journal and controlled metadata-latency samples with revision,
+dirty state and toolchain. CI records these samples; it does not establish SLOs.
+Catalog verification uses at most four readers per page, preserves catalog order,
+and joins readers on error/cancellation. The synthetic 1ms/HEAD experiment is not
+a provider benchmark or proof of end-to-end search speed.
+
+`api/capabilities.json` maps registered routes to UI coverage and test sources;
+architecture checks detect missing entries and stale paths. Test-source existence
+does not prove semantic coverage. G05 remains open for U4's missing surfaces.
+`check-browser` now uses the final non-root ARM64 image and production assets,
+not a Vite development server. Release still requires M4/R1-R4 evidence.
+
 Use `./scripts/check sdk` for pinned offline and live SDK contracts. Use
 `./scripts/check integration` for disposable PostgreSQL/MinIO schema and S3
 contracts. `./scripts/check contracts` executes pinned DuckDB 2.0 on Linux ARM64.

@@ -31,7 +31,7 @@ native spill are disposable and never sufficient to authorize an ACK.
 |---|---|---|
 | app | Role assembly, process budgets, task lifetimes, shutdown | All production packages |
 | api | HTTP validation, wire decoding, current auth snapshot, public result/SSE mapping | ingest, sdk, query, alerts, control, model, resource, engine (protocol values only) |
-| ingest | Normalization/scrub and concrete ingestion workflow | sdk, model, resource, control, storage |
+| ingest | Normalization/scrub, Accept, conversion staging and publication workflows | sdk, model, resource, control, storage, engine (protocol only), issues |
 | sdk | SDK wire parsing/version adapters | None |
 | model | Canonical values, identities/topology DTOs | None |
 | control | Explicit pgx transactions, migrations, claims, catalog | model, issues |
@@ -49,6 +49,14 @@ packages/dependencies and prevents testkit or SQL/native drivers leaking into
 pure packages. Add packages only when they have a concrete owner. Do not add
 generic Service/Repository/Manager layers or package-global mutable clients.
 
+`ingest/conversion.go` owns replay/selection/Issue summaries; `ingest/publication.go`
+owns verified conversion output and publication orchestration. `query/worker.go`
+and `query/coordinator.go` own durable query work. Process runners stay in app;
+these operation packages receive small consumer interfaces, not app imports.
+Maintenance shares its verified download/upload implementation in `files.go`.
+`app.superviseTask` is only a join/cancel/heartbeat primitive, not a generic
+job state machine. Transaction and authority rules stay in control.
+
 Generated HTTP DTOs may be imported only by api, never by app/query/control.
 `api.QueryAdapter` owns public result decoding and token/HTTP translation;
 `query.Submission` owns catalog verification and durable plan submission, and
@@ -60,6 +68,9 @@ shared-budget child runner. No native driver or process launching moves into api
 Frontend guards reject shared/api dependencies on features/app. The executable
 route inventory is `api/implemented-routes.json`; OpenAPI includes future routes
 and is not a capability claim.
+`api/capabilities.json` distinguishes registered APIs, connected/read-only UI,
+and missing surfaces. Architecture checks enforce route coverage and existing
+test references; they do not certify the assertions or runtime gate results.
 
 ingest owns the upload-before-Accept workflow; control.Accept owns its entire
 SQL transaction. control.Publish owns its complete SQL transaction. Handlers
@@ -127,6 +138,16 @@ by a background upload. Drain closes admission before waiting for owners.
 Conversion, query execution, and public-result export in one runtime share one
 cancellation-aware native-child gate, so sync help cannot overlap the
 background worker's isolated DuckDB process.
+Combined-role children reserve 192 MiB from the same working budget used by
+decoding; API-only exports reserve 64 MiB. Admission waits are cancelable and
+permits remain owned until the native child has exited, not just until timeout.
+Publication and delivery/GC have joined loops separate from native work, so a
+long query cannot block their dispatch. This is not a claim of tenant fairness
+or the 20% maintenance-time policy: those remain measured R1/R2 work. Bounded
+operation logs report counts, failures and duration without raw error text.
+Query and maintenance reserve input/output/spill against the shared disk budget
+and release only after child completion and successful scratch removal. This
+conservative reservation is not a proof of filesystem hard limits or RSS.
 The current Acceptor call is synchronous: returning means it retains no request
 data. An asynchronous implementation must explicitly transfer the permit too.
 
@@ -157,6 +178,11 @@ latency so adding workers does not amplify dependency overload.
 Frontend uses app assembly, generated API contracts/client, feature folders,
 shared UI components and presentation helpers. TanStack Query owns server
 state, URL owns shareable search state, component state owns forms/views.
+The reusable Logs/Explore workspace belongs to `features/search`; Live transport
+belongs to `shared/search`. Cursor pages use `shared/query/useCursorPage`, carry
+AbortSignal and reset when scope changes. Project-scoped operator pages select
+one project explicitly; they do not silently use the first 100 projects as an
+all-project scope. Keys are loaded on expansion, not for every project card.
 Rows/histogram share absolute time bounds and read token. Clear cached server
 state on logout/scope change. Render event text as text; fetch payload on detail.
 Generate OpenAPI DTOs when G04/G05 introduce the management/query surface;
@@ -207,3 +233,17 @@ ACK-to-publication lag; G04 records scan bytes/GET count/cold and warm latency.
 G07 adds the complete sustained multiworker/cgroup workload, not the first
 performance check. One-/two-/four-worker scaling, throughput and the 512 MiB
 target remain unverified until their executable gates pass.
+
+## Change recipes
+
+| Change | Edit owners | Required negative evidence |
+|---|---|---|
+| SDK item/normalization | sdk adapter, ingest normalizer, canonical model | Pinned capture, scrub/size/unsupported behavior; no HTTP or PG in sdk |
+| Query operator | query validator/compiler, engine semantic tests, generated API if wire changes | Missing/null/type truth table, scope escape, exact distributed oracle |
+| Native task | Concrete ingest/query/maintenance workflow, app runner, control authority | Cancel joins child, disk admission, expired fence, restart-complete output |
+| Operator screen | API contract/route/capability entry, feature queries/forms | Current auth/CSRF/revision, next page, scope cancellation, real browser flow |
+| Storage backend | storage adapter and backend profile | Byte checksum, Range, late PUT/delete, coordinated restore; no relaxed verification |
+
+Avoid broad package churn for a feature. A new package needs a concrete owner,
+dependency rule and tests; interfaces belong to their consumers. Do not duplicate
+wire DTOs, weaken invariants for throughput, or infer completion from file counts.

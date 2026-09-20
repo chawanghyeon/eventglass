@@ -1,6 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
 const port = Number(process.env.EVENTGLASS_WEB_PORT ?? "19080");
+const productionURL = process.env.EVENTGLASS_E2E_BASE_URL;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -11,11 +12,11 @@ export default defineConfig({
   retries: 0,
   reporter: "line",
   use: {
-    baseURL: `http://127.0.0.1:${port}`,
+    baseURL: productionURL ?? `http://127.0.0.1:${port}`,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  webServer: {
+  webServer: productionURL ? undefined : {
     command: `npm run dev -- --host 127.0.0.1 --port ${port}`,
     url: `http://127.0.0.1:${port}/setup`,
     reuseExistingServer: false,

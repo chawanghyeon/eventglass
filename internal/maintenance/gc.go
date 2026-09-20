@@ -9,7 +9,7 @@ import (
 
 type GCControl interface {
 	ClaimGCObjects(context.Context, int) ([]control.GCObject, error)
-	ConfirmGCObjects(context.Context, []string) error
+	ConfirmGCObjects(context.Context, []control.GCObject) error
 }
 
 type GCStore interface {
@@ -29,12 +29,12 @@ func (workflow GCWorkflow) RunOnce(ctx context.Context) (bool, error) {
 	if err != nil || len(objects) == 0 {
 		return false, err
 	}
-	keys, ids := make([]string, len(objects)), make([]string, len(objects))
+	keys := make([]string, len(objects))
 	for index, object := range objects {
-		keys[index], ids[index] = object.ObjectKey, object.IntentID
+		keys[index] = object.ObjectKey
 	}
 	if err := workflow.Store.Delete(ctx, keys); err != nil {
 		return true, err
 	}
-	return true, workflow.Control.ConfirmGCObjects(ctx, ids)
+	return true, workflow.Control.ConfirmGCObjects(ctx, objects)
 }

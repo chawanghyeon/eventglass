@@ -9,6 +9,7 @@ The active product is the root Go module. Use Go 1.26.5 exactly and run commands
 ./scripts/check architecture
 ./scripts/check focused ingest
 ./scripts/check journal-bench
+./scripts/check perf
 ./scripts/check contracts
 ./scripts/check integration
 ./scripts/check sdk
@@ -23,9 +24,10 @@ The operator UI uses the exact Node/npm versions in `web/package.json`. Install
 its locked dependencies with `npm ci --prefix web --ignore-scripts`; then
 `./scripts/check web` runs Vitest, strict TypeScript, and the Vite production
 build. Generated API types remain owned by `./scripts/generate-api`.
-`./scripts/check-browser` builds and runs the real ARM64 API, worker and scheduler
-against disposable PostgreSQL and MinIO, then executes the Playwright SDK-to-UI
-flow. It never sends an external alert and requires local Docker plus the locked
+`./scripts/check-browser` builds the final ARM64 release image, including the
+production UI, and runs API/worker/scheduler non-root with a read-only root and
+bounded scratch against disposable PostgreSQL and MinIO. Playwright exercises
+SDK-to-UI on the same origin without Vite. It never sends an external alert and requires local Docker plus the locked
 Playwright Chromium installation.
 
 Complete and verify one gate at a time, then commit directly to `main` and run `git push origin main`. Use commit subjects such as `feat: 한국어 변경 요약`, selecting `fix`, `perf`, `test`, `docs`, or `chore` as appropriate. Do not bypass hooks or rewrite published history merely to normalize messages.
@@ -44,6 +46,19 @@ benchmark reports host allocations/time, not Linux RSS or production throughput.
 Current pre-push runs unit/layout/architecture checks. Production deployment and
 historical Rust artifact staging are not implemented by this hook. Gate completion
 requires its executable evidence, not just the hook passing.
+
+Unit tests discover all internal/cmd packages except native `internal/engine`,
+which executes only under the pinned ARM64 `contracts` gate; vet covers all.
+The ARM64 CI workflow runs unit, codegen, web and controlled benchmark samples.
+CI configuration is not a claim that the remote run or branch protection passed.
+`perf` prints revision/dirty state/toolchain/architecture and repeated journal
+allocation and synthetic metadata-latency samples. It does not close R1-R3.
+Accept/alert integration fixtures own isolated schemas, including installation
+state; use their pool's DSN when constructing a runtime in those tests.
+
+`EVENTGLASS_WEB_DIR` optionally enables same-origin production UI serving. The
+final image sets it to `/usr/share/eventglass/web`; local API-only runs may omit
+it. Missing assets fail startup. Unknown API/asset paths never return SPA HTML.
 
 The `run` command starts the API and/or publication worker roles against the
 exactly migrated PostgreSQL schema and matching S3 identity. Configure

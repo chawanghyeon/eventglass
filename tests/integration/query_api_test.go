@@ -20,6 +20,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/query"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
@@ -35,7 +36,7 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker := &app.DurableQueryWorkflow{
+	worker := &query.Workflow{Disk: resource.NewBudget(4 << 30),
 		Control: operations, Store: store, Runner: app.ProcessQueryRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"]},
 		InstallationID: acceptInstallationID, ScratchDir: filepath.Join(t.TempDir(), "worker"),
 	}
@@ -277,7 +278,7 @@ func insertPublicQueryBundle(t *testing.T, ctx context.Context, fixture *acceptF
 }
 
 // Separate ownership and execution loop: the API adapter has no local helper.
-func startIndependentQueryWorker(t *testing.T, parent context.Context, operations *control.QueryOperations, worker *app.DurableQueryWorkflow) {
+func startIndependentQueryWorker(t *testing.T, parent context.Context, operations *control.QueryOperations, worker *query.Workflow) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan error, 1)

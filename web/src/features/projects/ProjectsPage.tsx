@@ -1,3 +1,5 @@
+import { useCursorPage } from "../../shared/query/useCursorPage";
+import { CursorPager } from "../../shared/ui/CursorPager";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
@@ -11,7 +13,7 @@ export function ProjectsPage() {
   const { session, tenant } = useSession();
   const client = useQueryClient();
   const admin = tenant.role === "admin";
-  const projects = useQuery({ queryKey: ["projects", session.user_id, tenant.tenant_id], queryFn: () => api.projects(tenant.tenant_id) });
+  const projects = useCursorPage(["projects", session.user_id, tenant.tenant_id], (cursor, signal) => api.projects(tenant.tenant_id, cursor, signal));
   const [name, setName] = useState("");
   const [service, setService] = useState("");
   const [origins, setOrigins] = useState("");
@@ -35,6 +37,7 @@ export function ProjectsPage() {
     {projects.isPending ? <p role="status">Loading projects…</p> : null}
     <StatusPanel error={projects.error} onRetry={() => void projects.refetch()} />
     {projects.data?.items.length === 0 ? <StatusPanel empty="No projects are assigned to this tenant." /> : null}
+    <CursorPager paging={projects.paging} label="Projects" />
     <div className="stack">{projects.data?.items.map((project) => <ProjectCard key={project.project_id} project={project} admin={admin} />)}</div>
   </section>;
 }
@@ -42,9 +45,10 @@ export function ProjectsPage() {
 function ProjectCard({ project, admin }: { project: Project; admin: boolean }) {
   const { session, tenant } = useSession();
   const client = useQueryClient();
+  const [showKeys, setShowKeys] = useState(false);
   const [label, setLabel] = useState("");
   const [revealed, setRevealed] = useState<CreatedKey | null>(null);
-  const keys = useQuery({ queryKey: ["project-keys", session.user_id, tenant.tenant_id, project.project_id], queryFn: () => api.projectKeys(tenant.tenant_id, project.project_id), enabled: admin });
+  const keys = useQuery({ queryKey: ["project-keys", session.user_id, tenant.tenant_id, project.project_id], queryFn: () => api.projectKeys(tenant.tenant_id, project.project_id), enabled: admin && showKeys });
   const toggle = useMutation({
     mutationFn: () => api.updateProject(project.project_id, { tenant_id: tenant.tenant_id, revision: project.revision, state: project.state === "active" ? "disabled" : "active" }, session.csrf_token),
     onSettled: async () => client.invalidateQueries({ queryKey: ["projects", session.user_id, tenant.tenant_id] }),
@@ -67,9 +71,10 @@ function ProjectCard({ project, admin }: { project: Project; admin: boolean }) {
         <label>New key label<input maxLength={128} value={label} onChange={(event) => setLabel(event.target.value)} /></label>
         <button type="submit" disabled={createKey.isPending}>Create ingest key</button>
       </form>
+      <button type="button" className="secondary" onClick={() => setShowKeys((value) => !value)}>{showKeys ? "Hide keys" : "Show keys"}</button>
       <StatusPanel error={createKey.error ?? keys.error ?? revoke.error} onRetry={() => void keys.refetch()} />
       {revealed ? <OneTimeKey value={revealed} /> : null}
-      {keys.data?.items.length ? <div className="table-wrap"><table><thead><tr><th>Label</th><th>Prefix</th><th>State</th><th>Action</th></tr></thead><tbody>{keys.data.items.map((key) => <tr key={key.key_id}><td>{key.label}</td><td><code>{key.key_prefix}</code></td><td>{key.state}</td><td>{key.state === "active" ? <button className="danger" type="button" onClick={() => { if (window.confirm(`Revoke key ${key.key_prefix}? This cannot be undone.`)) revoke.mutate({ keyID: key.key_id, revision: key.revision }); }}>Revoke</button> : "Revoked"}</td></tr>)}</tbody></table></div> : null}
+      {showKeys && keys.data?.items.length ? <div className="table-wrap"><table><thead><tr><th>Label</th><th>Prefix</th><th>State</th><th>Action</th></tr></thead><tbody>{keys.data.items.map((key) => <tr key={key.key_id}><td>{key.label}</td><td><code>{key.key_prefix}</code></td><td>{key.state}</td><td>{key.state === "active" ? <button className="danger" type="button" onClick={() => { if (window.confirm(`Revoke key ${key.key_prefix}? This cannot be undone.`)) revoke.mutate({ keyID: key.key_id, revision: key.revision }); }}>Revoke</button> : "Revoked"}</td></tr>)}</tbody></table></div> : null}
     </> : null}
   </article>;
 }

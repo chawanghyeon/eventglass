@@ -4,7 +4,7 @@
 
 ## 추적과 계약
 
-- 관련 P/G/T ID:
+- 관련 packet / D·H acceptance ID:
 - migration/native/API 계약 변경:
 
 ## 검증

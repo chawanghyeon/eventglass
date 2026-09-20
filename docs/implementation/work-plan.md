@@ -2,7 +2,10 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, all G05 packets U1–U3 and A1–A2, and M1–M2 are complete; M3 is the first pending packet. Do not mark a packet complete until
+G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U3 and A1–A2, and M1–M2 have implementations and scoped tests. Repository review reopened G05 closure:
+U4 below contains missing operator surfaces; M3 remains the next backend packet.
+M2 physical GC stays frozen until M4 provides a fresh coordinated backup attestation.
+Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
 in the implementation commit, not by making per-packet diary files.
 
@@ -75,14 +78,15 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 | U2 / U1 — complete | query Live | query/live.go,live_budget.go; api/public_live.go,query_http.go; web/features/logs | Zero-match checkpoint advances, resume within partly emitted batch, late event-time received now, reconnect duplicates deduped, slow client/revoke/resync; bounded frames/list, HTTP 32-slot/slow-write/disconnect tests; independent worker + real HTTP 205-row partial resume; sustained cgroup load remains G07 |
 | A1 / Q5 — complete | api-ui alerts, control G05 | migrations/0009_alerts.sql; alerts/evaluate.go; control/alerts.go; api rules/destinations | Cut barrier concurrent Accept, pending batch not zero, delayed complete window, revision/disable/cooldown/retention-expired window, issue transition exactly one outbox row |
 | A2 / A1 — complete | api-ui delivery | alerts/deliver.go,destination.go; control/deliveries.go | Local receiver only: duplicate after lost send reply, signature stable body, retries12, permanent4xx, DNS rebinding/private IPv6/redirects denied, no secret logs, credential rotation fail-closed |
-| U3 / U2,A2 — complete | UI routes/system | remaining features and Playwright flows; sdk outcomes API | Real SDK->ACK->publication->UI, error-level log not Issue, breadcrumbs not rows, frame/raw XSS, role enforcement, no external alerts; **G05 complete** |
+| U3 / U2,A2 — connected subset verified | UI routes/system | project/Issue/SDK-outcome screens and Playwright flows | Real SDK->ACK->publication->UI, error-level log not Issue, breadcrumbs not rows, frame/raw XSS, role enforcement, no external alerts; does not close missing system/user/editor surfaces |
+| U4 / U3 — pending | api-ui complete operator contract; api/capabilities.json | User/membership APIs and UI, password UI, alert/destination editors, delivery retry UI, GET /v1/system and installation-admin retention API | Real authority/revision/CSRF and pagination tests for each mutation; show cuts/limits/backup degradation; full frontend flows without external alerts. **G05 closes only here** |
 
 ## Packets G06: safe automatic operation
 
 | ID / depends on | Read | Files | Required tests and done condition |
 |---|---|---|---|
 | M1 / U3 — complete | operations compaction, control G06 | migrations/0010_maintenance.sql; maintenance/compact.go; control/maintenance.go | Concurrent publication does not starve swap; exact reserved inputs only; identity preserved; crash before/after swap and reader pinned old generation |
-| M2 / M1 — complete | operations retention/GC | maintenance/retain.go,gc.go; control/retention.go | Mixed-retention rewrite, snapshot floor stable, widening cannot resurrect, journal protect8days+backup horizon, current/pinned/prepared file never deleted, latePUT tombstone resweep |
+| M2 / M1 — implemented; operational backup dependency M4 | operations retention/GC | maintenance/retain.go,gc.go; control/retention.go; migrations/0012_gc_interlock.sql | Mixed-retention rewrite, snapshot floor stable, widening cannot resurrect, journal protect8days+backup horizon, current/pinned/prepared file never deleted, latePUT tombstone resweep; unknown/stale backup health freezes deletion; stale GC attempts cannot confirm; completed producer FK cleanup and expired swap leases tested |
 | M3 / M2 | operations cache/child | storage/cache.go; integrate existing gateway | Singleflight/pin eviction, SHA corrupt last block, shortRange/changed identity, disk quotas, no default fullGET, canceled child releases pins only after exit |
 | M4 / M3 | operations recovery | maintenance/recovery.go; CLI doctor/repair/restore; deploy pgBackRest config/runbook | Actual isolated PG base+WAL+S3 restore, referenced set verification, fresh generation reads old verified files, no newer-object adoption, sessions invalid, outgoing paused, missingfile unhealthy; **G06 complete** |
 

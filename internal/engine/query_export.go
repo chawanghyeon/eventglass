@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/chawanghyeon/eventglass/internal/storage"
+	duckdb "github.com/duckdb/duckdb-go/v2"
 )
 
 const MaxPublicQueryResultBytes = int64(8 << 20)
@@ -51,8 +52,18 @@ func ExportQueryResult(ctx context.Context, request QueryExportRequest) (summary
 		return summary, err
 	}
 	defer db.Close()
+	// Export is bounded API/scheduler work, not an unrestricted analytics child.
+	for _, setting := range []string{"SET memory_limit = '64MiB'", "SET max_temp_directory_size = '0B'"} {
+		if _, err := db.ExecContext(ctx, setting); err != nil {
+			return summary, err
+		}
+	}
 	statement := `COPY (SELECT * FROM read_parquet('` + quoteSQLString(request.InputPath) + `')) TO '` + quoteSQLString(request.OutputPath) + `' (FORMAT JSON,ARRAY false)`
 	if _, err := db.ExecContext(ctx, statement); err != nil {
+		var native *duckdb.Error
+		if errors.As(err, &native) && native.Type == duckdb.ErrorTypeOutOfMemory {
+			return summary, ErrQueryExecutionLimit
+		}
 		return summary, fmt.Errorf("export query result: %w", err)
 	}
 	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM read_parquet(?)`, request.InputPath).Scan(&summary.Rows); err != nil {

@@ -7,8 +7,9 @@ import type { Session } from "../api/types";
 import { Providers, queryClient, SessionProvider } from "../app/providers";
 import { LoginPage } from "./auth/LoginPage";
 import { IssuesPage } from "./issues/IssuesPage";
-import { SearchWorkspace } from "./logs/SearchWorkspace";
+import { SearchWorkspace } from "./search/SearchWorkspace";
 import { ProjectsPage } from "./projects/ProjectsPage";
+import { AlertsPage } from "./alerts/AlertsPage";
 
 const session: Session = {
   user_id: "9007199254740993",
@@ -26,6 +27,28 @@ afterEach(() => {
 
 // Component contract tests with mocked APIs, not connected browser E2E evidence.
 describe("operator component contracts", () => {
+  it("loads the next project page with its opaque cursor", async () => {
+    const projects = vi.spyOn(api,"projects").mockResolvedValueOnce({items:[],next_cursor:"page-two"}).mockResolvedValueOnce({items:[{
+      tenant_id:"7",project_id:"12",name:"Second page project",state:"active",default_service:"",allowed_origins:[],revision:"1",auth_revision:"1",scrub_revision:"1",
+    }],next_cursor:null});
+    render(<Providers><SessionProvider session={session}><ProjectsPage /></SessionProvider></Providers>);
+    fireEvent.click(await screen.findByRole("button",{name:"Next page"}));
+    expect(await screen.findByText("Second page project")).toBeInTheDocument();
+    expect(projects).toHaveBeenLastCalledWith("7","page-two",expect.any(AbortSignal));
+  });
+
+  it("loads alerts only for the selected project, not every project", async () => {
+    vi.spyOn(api,"projects").mockResolvedValue({items:[1,2,3].map((id)=>({tenant_id:"7",project_id:String(id),name:`Project ${id}`,state:"active" as const,default_service:"",allowed_origins:[],revision:"1",auth_revision:"1",scrub_revision:"1"})),next_cursor:null});
+    const rules = vi.spyOn(api,"alerts").mockResolvedValue({items:[],next_cursor:null});
+    const deliveries = vi.spyOn(api,"deliveries").mockResolvedValue({items:[],next_cursor:null});
+    render(<Providers><SessionProvider session={session}><AlertsPage /></SessionProvider></Providers>);
+    expect(await screen.findByRole("heading",{name:"Project 1"})).toBeInTheDocument();
+    expect(rules).toHaveBeenCalledTimes(1);
+    expect(deliveries).toHaveBeenCalledTimes(1);
+    fireEvent.change(screen.getByLabelText("Project"),{target:{value:"3"}});
+    expect(await screen.findByRole("heading",{name:"Project 3"})).toBeInTheDocument();
+    expect(rules).toHaveBeenLastCalledWith("7","3",undefined,expect.any(AbortSignal));
+  });
   it("signs in with a local password form and stores the generated session DTO", async () => {
     vi.spyOn(api, "login").mockResolvedValue(session);
     render(<Providers><MemoryRouter initialEntries={["/login"]}><Routes>

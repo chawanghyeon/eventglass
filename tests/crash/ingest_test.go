@@ -3,6 +3,7 @@ package crash_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -37,6 +38,7 @@ type crashFixture struct {
 	tenantID  int64
 	projectID int64
 	keyHash   [32]byte
+	keyFiles  [3]string
 }
 
 type barrierMessage struct {
@@ -97,6 +99,19 @@ func setupCrashFixture(t *testing.T, base int64) *crashFixture {
 		t.Fatal(err)
 	}
 	fixture := &crashFixture{pool: pool, store: store, s3: s3Config, tenantID: base, projectID: base*10 + 1, keyHash: sha256.Sum256([]byte(fmt.Sprintf("key-%d", base)))}
+	// Stable across this fixture's restarts, outside the scratch directory that
+	// the crash oracle intentionally removes. Never reuse production secrets.
+	keyDirectory := t.TempDir()
+	for index := range fixture.keyFiles {
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			t.Fatal(err)
+		}
+		fixture.keyFiles[index] = filepath.Join(keyDirectory, fmt.Sprintf("key-%d", index))
+		if err := os.WriteFile(fixture.keyFiles[index], []byte(hex.EncodeToString(key)), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	keyID := crashUUID(base, 1)
 	if _, err := pool.Exec(ctx, `INSERT INTO tenants(tenant_id) VALUES($1)`, fixture.tenantID); err != nil {
 		t.Fatal(err)
@@ -156,6 +171,8 @@ func childEnvironment(fixture *crashFixture, mode, acceptanceID, scratch string)
 		"EVENTGLASS_CRASH_TENANT="+strconv.FormatInt(fixture.tenantID, 10), "EVENTGLASS_CRASH_PROJECT="+strconv.FormatInt(fixture.projectID, 10),
 		"EVENTGLASS_CRASH_ACCEPTANCE="+acceptanceID, "EVENTGLASS_SCRATCH_DIR="+scratch,
 		"EVENTGLASS_ROLES=api", "EVENTGLASS_HTTP_ADDR=127.0.0.1:0", "EVENTGLASS_PUBLIC_URL=http://127.0.0.1",
+		"EVENTGLASS_AUTH_HASH_KEY_FILE="+fixture.keyFiles[0], "EVENTGLASS_TOKEN_KEY_FILE="+fixture.keyFiles[1],
+		"EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE="+fixture.keyFiles[2], "EVENTGLASS_INSECURE_COOKIE=true",
 		"EVENTGLASS_S3_REGION="+fixture.s3.Region, "EVENTGLASS_S3_PREFIX="+fixture.s3.Prefix, "EVENTGLASS_S3_PATH_STYLE=true",
 	)
 }

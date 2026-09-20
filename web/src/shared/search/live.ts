@@ -1,5 +1,5 @@
 import type { Kind, SearchResult } from "../../api/types";
-import { abortableDelay } from "../../shared/search/execute";
+import { abortableDelay } from "./execute";
 
 export type LiveRow = SearchResult["rows"][number];
 

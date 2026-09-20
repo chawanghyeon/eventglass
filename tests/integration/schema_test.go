@@ -88,7 +88,7 @@ func TestMigration0003UpgradesExistingRowsAndScopedProducerFK(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifest) != 11 {
+	if len(manifest) != 12 {
 		t.Fatalf("migration count=%d", len(manifest))
 	}
 	conn, err := pgx.Connect(ctx, env["EVENTGLASS_DATABASE_URL"])
@@ -243,6 +243,7 @@ func TestMigration0006BackfillsExistingSnapshotAuthority(t *testing.T) {
 	}
 	const snapshotID = "00000000-0000-4000-8000-000000006006"
 	for _, statement := range []string{
+		`INSERT INTO installations(singleton,installation_id,storage_generation,schema_version,storage_identity) VALUES(true,'00000000-0000-4000-8000-000000006006',1,1,'migration-fixture') ON CONFLICT(singleton) DO NOTHING`,
 		`INSERT INTO tenants(tenant_id,auth_revision) VALUES(6006,9)`,
 		`INSERT INTO projects(tenant_id,project_id,scrub_revision,auth_revision) VALUES(6006,60061,1,11)`,
 		`INSERT INTO users(user_id,email_normalized,password_phc,auth_revision)

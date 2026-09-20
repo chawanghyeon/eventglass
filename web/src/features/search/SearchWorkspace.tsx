@@ -10,7 +10,7 @@ import { SearchSession } from "../../shared/search/session";
 import { executeAggregate, histogramRequest } from "../../shared/search/aggregate";
 import { cancelDataset, datasetQueryPrefix } from "../../shared/search/lifetime";
 import { StatusPanel } from "../../shared/ui/StatusPanel";
-import { mergeLiveRows, rowsFromLiveEvent, streamLive, type LiveRow } from "./live";
+import { mergeLiveRows, rowsFromLiveEvent, streamLive, type LiveRow } from "../../shared/search/live";
 
 export function SearchWorkspace({ title, defaultKinds, histogram = false }: { title: string; defaultKinds: Kind[]; histogram?: boolean }) {
   const { session, tenant } = useSession();

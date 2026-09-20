@@ -49,7 +49,7 @@ func (operations *MaintenanceOperations) ChangeRetentionPolicy(ctx context.Conte
 		return 0, 0, err
 	}
 	revision++
-	if _, err := tx.Exec(ctx, `UPDATE installations SET retention_days=$1,retention_revision=$2,retention_floor_us=$3,retention_tick_at=clock_timestamp() WHERE singleton`, days, revision, newFloor); err != nil {
+	if _, err := tx.Exec(ctx, `UPDATE installations SET retention_days=$1,dedupe_retention_days=GREATEST(dedupe_retention_days,$1),retention_revision=$2,retention_floor_us=$3,retention_tick_at=clock_timestamp() WHERE singleton`, days, revision, newFloor); err != nil {
 		return 0, 0, err
 	}
 	if err := tx.Commit(ctx); err != nil {

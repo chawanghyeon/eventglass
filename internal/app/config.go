@@ -25,6 +25,7 @@ type Config struct {
 	HTTPAddr               string
 	PublicURL              string
 	ScratchDir             string
+	WebDir                 string
 	BootstrapTokenFile     string
 	AuthHashKeyFile        string
 	TokenKeyFile           string
@@ -55,6 +56,7 @@ func LoadConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 	config := Config{
 		DatabaseURL: value("EVENTGLASS_DATABASE_URL"), HTTPAddr: value("EVENTGLASS_HTTP_ADDR"),
 		PublicURL: value("EVENTGLASS_PUBLIC_URL"), ScratchDir: value("EVENTGLASS_SCRATCH_DIR"),
+		WebDir:             value("EVENTGLASS_WEB_DIR"),
 		BootstrapTokenFile: value("EVENTGLASS_BOOTSTRAP_TOKEN_FILE"), AuthHashKeyFile: value("EVENTGLASS_AUTH_HASH_KEY_FILE"),
 		TokenKeyFile: value("EVENTGLASS_TOKEN_KEY_FILE"), AlertEncryptionKeyFile: value("EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE"), Roles: roles,
 		S3:           storage.S3Config{Endpoint: endpoint, Region: value("EVENTGLASS_S3_REGION"), Bucket: value("EVENTGLASS_S3_BUCKET"), Prefix: value("EVENTGLASS_S3_PREFIX"), PathStyle: pathStyle},

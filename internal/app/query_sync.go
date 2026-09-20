@@ -15,7 +15,7 @@ import (
 // control-plane path used by background workers.
 type DurableQuerySyncExecutor struct {
 	Control           *control.QueryOperations
-	Workflow          *DurableQueryWorkflow
+	Workflow          *query.Workflow
 	InstallationID    string
 	StorageGeneration int64
 	Owner             string
@@ -68,24 +68,5 @@ func (executor *DurableQuerySyncExecutor) Execute(ctx context.Context, tokenHash
 }
 
 func executeQueryTaskWithHeartbeat(ctx context.Context, operations *control.QueryOperations, authority control.QueryTaskAuthority, execute func(context.Context) error) error {
-	taskContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	result := make(chan error, 1)
-	go func() { result <- execute(taskContext) }()
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-result:
-			return err
-		case <-ctx.Done():
-			cancel()
-			return errors.Join(ctx.Err(), <-result)
-		case <-ticker.C:
-			if _, err := operations.HeartbeatQueryTask(ctx, authority); err != nil {
-				cancel()
-				return errors.Join(err, <-result)
-			}
-		}
-	}
+	return superviseTask(ctx, 15*time.Second, func(ctx context.Context) error { _, err := operations.HeartbeatQueryTask(ctx, authority); return err }, execute)
 }

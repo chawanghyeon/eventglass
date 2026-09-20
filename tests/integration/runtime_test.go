@@ -86,7 +86,7 @@ func TestSchedulerRoleAdvancesPersistedRetentionFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	runtime, err := app.NewRuntime(ctx, app.Config{
-		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
+		DatabaseURL: fixture.pool.Config().ConnString(), HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
 		ScratchDir: filepath.Join(t.TempDir(), "runtime-scheduler"), InsecureCookie: true,
 		Roles: map[app.Role]bool{app.RoleScheduler: true}, S3: s3Config, DrainTimeout: time.Second,
 	})
@@ -137,7 +137,7 @@ func TestRuntimeStartsDurableIngressAndDrains(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := app.Config{
-		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
+		DatabaseURL: fixture.pool.Config().ConnString(), HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
 		ScratchDir: filepath.Join(t.TempDir(), "runtime"), AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), AlertEncryptionKeyFile: authHashKeyFile(t), InsecureCookie: true,
 		Roles: map[app.Role]bool{app.RoleAPI: true}, S3: s3Config, DrainTimeout: time.Second,
 	}
@@ -244,7 +244,7 @@ func TestRuntimeExposesOnlySetupSurfaceUntilInitializationCompletes(t *testing.T
 		t.Fatal(err)
 	}
 	config := app.Config{
-		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
+		DatabaseURL: fixture.pool.Config().ConnString(), HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
 		ScratchDir: filepath.Join(t.TempDir(), "runtime-setup"), BootstrapTokenFile: bootstrapPath,
 		AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), AlertEncryptionKeyFile: authHashKeyFile(t), InsecureCookie: true, Roles: map[app.Role]bool{app.RoleAPI: true},
 		S3: s3Config, DrainTimeout: time.Second,
@@ -320,7 +320,7 @@ func TestRuntimeWorkerPublishesEmptyAckedBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := app.Config{
-		DatabaseURL: environment["EVENTGLASS_DATABASE_URL"], HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
+		DatabaseURL: fixture.pool.Config().ConnString(), HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
 		ScratchDir: filepath.Join(t.TempDir(), "runtime-worker"), AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), AlertEncryptionKeyFile: authHashKeyFile(t), InsecureCookie: true,
 		Roles: map[app.Role]bool{app.RoleAPI: true, app.RoleWorker: true}, S3: s3Config, DrainTimeout: 3 * time.Second,
 	}

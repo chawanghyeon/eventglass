@@ -14,7 +14,7 @@ func TestProductionDependencyBoundaries(t *testing.T) {
 	allowed := map[string]string{
 		"app":         "*",
 		"api":         "ingest sdk query alerts control model resource engine",
-		"ingest":      "sdk model resource control storage",
+		"ingest":      "sdk model resource control storage engine issues",
 		"sdk":         "",
 		"model":       "",
 		"control":     "model issues",

@@ -26,6 +26,7 @@ type alertFixture struct {
 func setupAlertFixture(t *testing.T, base int64) *alertFixture {
 	t.Helper()
 	env := requiredEnvironment(t, "EVENTGLASS_DATABASE_URL")
+	env["EVENTGLASS_DATABASE_URL"] = isolatedDatabaseURL(t, env["EVENTGLASS_DATABASE_URL"])
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	if err := control.ApplyMigrations(ctx, env["EVENTGLASS_DATABASE_URL"]); err != nil {

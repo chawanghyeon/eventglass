@@ -1,11 +1,19 @@
 package app
 
-import "context"
+import (
+	"context"
+	"sync"
+
+	"github.com/chawanghyeon/eventglass/internal/resource"
+)
 
 // NativeTaskGate limits one runtime process to one isolated native child. The
 // same gate is shared by conversion, query execution, and public-result export.
 type NativeTaskGate struct {
-	slot chan struct{}
+	slot        chan struct{}
+	working     *resource.Budget
+	reservation int64
+	memory      int64
 }
 
 func NewNativeTaskGate() *NativeTaskGate {
@@ -15,6 +23,9 @@ func NewNativeTaskGate() *NativeTaskGate {
 }
 
 func (gate *NativeTaskGate) acquire(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if gate == nil {
 		return func() {}, nil
 	}
@@ -22,6 +33,33 @@ func (gate *NativeTaskGate) acquire(ctx context.Context) (func(), error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-gate.slot:
-		return func() { gate.slot <- struct{}{} }, nil
+		var permit *resource.Permit
+		if gate.working != nil {
+			var err error
+			permit, err = gate.working.AcquireContext(ctx, gate.reservation)
+			if err != nil {
+				gate.slot <- struct{}{}
+				return nil, err
+			}
+		}
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				if permit != nil {
+					permit.Release()
+				}
+				gate.slot <- struct{}{}
+			})
+		}, nil
 	}
+}
+
+func (gate *NativeTaskGate) memoryLimit(requested int64) int64 {
+	if gate == nil || gate.memory == 0 {
+		return requested
+	}
+	if requested == 0 || requested > gate.memory {
+		return gate.memory
+	}
+	return requested
 }

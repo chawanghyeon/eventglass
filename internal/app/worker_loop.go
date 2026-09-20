@@ -17,14 +17,43 @@ const (
 )
 
 func (runtime *Runtime) runWorker(ctx context.Context) error {
-	work := []func(context.Context) (bool, error){runtime.runOnePublication, runtime.runOneDelivery, runtime.runOneConversion, runtime.runOneQueryCoordinator, runtime.runOneQuery, runtime.runOneRetention, runtime.runOneCompaction, runtime.runOneGC}
+	// Network delivery and publication cannot wait behind a long native query.
+	// Native work stays in one lane and retains the shared child gate. Every loop
+	// is joined on shutdown; durable claims remain the cross-process authority.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	groups := [][]workerOperation{
+		{{"publication", runtime.runOnePublication}},
+		{{"delivery", runtime.runOneDelivery}, {"gc", runtime.runOneGC}},
+		{{"conversion", runtime.runOneConversion}, {"query_plan", runtime.runOneQueryCoordinator}, {"query", runtime.runOneQuery}, {"retention", runtime.runOneRetention}, {"compaction", runtime.runOneCompaction}},
+	}
+	results := make(chan error, len(groups))
+	for _, group := range groups {
+		go func() { results <- runtime.runWorkerGroup(ctx, group) }()
+	}
+	var result error
+	for range groups {
+		result = errors.Join(result, <-results)
+		cancel()
+	}
+	return result
+}
+
+type workerOperation struct {
+	name string
+	run  func(context.Context) (bool, error)
+}
+
+func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperation) error {
 	next := 0
 	for ctx.Err() == nil {
 		var progressed bool
 		var err error
 		for offset := range work {
 			index := (next + offset) % len(work)
-			progressed, err = work[index](ctx)
+			started := time.Now()
+			progressed, err = work[index].run(ctx)
+			runtime.stats.record(ctx, work[index].name, started, progressed, err)
 			if err != nil || progressed {
 				next = (index + 1) % len(work)
 				break
@@ -98,26 +127,9 @@ func (runtime *Runtime) runOneCompaction(ctx context.Context) (bool, error) {
 }
 
 func (runtime *Runtime) withCompactionHeartbeat(ctx context.Context, authority control.MaintenanceAuthority, task func(context.Context) error) error {
-	taskContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	result := make(chan error, 1)
-	go func() { result <- task(taskContext) }()
-	ticker := time.NewTicker(workerHeartbeat)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-result:
-			return err
-		case <-ctx.Done():
-			cancel()
-			return errors.Join(ctx.Err(), <-result)
-		case <-ticker.C:
-			if err := runtime.maintenance.HeartbeatCompaction(ctx, authority, workerLease); err != nil {
-				cancel()
-				return errors.Join(err, <-result)
-			}
-		}
-	}
+	return superviseTask(ctx, workerHeartbeat, func(ctx context.Context) error {
+		return runtime.maintenance.HeartbeatCompaction(ctx, authority, workerLease)
+	}, task)
 }
 
 func (runtime *Runtime) runOneDelivery(ctx context.Context) (bool, error) {
@@ -142,26 +154,10 @@ func (runtime *Runtime) runOneQueryCoordinator(ctx context.Context) (bool, error
 }
 
 func (runtime *Runtime) withQueryCoordinatorHeartbeat(ctx context.Context, authority control.QueryCoordinatorAuthority, plan func(context.Context) error) error {
-	planContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	result := make(chan error, 1)
-	go func() { result <- plan(planContext) }()
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-result:
-			return err
-		case <-ctx.Done():
-			cancel()
-			return errors.Join(ctx.Err(), <-result)
-		case <-ticker.C:
-			if _, err := runtime.queryControl.HeartbeatQueryCoordinator(ctx, authority); err != nil {
-				cancel()
-				return errors.Join(err, <-result)
-			}
-		}
-	}
+	return superviseTask(ctx, 15*time.Second, func(ctx context.Context) error {
+		_, err := runtime.queryControl.HeartbeatQueryCoordinator(ctx, authority)
+		return err
+	}, plan)
 }
 
 func (runtime *Runtime) runOneQuery(ctx context.Context) (bool, error) {
@@ -232,24 +228,8 @@ func (runtime *Runtime) runOnePublication(ctx context.Context) (bool, error) {
 }
 
 func (runtime *Runtime) withJobHeartbeat(ctx context.Context, authority control.JobAuthority, task func(context.Context) error) error {
-	taskContext, cancel := context.WithCancel(ctx)
-	defer cancel()
-	result := make(chan error, 1)
-	go func() { result <- task(taskContext) }()
-	ticker := time.NewTicker(workerHeartbeat)
-	defer ticker.Stop()
-	for {
-		select {
-		case err := <-result:
-			return err
-		case <-ctx.Done():
-			cancel()
-			return errors.Join(ctx.Err(), <-result)
-		case <-ticker.C:
-			if _, err := runtime.publication.Heartbeat(ctx, authority, workerLease); err != nil {
-				cancel()
-				return errors.Join(err, <-result)
-			}
-		}
-	}
+	return superviseTask(ctx, workerHeartbeat, func(ctx context.Context) error {
+		_, err := runtime.publication.Heartbeat(ctx, authority, workerLease)
+		return err
+	}, task)
 }

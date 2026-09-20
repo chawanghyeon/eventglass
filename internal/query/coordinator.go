@@ -1,4 +1,4 @@
-package app
+package query
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/model"
-	"github.com/chawanghyeon/eventglass/internal/query"
 )
 
 type queryPlanningControl interface {
@@ -16,12 +15,12 @@ type queryPlanningControl interface {
 	FailQueryPlanning(context.Context, control.QueryCoordinatorAuthority, string) error
 }
 
-type DurableQueryCoordinator struct {
+type Coordinator struct {
 	Control queryPlanningControl
-	Objects query.CatalogObjectReader
+	Objects CatalogObjectReader
 }
 
-func (coordinator DurableQueryCoordinator) Execute(ctx context.Context, authority control.QueryCoordinatorAuthority) error {
+func (coordinator Coordinator) Execute(ctx context.Context, authority control.QueryCoordinatorAuthority) error {
 	if coordinator.Control == nil || coordinator.Objects == nil {
 		return errors.New("query coordinator dependencies are required")
 	}
@@ -29,12 +28,12 @@ func (coordinator DurableQueryCoordinator) Execute(ctx context.Context, authorit
 	if err != nil {
 		return err
 	}
-	dataset, err := query.DecodeDatasetIdentity(planContext.Snapshot.DatasetBytes)
+	dataset, err := DecodeDatasetIdentity(planContext.Snapshot.DatasetBytes)
 	if err != nil {
 		return coordinator.fail(ctx, authority, err)
 	}
 	pager := durableCatalogPager{control: coordinator.Control, authority: authority}
-	files, err := query.LoadVerifiedCatalog(ctx, pager, coordinator.Objects, control.CatalogCommand{
+	files, err := LoadVerifiedCatalog(ctx, pager, coordinator.Objects, control.CatalogCommand{
 		TenantID: authority.TenantID, SnapshotID: planContext.Snapshot.SnapshotID,
 		DatasetSHA256: planContext.Snapshot.DatasetSHA256, DatasetBytes: planContext.Snapshot.DatasetBytes,
 		TimeBasis: dataset.TimeBasis, StartUS: dataset.StartUS, EndUS: dataset.EndUS, Kinds: dataset.Kinds,
@@ -42,7 +41,7 @@ func (coordinator DurableQueryCoordinator) Execute(ctx context.Context, authorit
 	if err != nil {
 		return coordinator.fail(ctx, authority, err)
 	}
-	execution, err := query.BuildExecutionPlan(query.PlanScope{
+	execution, err := BuildExecutionPlan(PlanScope{
 		QueryID: authority.QueryID, TenantID: authority.TenantID, SnapshotID: planContext.Snapshot.SnapshotID,
 		Generation: authority.StorageGeneration, OperationHash: planContext.OperationHash,
 		Operation: planContext.Operation, DeadlineUS: planContext.Deadline.UnixMicro(),
@@ -56,9 +55,9 @@ func (coordinator DurableQueryCoordinator) Execute(ctx context.Context, authorit
 	})
 }
 
-func (coordinator DurableQueryCoordinator) fail(ctx context.Context, authority control.QueryCoordinatorAuthority, cause error) error {
+func (coordinator Coordinator) fail(ctx context.Context, authority control.QueryCoordinatorAuthority, cause error) error {
 	code := "query_planning_failed"
-	if errors.Is(cause, query.ErrQueryLimit) || errors.Is(cause, query.ErrCatalogLimit) {
+	if errors.Is(cause, ErrQueryLimit) || errors.Is(cause, ErrCatalogLimit) {
 		code = "query_limit_exceeded"
 	}
 	return errors.Join(cause, coordinator.Control.FailQueryPlanning(ctx, authority, code))

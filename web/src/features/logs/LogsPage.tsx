@@ -1,5 +1,5 @@
 import type { Kind } from "../../api/types";
-import { SearchWorkspace } from "./SearchWorkspace";
+import { SearchWorkspace } from "../search/SearchWorkspace";
 
 const logKinds: Kind[] = ["log"];
 

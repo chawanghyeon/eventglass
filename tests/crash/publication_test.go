@@ -39,11 +39,11 @@ func TestPublicationLatencyAndFileSizeDistribution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	converter := app.DurableConversionWorkflow{
+	converter := ingest.DurableConversionWorkflow{
 		Control: publication, Store: fixture.store, Runner: app.ProcessConversionRunner{BinaryPath: "/out/eventglass-go"},
 		InstallationID: crashInstallationID, ScratchDir: filepath.Join(t.TempDir(), "converter"),
 	}
-	publisher := app.DurablePublicationWorkflow{Control: publication, Store: fixture.store}
+	publisher := ingest.DurablePublicationWorkflow{Control: publication, Store: fixture.store}
 	latencies := make([]time.Duration, 0, 5)
 	for index := 0; index < cap(latencies); index++ {
 		acceptanceID := crashUUID(fixture.tenantID, 100+index)

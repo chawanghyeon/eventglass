@@ -34,8 +34,8 @@ export const api = {
     const result = await transport.DELETE("/v1/session", { params: { header: { "X-CSRF-Token": csrf } } });
     if (result.response.status !== 204) unwrap(result);
   },
-  async projects(tenantID: string): Promise<ProjectList> {
-    return unwrap(await transport.GET("/v1/projects", { params: { query: { tenant_id: tenantID, limit: 100 } } }));
+  async projects(tenantID: string, cursor?: string, signal?: AbortSignal): Promise<ProjectList> {
+    return unwrap(await transport.GET("/v1/projects", { params: { query: { tenant_id: tenantID, limit: 100, cursor } }, signal }));
   },
   async createProject(body: ProjectCreate, csrf: string): Promise<Project> {
     return unwrap(await transport.POST("/v1/projects", { params: { header: { "X-CSRF-Token": csrf } }, body }));
@@ -53,26 +53,26 @@ export const api = {
     const result = await transport.DELETE("/v1/projects/{id}/keys/{key_id}", { params: { path: { id: projectID, key_id: keyID }, query: { tenant_id: tenantID, revision }, header: { "X-CSRF-Token": csrf } } });
     if (result.response.status !== 204) unwrap(result);
   },
-  async issues(tenantID: string, projectIDs: string[]): Promise<IssueList> {
-    return unwrap(await transport.GET("/v1/issues", { params: { query: { tenant_id: tenantID, project_ids: projectIDs, limit: 100 } } }));
+  async issues(tenantID: string, projectIDs: string[], cursor?: string, signal?: AbortSignal): Promise<IssueList> {
+    return unwrap(await transport.GET("/v1/issues", { params: { query: { tenant_id: tenantID, project_ids: projectIDs, limit: 100, cursor } }, signal }));
   },
   async issue(tenantID: string, projectID: string, issueID: string): Promise<Issue> {
     return unwrap(await transport.GET("/v1/issues/{id}", { params: { path: { id: issueID }, query: { tenant_id: tenantID, project_id: projectID } } }));
   },
-  async issueOccurrences(tenantID: string, projectID: string, issueID: string): Promise<OccurrenceList> {
-    return unwrap(await transport.GET("/v1/issues/{id}/occurrences", { params: { path: { id: issueID }, query: { tenant_id: tenantID, project_id: projectID, limit: 100 } } }));
+  async issueOccurrences(tenantID: string, projectID: string, issueID: string, cursor?: string, signal?: AbortSignal): Promise<OccurrenceList> {
+    return unwrap(await transport.GET("/v1/issues/{id}/occurrences", { params: { path: { id: issueID }, query: { tenant_id: tenantID, project_id: projectID, limit: 100, cursor } }, signal }));
   },
   async updateIssue(tenantID: string, projectID: string, issueID: string, revision: string, status: "unresolved" | "resolved" | "ignored", csrf: string): Promise<Issue> {
     return unwrap(await transport.PATCH("/v1/issues/{id}", { params: { path: { id: issueID }, header: { "X-CSRF-Token": csrf } }, body: { tenant_id: tenantID, project_id: projectID, revision, status, operation_id: crypto.randomUUID() } }));
   },
-  async sdkOutcomes(tenantID: string, startUS: string, endUS: string): Promise<SDKOutcomeList> {
-    return unwrap(await transport.GET("/v1/system/sdk-outcomes", { params: { query: { tenant_id: tenantID, start_us: startUS, end_us: endUS, limit: 100 } } }));
+  async sdkOutcomes(tenantID: string, startUS: string, endUS: string, cursor?: string, signal?: AbortSignal): Promise<SDKOutcomeList> {
+    return unwrap(await transport.GET("/v1/system/sdk-outcomes", { params: { query: { tenant_id: tenantID, start_us: startUS, end_us: endUS, limit: 100, cursor } }, signal }));
   },
-  async alerts(tenantID: string, projectID: string): Promise<RuleList> {
-    return unwrap(await transport.GET("/v1/alerts", { params: { query: { tenant_id: tenantID, project_id: projectID, limit: 100 } } }));
+  async alerts(tenantID: string, projectID: string, cursor?: string, signal?: AbortSignal): Promise<RuleList> {
+    return unwrap(await transport.GET("/v1/alerts", { params: { query: { tenant_id: tenantID, project_id: projectID, limit: 100, cursor } }, signal }));
   },
-  async deliveries(tenantID: string, projectID: string): Promise<DeliveryList> {
-    return unwrap(await transport.GET("/v1/deliveries", { params: { query: { tenant_id: tenantID, project_id: projectID, limit: 100 } } }));
+  async deliveries(tenantID: string, projectID: string, cursor?: string, signal?: AbortSignal): Promise<DeliveryList> {
+    return unwrap(await transport.GET("/v1/deliveries", { params: { query: { tenant_id: tenantID, project_id: projectID, limit: 100, cursor } }, signal }));
   },
   async destinations(tenantID: string): Promise<DestinationList> {
     return unwrap(await transport.GET("/v1/destinations", { params: { query: { tenant_id: tenantID } } }));

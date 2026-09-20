@@ -20,9 +20,15 @@ func (runtime *Runtime) runRetentionScheduler(ctx context.Context) error {
 	}
 	defer func() { <-alertDone }()
 	for {
-		_, _, _ = runtime.queryControl.AdvanceRetentionFloor(ctx)
-		_, _ = runtime.maintenance.RunRetentionCleanup(ctx)
-		_ = runtime.reserveOneCompaction(ctx)
+		started := time.Now()
+		_, _, err := runtime.queryControl.AdvanceRetentionFloor(ctx)
+		runtime.stats.record(ctx, "retention_tick", started, err == nil, err)
+		started = time.Now()
+		progressed, err := runtime.maintenance.RunRetentionCleanup(ctx)
+		runtime.stats.record(ctx, "retention_cleanup", started, progressed, err)
+		started = time.Now()
+		err = runtime.reserveOneCompaction(ctx)
+		runtime.stats.record(ctx, "maintenance_schedule", started, err == nil, err)
 		timer := time.NewTimer(retentionTickInterval)
 		select {
 		case <-ctx.Done():
@@ -72,7 +78,9 @@ func (runtime *Runtime) reserveOneCompaction(ctx context.Context) error {
 
 func (runtime *Runtime) runAlertScheduler(ctx context.Context) {
 	for {
-		_ = runtime.alertEvaluator.EvaluateOnce(ctx)
+		started := time.Now()
+		err := runtime.alertEvaluator.EvaluateOnce(ctx)
+		runtime.stats.record(ctx, "alert_evaluation", started, err == nil, err)
 		timer := time.NewTimer(time.Second)
 		select {
 		case <-ctx.Done():

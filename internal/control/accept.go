@@ -228,7 +228,7 @@ func lockProjectAuthorities(ctx context.Context, tx pgx.Tx, batch VerifiedBatch,
 		var projectState, keyState string
 		var projectRevision, keyRevision, configRevision int64
 		var scrubRevision, retentionDays int
-		err := tx.QueryRow(ctx, `SELECT p.state,p.auth_revision,p.scrub_revision,p.config_revision,p.retention_days,k.state,k.revision
+		err := tx.QueryRow(ctx, `SELECT p.state,p.auth_revision,p.scrub_revision,p.config_revision,(SELECT dedupe_retention_days FROM installations WHERE singleton),k.state,k.revision
 			FROM projects p JOIN project_keys k ON k.tenant_id=p.tenant_id AND k.project_id=p.project_id
 			WHERE p.tenant_id=$1 AND p.project_id=$2 AND k.key_hash=$3 FOR SHARE OF p,k`,
 			batch.TenantID, key.projectID, key.keyHash[:]).Scan(&projectState, &projectRevision, &scrubRevision, &configRevision, &retentionDays, &keyState, &keyRevision)
@@ -311,7 +311,7 @@ func selectCandidates(ctx context.Context, tx pgx.Tx, batch VerifiedBatch, reten
 			var existingHash string
 			var expired bool
 			err := tx.QueryRow(ctx, `SELECT d.payload_sha256,
-				GREATEST(d.expires_at,d.created_at+make_interval(days=>p.retention_days+7))<=clock_timestamp()
+				GREATEST(d.expires_at,d.created_at+make_interval(days=>(SELECT dedupe_retention_days FROM installations WHERE singleton)+7))<=clock_timestamp()
 				FROM event_dedupe d JOIN projects p ON p.tenant_id=d.tenant_id AND p.project_id=d.project_id
 				WHERE d.tenant_id=$1 AND d.project_id=$2 AND d.kind=$3 AND d.source_event_id=$4 FOR UPDATE OF d`,
 				batch.TenantID, key.projectID, key.kind, key.sourceID).Scan(&existingHash, &expired)

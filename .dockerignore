@@ -2,6 +2,9 @@
 .github
 .tools
 **/node_modules
+web/dist
+web/test-results
+web/playwright-report
 tools/sdk-fixtures/.npm-cache
 tools/sdk-fixtures/.pip-cache
 tools/sdk-fixtures/.venv

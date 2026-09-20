@@ -6,9 +6,11 @@ implementation and release gates are not complete. Product baseline inspected:
 for an implementing agent, including GPT Luna, without conversation history.
 Do not start by redesigning the system or implementing every gate at once.
 
-Current handoff: architecture/query/Live lifetime hardening, all G05 operator
-surface packets, M1 compaction, and M2 retention/GC are implemented; continue with M3 in
-work-plan.md, not a new architecture rewrite. Project, key, Issue, retained-occurrence and SDK-outcome
+Current handoff: architecture/query/Live lifetime hardening, connected G05 operator
+surfaces, M1 compaction, and M2 retention/GC are implemented. Repository review
+reopened G05: U4 enumerates missing user/system/editor surfaces. M3 is the next
+backend packet, not a new architecture rewrite. Physical GC remains fail-closed
+until M4 provides a fresh verified backup horizon. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises
 the actual ingest/publication/query runtime. Check `api/implemented-routes.json` before wiring a feature.
 Reuse `query.Submission`/`query.Awaiter` for the existing session-authorized
@@ -16,6 +18,11 @@ query path. A1 has a separate revision-bound rule principal and creates durable
 delivery rows without network I/O. A2 claims and sends those rows with fenced
 leases, exact-body signatures, bounded retries, redirect/DNS/IP defenses, and
 fail-closed credential handling. Keep HTTP DTOs and result mapping in api.
+
+Query worker/coordinator workflows now belong to query; conversion/publication
+workflows belong to ingest. App owns joined role loops and native process runners.
+Use `api/capabilities.json` for route/UI coverage, not gate names alone. Production
+UI is served by the final image; browser tests no longer depend on a Vite server.
 
 ## Reading and authority
 
@@ -112,7 +119,8 @@ without it, finish local packets and report the exact unverified gate.
 Suggested continuation instruction:
 
 > Read docs/implementation/README.md and work-plan.md. Inspect the current tree
-> and complete M3, the first incomplete packet, including its negative tests,
+> and select U4 (operator completeness) or M3 (next backend packet) from the actual
+> capability gaps, including its negative tests,
 > relevant verification, documentation, commit and push. Preserve DESIGN.md and
 > ARCHITECTURE.md contracts. Use ARM64 and the pinned DuckDB 2.0 build. Do not
 > mark a gate complete from stubs, mocks alone, skipped tests or design text.

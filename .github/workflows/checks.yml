@@ -1,0 +1,29 @@
+name: ARM64 checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: web/package.json
+      - run: ./scripts/bootstrap
+      - run: npm install --global npm@11.19.0 --ignore-scripts
+      - run: npm ci --prefix web --ignore-scripts
+      - run: npm ci --prefix tools/codegen --ignore-scripts
+      - run: ./scripts/check unit
+      - run: ./scripts/check codegen
+      - run: ./scripts/check web
+      - name: Controlled performance regression samples
+        run: ./scripts/check perf

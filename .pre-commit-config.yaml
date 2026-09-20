@@ -27,7 +27,7 @@ repos:
         stages: [pre-commit]
       - id: gofmt
         name: Go formatting
-        entry: gofmt -d
+        entry: scripts/hooks/check-gofmt
         language: system
         types: [go]
         stages: [pre-commit]

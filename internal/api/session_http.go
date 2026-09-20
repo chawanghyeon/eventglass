@@ -17,6 +17,7 @@ import (
 
 	generated "github.com/chawanghyeon/eventglass/api/generated"
 	"github.com/chawanghyeon/eventglass/internal/control"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/sdk"
 	"github.com/google/uuid"
 )
@@ -163,7 +164,7 @@ func (handler *ManagementHandler) passwordError(writer http.ResponseWriter, requ
 		handler.error(writer, request, http.StatusBadRequest, "invalid_input", false)
 		return
 	}
-	if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "budget") || strings.Contains(err.Error(), "limited") {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, resource.ErrLimited) || errors.Is(err, resource.ErrDraining) {
 		writer.Header().Set("Retry-After", "1")
 		handler.error(writer, request, http.StatusTooManyRequests, "admission_limited", true)
 		return

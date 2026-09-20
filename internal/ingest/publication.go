@@ -1,9 +1,7 @@
-package app
+package ingest
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +12,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/storage"
+	"github.com/google/uuid"
 )
 
 type publicationControl interface {
@@ -70,7 +69,7 @@ func (workflow DurableConversionWorkflow) ConvertAndPrepare(ctx context.Context,
 	if workflow.Control == nil || workflow.Store == nil || workflow.Runner == nil || workflow.InstallationID == "" || workflow.ScratchDir == "" || job.Authority.InstallationID != workflow.InstallationID {
 		return errors.New("invalid durable conversion workflow")
 	}
-	if err := ensurePrivateDirectory(workflow.ScratchDir); err != nil {
+	if err := storage.EnsurePrivateDirectory(workflow.ScratchDir); err != nil {
 		return err
 	}
 	taskDirectory, err := os.MkdirTemp(workflow.ScratchDir, "conversion-")
@@ -216,13 +215,4 @@ func commonGroupingVersion(receipts []control.DurableConversionReceipt) int {
 	return version
 }
 
-func randomUUID() (string, error) {
-	value := make([]byte, 16)
-	if _, err := rand.Read(value); err != nil {
-		return "", err
-	}
-	value[6] = (value[6] & 0x0f) | 0x40
-	value[8] = (value[8] & 0x3f) | 0x80
-	encoded := hex.EncodeToString(value)
-	return encoded[:8] + "-" + encoded[8:12] + "-" + encoded[12:16] + "-" + encoded[16:20] + "-" + encoded[20:], nil
-}
+func randomUUID() (string, error) { value, err := uuid.NewRandom(); return value.String(), err }

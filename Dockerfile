@@ -42,11 +42,20 @@ ENV EVENTGLASS_TEST_BINARY=/out/eventglass-go \
 RUN go test -tags=duckdb_use_static_lib -count=1 ./...
 RUN go vet -tags=duckdb_use_static_lib ./...
 
+FROM node:24.21.0-bookworm-slim@sha256:0e0ff40c39bc087845bfb27465a0df4ea419520094bc35842ff83dd8cbe6f9b6 AS web-build
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm install --global npm@11.19.0 --ignore-scripts && npm ci --ignore-scripts
+COPY web/ ./
+RUN npm run build
+
 FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libcurl4 libssl3 libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 65532 --home-dir /nonexistent --shell /usr/sbin/nologin eventglass
 COPY --from=build /out/eventglass-go /usr/local/bin/eventglass-go
+COPY --from=web-build /web/dist /usr/share/eventglass/web
+ENV EVENTGLASS_WEB_DIR=/usr/share/eventglass/web
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/eventglass-go"]

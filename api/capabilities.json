@@ -1,0 +1,353 @@
+{
+  "version": 1,
+  "meaning": "Declared implementation and coverage map, not evidence of a passing gate. Commands and results belong in commits.",
+  "routes": [
+    {
+      "route": "GET /v1/setup",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/auth_test.go"
+      ]
+    },
+    {
+      "route": "POST /v1/setup",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/auth_test.go"
+      ]
+    },
+    {
+      "route": "POST /v1/sessions",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/auth_test.go"
+      ]
+    },
+    {
+      "route": "GET /v1/session",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/auth_test.go"
+      ]
+    },
+    {
+      "route": "DELETE /v1/session",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/auth_test.go"
+      ]
+    },
+    {
+      "route": "POST /v1/session/password",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "not-exposed",
+      "tests": [
+        "tests/integration/auth_test.go"
+      ]
+    },
+    {
+      "route": "GET /v1/projects",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "POST /v1/projects",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "PATCH /v1/projects/{id}",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "GET /v1/projects/{id}/keys",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "POST /v1/projects/{id}/keys",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "DELETE /v1/projects/{id}/keys/{key_id}",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "POST /v1/search",
+      "owner": "api/query",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/query_api_test.go"
+      ]
+    },
+    {
+      "route": "POST /v1/aggregate",
+      "owner": "api/query",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/query_api_test.go"
+      ]
+    },
+    {
+      "route": "GET /v1/records/{id}",
+      "owner": "api/query",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/query_api_test.go"
+      ]
+    },
+    {
+      "route": "GET /v1/query-jobs/{id}",
+      "owner": "api/query",
+      "backend": "registered",
+      "ui": "internal",
+      "tests": [
+        "tests/integration/query_api_test.go"
+      ]
+    },
+    {
+      "route": "DELETE /v1/query-jobs/{id}",
+      "owner": "api/query",
+      "backend": "registered",
+      "ui": "internal",
+      "tests": [
+        "tests/integration/query_api_test.go"
+      ]
+    },
+    {
+      "route": "POST /v1/snapshots/{id}/heartbeat",
+      "owner": "api/query",
+      "backend": "registered",
+      "ui": "internal",
+      "tests": [
+        "tests/integration/query_api_test.go"
+      ]
+    },
+    {
+      "route": "DELETE /v1/snapshots/{id}",
+      "owner": "api/query",
+      "backend": "registered",
+      "ui": "internal",
+      "tests": [
+        "tests/integration/query_api_test.go"
+      ]
+    },
+    {
+      "route": "GET /v1/live",
+      "owner": "api/query",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/query_api_test.go"
+      ]
+    },
+    {
+      "route": "GET /v1/issues",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "GET /v1/issues/{id}",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "PATCH /v1/issues/{id}",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "GET /v1/issues/{id}/occurrences",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go",
+        "web/src/features/flows.test.tsx"
+      ]
+    },
+    {
+      "route": "GET /v1/destinations",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "not-exposed",
+      "tests": [
+        "internal/api/alerts_http_test.go",
+        "tests/integration/alerts_test.go"
+      ]
+    },
+    {
+      "route": "POST /v1/destinations",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "not-exposed",
+      "tests": [
+        "internal/api/alerts_http_test.go",
+        "tests/integration/alerts_test.go"
+      ]
+    },
+    {
+      "route": "PATCH /v1/destinations/{id}",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "not-exposed",
+      "tests": [
+        "internal/api/alerts_http_test.go",
+        "tests/integration/alerts_test.go"
+      ]
+    },
+    {
+      "route": "GET /v1/alerts",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "read-only",
+      "tests": [
+        "internal/api/alerts_http_test.go",
+        "tests/integration/alerts_test.go"
+      ]
+    },
+    {
+      "route": "POST /v1/alerts",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "not-exposed",
+      "tests": [
+        "internal/api/alerts_http_test.go",
+        "tests/integration/alerts_test.go"
+      ]
+    },
+    {
+      "route": "PATCH /v1/alerts/{id}",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "not-exposed",
+      "tests": [
+        "internal/api/alerts_http_test.go",
+        "tests/integration/alerts_test.go"
+      ]
+    },
+    {
+      "route": "GET /v1/deliveries",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "read-only",
+      "tests": [
+        "internal/api/alerts_http_test.go",
+        "tests/integration/alerts_test.go"
+      ]
+    },
+    {
+      "route": "POST /v1/deliveries/{id}/retry",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "not-exposed",
+      "tests": [
+        "internal/api/alerts_http_test.go",
+        "tests/integration/alerts_test.go"
+      ]
+    },
+    {
+      "route": "GET /v1/system/sdk-outcomes",
+      "owner": "api",
+      "backend": "registered",
+      "ui": "connected",
+      "tests": [
+        "tests/integration/operator_management_test.go"
+      ]
+    }
+  ],
+  "pending": [
+    {
+      "id": "operator-management",
+      "packet": "U4",
+      "description": "User/membership management, password UI, alert/destination editors and delivery retry UI."
+    },
+    {
+      "id": "system-status",
+      "packet": "U4",
+      "description": "GET /v1/system and installation-admin retention mutation, resources/cuts/backup diagnostics."
+    },
+    {
+      "id": "range-cache",
+      "packet": "M3",
+      "description": "Production verified block cache, capability gateway and no default full-GET query path."
+    },
+    {
+      "id": "coordinated-recovery",
+      "packet": "M4",
+      "description": "PG/WAL/S3 restore and verified GC attestation; GC stays frozen without this evidence."
+    },
+    {
+      "id": "sustained-performance",
+      "packet": "R1-R3",
+      "description": "512MiB mixed load, p95/p99, 1/2/4 worker scaling/fairness and whole-installation costs."
+    },
+    {
+      "id": "release",
+      "packet": "R4",
+      "description": "Authorized external AWS/self-host restore, SBOM and compatibility evidence."
+    }
+  ]
+}
