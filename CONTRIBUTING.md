@@ -24,6 +24,26 @@ The active product is the root Go module. Use Go 1.27.1 exactly and run commands
 
 Commands for later implementation gates intentionally fail until their gate is implemented. `./scripts/check codegen` regenerates the Go and TypeScript wire contracts in a temporary tree and requires byte-identical output; install its exact tool lock with `npm ci --prefix tools/codegen --ignore-scripts` when changing `api/openapi.yaml`, then run `./scripts/generate-api`. `./scripts/check sdk` replays committed captures and runs the pinned SDK applications against a localhost Go handler; run `tools/sdk-fixtures/bootstrap.sh` once to install its locked tools. Docker is required for the PostgreSQL/S3 integration environment and Linux ARM64 image checks. Tests must use temporary databases, buckets, prefixes, directories, and localhost receivers. Linux AMD64 is not a currently verified or supported release target.
 
+Image checks use `scripts/build-image` to build the current root Dockerfile,
+Go sources and UI. If BuildKit prunes an expensive native intermediate stage,
+preserve its library from a **trusted, already verified local ARM64 build image**:
+
+```sh
+./scripts/cache-native eventglass-go:comparison-build
+```
+
+Import checks the exact native Dockerfile section, architecture and real engine
+probe against the version lock. It records the source image ID and library SHA,
+then stores only that dependency in a recipe-addressed local image. Subsequent
+checks reuse it through a named BuildKit context; changed native recipes select
+a different cache identity. No old application binary or UI is reused. The
+local cache is not a signed release-provenance claim and must not be imported
+from an untrusted image. With no matching local cache, builds use the pinned
+source stage normally. The comparison quick-mode application-image reuse remains
+diagnostic-only; it is separate from this unchanged-dependency cache.
+The static Go build retains all module checksums but does not download the
+adapter's unused platform-bundled DuckDB engines into its dependency layer.
+
 The operator UI uses the exact Node/npm versions in `web/package.json`. Install
 its locked dependencies with `npm ci --prefix web --ignore-scripts`; then
 `./scripts/check web` runs Vitest, strict TypeScript, and the Vite production

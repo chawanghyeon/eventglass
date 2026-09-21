@@ -28,7 +28,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN GOGC=off go mod download
+# The static build never imports the adapter's bundled engines for any platform.
+# Keep their module checksums, but do not download those unused native archives.
+RUN GOGC=off go mod download $(go list -m -f '{{if .Version}}{{.Path}}@{{.Version}}{{end}}' all \
+    | sed '/^github.com\/duckdb\/duckdb-go-bindings\/lib\//d; /^$/d')
 COPY . .
 COPY --from=duckdb-build /duckdb/build/release/libduckdb_bundle.a /opt/duckdb/lib/libduckdb_bundle.a
 ENV CGO_ENABLED=1 \

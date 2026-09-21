@@ -8,6 +8,6 @@ case "$(uname -m)" in
   *) echo "unsupported scale-test architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:scale-build .
+./scripts/build-image --target build --load --tag eventglass-go:scale-build
 docker run --rm --platform linux/arm64 -v "$ROOT:/src:ro" -w /src eventglass-go:scale-build \
   go test -count=1 -v ./internal/app ./tests/scale

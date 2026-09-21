@@ -14,7 +14,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:resource-build .
+./scripts/build-image --target build --load --tag eventglass-go:resource-build
 docker run --rm --platform linux/arm64 -v "$artifacts:/eventglass-tests" eventglass-go:resource-build \
   go test -tags='duckdb_use_static_lib resource' -c -o /eventglass-tests/resource.test ./tests/resource
 

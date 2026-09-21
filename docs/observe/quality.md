@@ -333,9 +333,49 @@ optional values and NULL/empty arrays. Temporary profiling code is not retained.
 The updated candidate passed all internal/cmd/architecture tests against the
 pinned Linux ARM64 native library, real isolated PostgreSQL/MinIO integration
 (32.154s), final-image Playwright (2.8s), unit and generated-contract checks.
-The broader R3 targets still require a new end-to-end measurement.
+The next equal20s/300s/90s end-to-end pair compared `9b0ae92` and `a36513e`.
+Both accepted33,600 records and completed60 searches with no conflict or OOM.
+
+| One-worker PostgreSQL/MinIO measurement | Baseline | Reused attribute type |
+|---|---:|---:|
+| ACK p95 ms | 374 | 380 |
+| Rows / histogram p95 ms | 620 / 635 | 576 / 631 |
+| Visibility p95 ms | 5,235 | 2,775 |
+| Load backlog slope jobs/min / maximum | +10.24 / 61 | −3.32 / 44 |
+| Final backlog / drain ms | 0 / 6,014 | 0 / 1,007 |
+| Conversion work ms / claimed attempts | 265,015 / 1,871 | 226,466 / 1,856 |
+| S3 PUT / HEAD / GET / Range requests | 6,223 / 24,690 / 15,650 / 2,026 | 6,206 / 23,167 / 15,849 / 1,912 |
+| S3 PUT / GET / Range bytes | 42,568,775 / 103,387,988 / 21,292,850 | 44,666,878 / 108,836,307 / 21,012,185 |
+| PG WAL bytes | 80,403,592 | 80,117,992 |
+| Whole installation / worker peak sampled bytes | 843,453,561 / 82,051,072 | 852,156,741 / 89,967,820 |
+
+Compaction trajectories differ (last planned files222 versus110); these are
+whole-workload results, not isolated attribution or a memory/cost saving claim.
+The candidate's short-run backlog and visibility targets pass, but both search
+p95 targets still exceed500ms. Retained evidence is under
+`.tools/comparison-report-1.a2EONz` and `.tools/comparison-report-1.0xHvAQ`.
+R3 remains incomplete; this diagnostic does not replace its official profile.
 
 ## Release and workflow
+
+Verification image builds now share a recipe-addressed local DuckDB dependency
+cache. Import from a trusted local ARM64 build checks the native recipe and real
+engine version, records the source image/library hashes, and rejects a different
+recipe. Fresh Go/UI sources are still built from the root Dockerfile; this is
+not quick-mode application reuse or a signed release attestation. The imported
+library SHA256 and the new image's linked library both equal
+`84ad753acc1390e13ce56e728d75d379bebeedec7f3df58ce071c1b373e4c79f`.
+The static build keeps module checksums but excludes unused platform-bundled
+engines from module downloads; both their expanded directories and zip archives
+were absent in the verified ARM64 image. Recipe/argument/gate layout tests pass.
+The initial full contract run passed tests/vet but its image export hit Colima
+disk exhaustion. Only11 obsolete Eventglass test images were removed; source,
+measurement evidence, user containers/volumes and the native cache were retained.
+The repeated `scripts/check contracts` then completed including image export.
+The new dependency-cache path also passed the freshly built UI's actual
+`scripts/check-browser` flow (4.7s). These build checks do not close G07/G08.
+`scripts/check integration` completed with real PostgreSQL/MinIO on the host
+(11.976s) and the fresh Linux ARM64 native query/Live paths (25.356s).
 
 Commit reviewed changes directly to main and push after relevant checks. Current
 pre-push runs Go unit/layout/architecture checks. Historical Rust deployment

@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+if [ "$#" -ne 1 ]; then
+  echo "usage: ./scripts/cache-native TRUSTED_LOCAL_BUILD_IMAGE" >&2
+  exit 2
+fi
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) echo "native cache supports ARM64 only" >&2; exit 1 ;;
+esac
+
+# Inspect first: never implicitly pull or run an unknown remote image. Pin the
+# container to the inspected local ID even if the caller supplied a mutable tag.
+source_image=$(docker image inspect --format '{{.Id}}' "$1")
+platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$source_image")
+if [ "$platform" != "linux/arm64" ]; then
+  echo "native cache requires a Linux ARM64 build image" >&2
+  exit 1
+fi
+mkdir -p "$ROOT/.tools"
+cache_dir=$(mktemp -d "$ROOT/.tools/native-cache.XXXXXX")
+container=""
+cleanup() {
+  if [ -n "$container" ]; then docker rm "$container" >/dev/null 2>&1 || true; fi
+  rm -rf "$cache_dir"
+}
+trap cleanup EXIT INT TERM
+container=$(docker create --platform linux/arm64 "$source_image")
+docker cp "$container:/src/Dockerfile" "$cache_dir/source.Dockerfile"
+native_recipe() {
+  awk '/^FROM / { stages++; if (stages == 2) exit } { print }' "$1"
+}
+native_recipe Dockerfile >"$cache_dir/native-recipe"
+native_recipe "$cache_dir/source.Dockerfile" >"$cache_dir/source-native-recipe"
+if ! cmp -s "$cache_dir/native-recipe" "$cache_dir/source-native-recipe"; then
+  echo "native recipe differs from the trusted build image; cache import refused" >&2
+  exit 1
+fi
+expected_version=$(awk -F= '$1 == "duckdb" { print $2 }' deploy/versions.lock)
+probe=$(printf '%s\n' '{"operation":"probe"}' | docker run --rm -i --platform linux/arm64 \
+  --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,size=64m \
+  --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 \
+  --entrypoint /out/eventglass-go "$source_image" engine-child)
+if [ "$probe" != "{\"duckdb_version\":\"$expected_version\"}" ]; then
+  echo "native probe differs from the pinned DuckDB version; cache import refused" >&2
+  exit 1
+fi
+docker cp "$container:/opt/duckdb/lib/libduckdb_bundle.a" "$cache_dir/libduckdb_bundle.a"
+recipe_sha=$(sha256sum "$cache_dir/native-recipe" | awk '{print $1}')
+library_sha=$(sha256sum "$cache_dir/libduckdb_bundle.a" | awk '{print $1}')
+cache_image="eventglass-duckdb-cache:$recipe_sha"
+docker buildx build --platform linux/arm64 --load --file deploy/Dockerfile.native-cache \
+  --build-arg RECIPE_SHA256="$recipe_sha" --build-arg SOURCE_IMAGE="$source_image" \
+  --build-arg LIBRARY_SHA256="$library_sha" --tag "$cache_image" "$cache_dir"
+echo "local native cache: $cache_image (library sha256=$library_sha)"

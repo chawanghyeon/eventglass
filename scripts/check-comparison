@@ -31,8 +31,8 @@ else
     echo "custom comparison images are restricted to quick reuse diagnostics" >&2
     exit 2
   fi
-  docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:comparison-build .
-  docker buildx build --platform linux/arm64 --load --tag eventglass-go:comparison-runtime .
+  ./scripts/build-image --target build --load --tag eventglass-go:comparison-build
+  ./scripts/build-image --load --tag eventglass-go:comparison-runtime
 fi
 run_dir=$(mktemp -d "$ROOT/.tools/eventglass-comparison.XXXXXX")
 active_project=""

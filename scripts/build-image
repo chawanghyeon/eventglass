@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) echo "image verification supports ARM64 only" >&2; exit 1 ;;
+esac
+# The shared helper owns the platform, context and Dockerfile. Callers select
+# only the target/tag/output; they cannot replace the verified native context.
+validate_arguments() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --target|--tag)
+        if [ "$#" -lt 2 ] || [ -z "$2" ]; then echo "missing build option value: $1" >&2; exit 2; fi
+        case "$2" in -*) echo "invalid build option value: $2" >&2; exit 2 ;; esac
+        shift 2 ;;
+      --load) shift ;;
+      *) echo "unsupported build override: $1" >&2; exit 2 ;;
+    esac
+  done
+}
+validate_arguments "$@"
+recipe_sha=$(awk '/^FROM / { stages++; if (stages == 2) exit } { print }' Dockerfile | sha256sum | awk '{print $1}')
+cache_image="eventglass-duckdb-cache:$recipe_sha"
+if docker image inspect "$cache_image" >/dev/null 2>&1; then
+  actual=$(docker image inspect --format '{{index .Config.Labels "io.eventglass.native.recipe-sha256"}}|{{.Os}}/{{.Architecture}}' "$cache_image")
+  if [ "$actual" != "$recipe_sha|linux/arm64" ]; then
+    echo "local native cache identity differs; refusing build" >&2
+    exit 1
+  fi
+  echo "reusing pinned local native dependency: $cache_image" >&2
+  exec docker buildx build --platform linux/arm64 \
+    --build-context "duckdb-build=docker-image://$cache_image" "$@" .
+fi
+exec docker buildx build --platform linux/arm64 "$@" .

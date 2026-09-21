@@ -35,7 +35,7 @@ done
 
 docker compose -p "$project" -f deploy/compose.yaml up -d postgres minio
 docker compose -p "$project" -f deploy/compose.yaml run --rm minio-init
-docker buildx build --platform linux/arm64 --load --tag eventglass-go:browser-build .
+./scripts/build-image --load --tag eventglass-go:browser-build
 
 database_url="postgres://eventglass:local-test-only@postgres:5432/eventglass?sslmode=disable" # pragma: allowlist secret
 docker run --rm --platform linux/arm64 --network "${project}_default" -e EVENTGLASS_DATABASE_URL="$database_url" eventglass-go:browser-build migrate

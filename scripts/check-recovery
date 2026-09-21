@@ -18,7 +18,7 @@ trap cleanup EXIT INT TERM
 
 docker compose -p "$project" -f "$compose" up -d --build --wait postgres minio
 docker compose -p "$project" -f "$compose" run --rm minio-init
-docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:recovery-build .
+./scripts/build-image --target build --load --tag eventglass-go:recovery-build
 
 run_eventglass() {
   database_host=$1

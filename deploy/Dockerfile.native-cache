@@ -1,0 +1,10 @@
+# A local dependency cache, not a product image or release attestation.
+FROM scratch
+ARG RECIPE_SHA256
+ARG SOURCE_IMAGE
+ARG LIBRARY_SHA256
+LABEL io.eventglass.native.recipe-sha256=$RECIPE_SHA256 \
+      io.eventglass.native.source-image=$SOURCE_IMAGE \
+      io.eventglass.native.library-sha256=$LIBRARY_SHA256
+COPY libduckdb_bundle.a /duckdb/build/release/libduckdb_bundle.a
+COPY native-recipe /eventglass-cache/native-recipe
