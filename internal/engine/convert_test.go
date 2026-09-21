@@ -3,6 +3,7 @@ package engine
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -202,6 +203,56 @@ func TestConvertBulkAppendPairedSchemaIdentityAndBounds(t *testing.T) {
 	}
 	if _, err := os.Stat(request.SpillDirectory); !os.IsNotExist(err) {
 		t.Fatalf("spill directory survived: %v", err)
+	}
+}
+
+func TestConvertPayloadColumnsMatchOriginalJSONProjection(t *testing.T) {
+	root := t.TempDir()
+	records := make([]StageRecord, 4)
+	sdkValues := []json.RawMessage{nil, json.RawMessage(`null`), json.RawMessage(` { "name": "<sdk>", "integer": 9007199254740993 } `), json.RawMessage(`{}`)}
+	warnings := [][]string{nil, {}, {"<warning>", "검색\u2028줄"}, {"quoted \" value"}}
+	for index := range records {
+		records[index] = conversionRecord(string("abcd"[index]), model.KindLog, 1_700_000_000_000_000+int64(index), index)
+		records[index].Record.Raw = json.RawMessage(` { "html": "<script>&", "integer": 9007199254740993, "number": 1.25e+2, "unicode": "검색\u2028줄" } `)
+		records[index].Record.EnvelopeSDKJSON = sdkValues[index]
+		records[index].Record.Warnings = warnings[index]
+	}
+	request := ConversionRequest{Version: 1, StagePath: writeConversionStage(t, root, records),
+		OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"),
+		TenantID: 1, LaneID: 3, BatchSeq: 4, BatchID: records[0].BatchID, SelectedRecords: len(records)}
+	var bundle ConvertedBundle
+	if _, err := Convert(context.Background(), request, func(value ConvertedBundle) error { bundle = value; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, staged := range records {
+		metadata, err := canonicalMetadata(staged.Record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reference, err := json.Marshal(map[string]any{"record": staged.Record, "canonical_metadata": metadata})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var actual, expected [4]sql.NullString
+		if err := db.QueryRow(`SELECT raw_json,envelope_sdk_json,normalization_warnings_json,canonical_metadata_json FROM read_parquet(?) WHERE record_id=?`, bundle.Payload.Path, staged.Record.RecordID).Scan(&actual[0], &actual[1], &actual[2], &actual[3]); err != nil {
+			t.Fatal(err)
+		}
+		// Evaluate the former payload projection with the actual pinned engine.
+		// Match bytes and SQL NULL, not merely decoded JSON equivalence.
+		if err := db.QueryRow(`SELECT json_extract(j,'$.record.raw')::VARCHAR,
+			json_extract(j,'$.record.envelope_sdk_json')::VARCHAR,
+			COALESCE(NULLIF(json_extract(j,'$.record.warnings')::VARCHAR,'null'),'[]'),
+			json_extract(j,'$.canonical_metadata')::VARCHAR FROM (SELECT ?::VARCHAR j)`, string(reference)).Scan(&expected[0], &expected[1], &expected[2], &expected[3]); err != nil {
+			t.Fatal(err)
+		}
+		if actual != expected {
+			t.Fatalf("payload projection differs: actual=%+v expected=%+v", actual, expected)
+		}
 	}
 }
 

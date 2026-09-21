@@ -224,12 +224,16 @@ capacity evidence. The shared download path's24MiB journal cap was reproduced
 against actual MinIO bytes and corrected with explicit journal24MiB,
 query-result64MiB and bundle128MiB admission. Full SHA verification, exclusive
 private-file creation and joined response-close/partial cleanup are retained.
-A real16-batch/256-event native path now produces two approximately36MiB
-Parquet files and verifies mixed/full retention and pinned snapshots. This is
-not maximum-size maintenance evidence:64 wide events in one conversion hit
-the256MiB native limit, and a32-batch/512-event compaction failed in a native
-child. These larger cases still need bounded-memory fixes and verification;
-do not replace them with raw-object download success. R3 remains first incomplete.
+A real256-event native path produces two approximately36MiB Parquet files and
+verifies mixed/full retention and pinned snapshots. The initial64-wide-event
+conversion failure was reproduced at the256MiB native limit. Separating payload
+fragments from scope JSON, sharing canonical metadata, and normalizing byte-sized
+chunks now lets that legal batch convert at both192/256MiB without raising
+limits; original engine JSON byte/NULL semantics are explicitly compared.
+The integration fixture is strengthened from16 batches of16 to4 batches of64.
+The32-batch/512-event compaction child failure and maximum-size maintenance
+progress still need bounded-memory fixes and verification; do not replace them
+with raw-object download success. R3 remains first incomplete.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

@@ -1093,6 +1093,86 @@ checks for storage/ingest/maintenance/API/app, full pinned static native
 contracts/vet and final-image Chromium(2.7s) also passed. The frozen source
 design checksum is unchanged. Logs use the `.tools/large-download-` prefix.
 
+### Wide canonical conversion memory
+
+The64-wide-event failure above is now reproduced independently using the real
+normalizer and the pinned native conversion, without PG/S3 or a child-error
+wrapper obscuring the cause. Each event contains96KiB of deterministic
+high-entropy text. The request passes the unchanged canonical admission rules.
+The original implementation failed a16MiB native allocation at252.2/256MiB;
+the container did not OOM. Combining JSON paths into one expression and then
+materializing that expression in a separate statement both still failed. These
+discarded candidates are not the implemented solution.
+
+The existing engine appender now keeps scope JSON, raw JSON, envelope SDK JSON,
+warnings and canonical metadata in separate bounded VARCHAR columns. Analytics
+and payload share the same canonical metadata instead of storing the wide
+attributes twice. Payload output canonicalizes only each required fragment,
+using the same pinned engine JSON semantics instead of decoding the entire
+stage four times. Normalization visits appender byte-bounded chunks in monotone
+order, using a single chunk cursor; the completed per-partition temporary table
+then feeds the existing sorted Parquet COPY. This
+retains numeric formatting, Unicode/HTML escapes and absent/null distinctions;
+a direct-string-copy candidate failed the new byte-for-byte reference test and
+was corrected before acceptance. Separate columns alone passed256MiB but still
+failed192MiB; byte-bounded normalization is required as well. The appender's
+4MiB pre-flush accounting includes all five string columns (plus a bounded
+single row when the internal stage format is larger), with a2048-row cap and
+one integer chunk identifier. No stored format, public API, native memory/spill limit,
+receipt-selection rule or module ownership changed.
+
+The legal64-event native regression now passes with exactly64 raw payloads,
+paired analytics/payload files9,480,152/9,483,827bytes under both192MiB and256MiB
+native limits. Its fresh CPU1/512MiB/swap0 cgroup running both subtests observed
+memory.peak342,695,936bytes, memory.events.max/OOM/kill0. This is one wide-input case,
+not the entire maximum-input space or a worst-case worker RSS proof.
+
+Matched local measurements used Go1.27.1, the same pinned static library,
+CPU1/512MiB/swap0, GOMAXPROCS1,96MiB Go soft limit,256MiB native memory/spill,
+non-root/read-only root, isolated disk-backed scratch and no network. There
+were no competing builds or heavy checks during timing. Each median below is
+five samples of three operations, with fixture setup excluded from timed Go
+allocations. Before isb5de17e; after is the shared-metadata, byte-chunked
+implementation, not the earlier candidates that still failed192MiB.
+
+| Native conversion case | Median before → after | Go bytes/op before → after | Go allocations/op before → after |
+| --- | --- | --- | --- |
+|16 wide events|165.431→155.080ms|69,532,618→56,032,482|3,644→4,040|
+|1 ordinary event|88.057→92.137ms|2,217,181→2,218,205|921→1,094|
+|100 ordinary events|96.036→98.465ms|3,983,373→3,573,016|13,222→14,874|
+
+The wide case's median rate was96.72→103.2records/s. Process maximum RSS across
+setup and all samples was179,712,000→144,150,528bytes; fresh benchmark cgroup
+peaks190,492,672→154,906,624bytes, including file cache. Go bytes exclude native
+allocations. Allocation *counts increased*, and ordinary small-batch medians
+were slightly slower; this is not an across-the-board performance improvement.
+S3 requests and transferred/network bytes were0 in both local measurements.
+No end-to-end throughput, cost, query-SLO or competitor claim follows from these
+numbers. Logs and binaries use `.tools/wide-conversion-`, with `before` and
+`chunked` identifying the matched pair. The512-wide-record compaction failure,
+corrected official-duration R3 runs and independent capacity remain open.
+
+Final verification also passed ARM64 unit/vet/architecture/layout and codegen,
+app/ingest/maintenance race checks, full static native contracts/vet (including
+all scalar/attribute/null mappings and actual mid-conversion cancellation followed
+by retry), actual PG/MinIO16.823s and the native query/Live/alert/maintenance
+subset30.012s. The durable fixture now uses4 batches of64 wide events rather
+than16 batches of16, so its timings and S3 totals are not a matched performance
+comparison with the earlier download regression.
+The strengthened real pipeline also passed separately under CPU1/512MiB/swap0,
+non-root/read-only root and disk scratch. It produced analytics/payload files
+37,895,746/37,928,775bytes; its fixture plus verification recorded16 PUTs /
+198,259,603bytes,16 HEADs,46 full GETs /699,859,633bytes,0 Range GETs.
+Together with the24/64/128MiB raw-object tests, this cgroup reached exactly
+536,870,912bytes and memory.events.max926, with OOM/kill0: functional success
+does not establish spare-memory headroom.
+The default resource gate actually ran115.445s,24 cycles/12,600 records,
+worst cycle257ms, peak142,020,608bytes, OOM0 and scratch0; native OOM/cancel/drain
+checks passed too. Final-image Chromium passed in2.6s. Execution logs use
+`.tools/wide-conversion-chunked-`; source and matched binary checksums are in
+`.tools/wide-conversion-chunked-source-sha256.txt`. The source-design checksum
+is unchanged. R3/R4 gates remain incomplete.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency
