@@ -14,6 +14,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/query"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/google/uuid"
 )
 
@@ -26,6 +27,7 @@ type QueryAdapter struct {
 	ScratchDir        string
 	InstallationID    string
 	StorageGeneration int64
+	Working           *resource.Budget
 }
 
 type PublicQueryStore interface {
@@ -298,7 +300,7 @@ func (service *QueryAdapter) resolveSnapshot(ctx context.Context, principal cont
 }
 
 func (service *QueryAdapter) createAndPlan(ctx context.Context, tokenHash [32]byte, snapshot model.QuerySnapshot, kind string, operation engine.QueryOperation, mode query.RequestMode, minimum ...[model.LaneCount]int64) (generated.QueryJob, bool, error) {
-	submission := query.Submission{Control: service.Control, Objects: service.Store, Generation: service.StorageGeneration}
+	submission := query.Submission{Control: service.Control, Objects: service.Store, Working: service.Working, Generation: service.StorageGeneration}
 	if len(minimum) > 0 {
 		submission.MinimumBatchSeq = minimum[0]
 	}
@@ -345,7 +347,7 @@ func (service *QueryAdapter) executeSynchronous(ctx context.Context, tokenHash [
 }
 
 func (service *QueryAdapter) validate() error {
-	if service == nil || service.Control == nil || service.Store == nil || service.Tokens == nil || service.Exporter == nil || service.ScratchDir == "" || service.InstallationID == "" || service.StorageGeneration <= 0 {
+	if service == nil || service.Control == nil || service.Store == nil || service.Tokens == nil || service.Exporter == nil || service.Working == nil || service.ScratchDir == "" || service.InstallationID == "" || service.StorageGeneration <= 0 {
 		return errors.New("public query service is incomplete")
 	}
 	return nil

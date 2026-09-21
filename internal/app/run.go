@@ -206,7 +206,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		publicQueries = &api.QueryAdapter{
 			Control: queryOperations, Store: store, Tokens: tokens, Exporter: ProcessQueryExportRunner{Gate: nativeTasks},
 			ScratchDir: filepath.Join(config.ScratchDir, "query-results"), InstallationID: installation.InstallationID,
-			StorageGeneration: installation.StorageGeneration,
+			StorageGeneration: installation.StorageGeneration, Working: resources.Working,
 		}
 		management, err := api.NewManagementHandler(api.ManagementConfig{
 			Auth: authOperations, Passwords: passwords, PublicOrigin: strings.TrimRight(config.PublicURL, "/"),
@@ -345,7 +345,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		if ownerErr != nil {
 			return fail(ownerErr)
 		}
-		runtime.alertEvaluator = &alerts.Evaluator{Alerts: runtime.alertControl, Queries: runtime.queryControl, Objects: store, Results: AlertCountReader{Store: store, Exporter: ProcessQueryExportRunner{Gate: nativeTasks}, ScratchDir: filepath.Join(config.ScratchDir, "alert-results")}, Owner: owner, PublicURL: strings.TrimRight(config.PublicURL, "/"), StorageGeneration: installation.StorageGeneration}
+		runtime.alertEvaluator = &alerts.Evaluator{Alerts: runtime.alertControl, Queries: runtime.queryControl, Objects: store, Working: resources.Working, Results: AlertCountReader{Store: store, Exporter: ProcessQueryExportRunner{Gate: nativeTasks}, ScratchDir: filepath.Join(config.ScratchDir, "alert-results")}, Owner: owner, PublicURL: strings.TrimRight(config.PublicURL, "/"), StorageGeneration: installation.StorageGeneration}
 	}
 	if config.Roles[RoleWorker] {
 		blockCache, cacheErr := storage.NewBlockCache(filepath.Join(config.ScratchDir, "block-cache"), storage.DefaultCacheBytes, resources.Disk)
@@ -358,7 +358,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			Control: runtime.queryControl, Store: store, Runner: ProcessQueryRunner{Gate: nativeTasks},
 			InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "query-worker"),
 		}
-		runtime.queryPlanner = &query.Coordinator{Control: runtime.queryControl, Objects: store}
+		runtime.queryPlanner = &query.Coordinator{Control: runtime.queryControl, Objects: store, Working: resources.Working}
 		if publicQueries != nil {
 			syncOwner, err := randomUUID()
 			if err != nil {

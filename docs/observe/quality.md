@@ -406,6 +406,60 @@ PUT/GET/Range bytes43,740,225/106,883,392/20,818,290. All60 queries completed,
 but there was no demonstrated improvement. Its source changes are removed;
 only measured evidence remains in `.tools/comparison-report-1.06GFpo`.
 
+Completion audit of the current comparison harness found additional limitations.
+Its historical `ColdRegexMS` field is a post-drain last15min regex request with
+no verified cache reset; it is not cold-cache or all-history evidence.
+`DatasetSHA256` is the frozen independent fixture-definition checksum, not a
+hash of the actual transmitted envelopes. The fixed-fixture test checks its
+own independent summary, not the production engine's result over all four
+dataset sizes. The receipt count target alone does not prove the full published
+and queried dataset. Finally, equal100+5/s offered load at1/2/4 workers cannot
+demonstrate throughput capacity growth/efficiency. These checks must be added
+and executed before R3 closure. Existing reports remain useful for their actual
+SLO/resource workload, but an all-true target map is not by itself a complete
+G07 audit. No existing evidence file has been relabeled or rewritten.
+
+The official run from7ee4297 was interrupted before a complete report existed;
+its last samples/logs are preserved in
+`.tools/eventglass-comparison.LG4DOu/workers-1/artifacts`. On resumption Colima
+was stopped. Restarting its existing profile exposed4CPU/8,308,363,264 bytes,
+not the prior2CPU/4,094,459,904-byte environment. The incomplete run is not a
+pass, and later measurements on this host are not a same-environment comparison
+with the earlier end-to-end figures. Its exited test containers/network were
+removed only after preserving evidence; the native dependency cache remains.
+
+Planning-bound regression evidence (Go1.27.1, Linux ARM64, pinned DuckDB2.0):
+the unchanged7ee4297 image retained2,560 metadata-heavy files and performed
+5,120 HEAD callbacks instead of rejecting the unplannable catalog. It also
+mapped catalog/admission limits to retryable503 dependency failures. The new
+16MiB streaming metadata counter rejects before HEADs on the overflowing page,
+and query-owned64MiB planning reservations share app's working-memory budget.
+Cancellation tests hold admission until the blocked reader has actually joined;
+seal/error cleanup retains the permit. HTTP quota failure is terminal422,
+local admission is retryable429 (503 during drain), with Retry-After1.
+
+The safety check has a measured cost, not a speedup. With identical192-file
+metadata and no network, CPU1/512MiB/swap0, GOGC100/GOMEMLIMIT352MiB,
+five1s samples measured baseline ns/op24,155/24,864/24,966/70,717/60,802
+and candidate405,050/409,703/434,402/347,665/373,233: median+380,084ns.
+Allocation medians are50,272→50,305B/op,23→24allocs/op; derived bookkeeping
+rates40,054→2,469calls/s are not query/ingest throughput. Cgroup peaks were
+40,316,928/27,578,368 bytes, both OOM0; S3 requests/bytes were0/0 in both.
+Raw paired evidence is `.tools/planning-metadata.cSnaMM/paired-results.txt`.
+Five repeats of the planning/catalog boundary and cancellation tests under
+the same cgroup limits passed, peak132,960,256 bytes/OOM0. These fixtures do
+not establish worst-case full-runtime RSS or an official R3 pass.
+Actual PostgreSQL/MinIO integration passed on host (13.397s) and native ARM64
+(25.818s), including alert evaluation, five independent-worker Live replays,
+and exhausted planning admission with no added HEAD/query job before a normal
+successful query. Unit, focused race(count3), codegen, native contracts and vet
+also passed. Cold/warm integration retained the same exact result with Range
+requests1→0 (3,120→0bytes); this small fixture is not R3 cold-cache evidence.
+The final ARM64 image passed Playwright (3.1s). The429/503 response contract
+and capability coverage were updated together; regenerated Go/TypeScript
+contracts pass byte-for-byte checking, and all29 frontend tests plus strict
+TypeScript/production build pass. Schema/storage formats are unchanged.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

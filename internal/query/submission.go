@@ -13,22 +13,33 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/model"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/google/uuid"
 )
+
+// Catalog models, serialized task manifests and the canonical plan hash buffer
+// coexist during planning. Admission shares the role's working-memory budget.
+const PlanningWorkingBytes = int64(4 * MaxPlanBytes)
 
 // Submission owns the transport-independent catalog/plan/job transition. HTTP,
 // Live and future evaluators share this path rather than assembling SQL/tasks.
 type Submission struct {
 	Control         *control.QueryOperations
 	Objects         CatalogObjectReader
+	Working         *resource.Budget
 	Generation      int64
 	MinimumBatchSeq [model.LaneCount]int64
 }
 
 func (s Submission) Submit(ctx context.Context, token [32]byte, snapshot model.QuerySnapshot, kind string, operation engine.QueryOperation, mode RequestMode) (control.QueryJob, bool, error) {
-	if s.Control == nil || s.Objects == nil || s.Generation <= 0 {
+	if s.Control == nil || s.Objects == nil || s.Working == nil || s.Generation <= 0 {
 		return control.QueryJob{}, false, errors.New("query submission dependencies are required")
 	}
+	permit, err := s.Working.Acquire(PlanningWorkingBytes)
+	if err != nil {
+		return control.QueryJob{}, false, err
+	}
+	defer permit.Release()
 	encoded, err := CanonicalOperation(operation)
 	if err != nil {
 		return control.QueryJob{}, false, err
@@ -102,9 +113,14 @@ func (p alertCatalogPager) CatalogPage(ctx context.Context, command control.Cata
 // and plan sealing path as interactive queries, but authorizes solely through
 // the live alert snapshot instead of borrowing a browser session.
 func (s Submission) SubmitAlert(ctx context.Context, alertID string, snapshot model.QuerySnapshot, operation engine.QueryOperation) (control.QueryJob, error) {
-	if s.Control == nil || s.Objects == nil || s.Generation <= 0 || uuid.Validate(alertID) != nil {
+	if s.Control == nil || s.Objects == nil || s.Working == nil || s.Generation <= 0 || uuid.Validate(alertID) != nil {
 		return control.QueryJob{}, errors.New("alert query submission dependencies are required")
 	}
+	permit, err := s.Working.Acquire(PlanningWorkingBytes)
+	if err != nil {
+		return control.QueryJob{}, err
+	}
+	defer permit.Release()
 	encoded, err := CanonicalOperation(operation)
 	if err != nil {
 		return control.QueryJob{}, err

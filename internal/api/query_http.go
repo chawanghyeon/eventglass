@@ -16,6 +16,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/query"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/google/uuid"
 )
 
@@ -436,8 +437,14 @@ func (handler *ManagementHandler) publicQueryError(writer http.ResponseWriter, r
 		handler.error(writer, request, http.StatusForbidden, "forbidden", false)
 	case errors.Is(err, control.ErrStorageGeneration), errors.Is(err, query.ErrTokenGenerationChanged):
 		handler.error(writer, request, http.StatusConflict, "storage_generation_changed", false)
-	case errors.Is(err, control.ErrQueryLimitExceeded), errors.Is(err, query.ErrQueryLimit), errors.Is(err, ErrPublicQueryLimit):
+	case errors.Is(err, control.ErrQueryLimitExceeded), errors.Is(err, query.ErrQueryLimit), errors.Is(err, query.ErrCatalogLimit), errors.Is(err, ErrPublicQueryLimit):
 		handler.error(writer, request, http.StatusUnprocessableEntity, "query_limit_exceeded", false)
+	case errors.Is(err, resource.ErrLimited):
+		writer.Header().Set("Retry-After", "1")
+		handler.error(writer, request, http.StatusTooManyRequests, "admission_limited", true)
+	case errors.Is(err, resource.ErrDraining):
+		writer.Header().Set("Retry-After", "1")
+		handler.error(writer, request, http.StatusServiceUnavailable, "admission_limited", true)
 	case errors.Is(err, context.DeadlineExceeded):
 		handler.error(writer, request, http.StatusGatewayTimeout, "query_timeout", true)
 	case errors.Is(err, ErrPublicQueryInvalid), errors.Is(err, query.ErrTokenMalformed), errors.Is(err, query.ErrTokenMismatch):

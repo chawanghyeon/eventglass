@@ -56,7 +56,7 @@ func TestPublicQueryEndToEndHTTPResumeWithIndependentWorker(t *testing.T) {
 	}
 	worker := &query.Workflow{Disk: disk, Cache: cache, Control: ops, Store: store, Runner: app.ProcessQueryRunner{BinaryPath: env["EVENTGLASS_TEST_BINARY"]}, InstallationID: acceptInstallationID, ScratchDir: filepath.Join(t.TempDir(), "worker")}
 	startIndependentQueryWorker(t, ctx, ops, worker)
-	service := &api.QueryAdapter{Control: ops, Store: store, Tokens: codec, Exporter: app.ProcessQueryExportRunner{BinaryPath: env["EVENTGLASS_TEST_BINARY"]}, ScratchDir: filepath.Join(t.TempDir(), "api"), InstallationID: acceptInstallationID, StorageGeneration: 1}
+	service := &api.QueryAdapter{Control: ops, Store: store, Working: resource.NewBudget(query.PlanningWorkingBytes), Tokens: codec, Exporter: app.ProcessQueryExportRunner{BinaryPath: env["EVENTGLASS_TEST_BINARY"]}, ScratchDir: filepath.Join(t.TempDir(), "api"), InstallationID: acceptInstallationID, StorageGeneration: 1}
 	auth, err := control.NewAuthOperations(f.pool)
 	if err != nil {
 		t.Fatal(err)

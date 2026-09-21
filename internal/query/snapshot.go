@@ -2,6 +2,7 @@ package query
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -19,8 +20,21 @@ const catalogVerificationConcurrency = 8
 
 var (
 	ErrCatalogObjectMissing = errors.New("catalog object is missing or changed")
-	ErrCatalogLimit         = errors.New("catalog file limit exceeded")
+	ErrCatalogLimit         = errors.New("catalog limit exceeded")
 )
+
+// Every catalog file appears in a scan manifest. Reject a catalog that cannot
+// possibly fit the existing plan budget before retaining more pages or issuing
+// their HEAD requests. The encoder reuses one file buffer, not a second catalog.
+type catalogMetadataBudget struct{ remaining int }
+
+func (budget *catalogMetadataBudget) Write(encoded []byte) (int, error) {
+	if len(encoded) > budget.remaining {
+		return 0, ErrCatalogLimit
+	}
+	budget.remaining -= len(encoded)
+	return len(encoded), nil
+}
 
 type CatalogPager interface {
 	CatalogPage(context.Context, control.CatalogCommand) ([]model.CatalogFile, error)
@@ -40,6 +54,7 @@ func LoadVerifiedCatalog(ctx context.Context, pager CatalogPager, objects Catalo
 	command.Limit = control.MaxCatalogPageFiles
 	command.AfterFileID = ""
 	result := make([]model.CatalogFile, 0)
+	metadata := json.NewEncoder(&catalogMetadataBudget{remaining: MaxPlanBytes})
 	for {
 		page, err := pager.CatalogPage(ctx, command)
 		if err != nil {
@@ -50,6 +65,14 @@ func LoadVerifiedCatalog(ctx context.Context, pager CatalogPager, objects Catalo
 		}
 		if len(result)+len(page) > MaxCatalogFiles {
 			return nil, ErrCatalogLimit
+		}
+		for index := range page {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			if err := metadata.Encode(&page[index]); err != nil {
+				return nil, err
+			}
 		}
 		if err := verifyCatalogPage(ctx, objects, page); err != nil {
 			return nil, err

@@ -159,6 +159,15 @@ The4,096-scan and16MiB-total caps apply during construction, including these
 splits and reducers. This is not execution-time adaptive splitting: a sealed
 task is never replaced or reinterpreted on retry. This is a measured tuning
 limit, not an official R3 SLO pass.
+Catalog loading additionally counts serialized file metadata against16MiB
+before verifying each page, so a catalog that cannot fit a plan does not retain
+all32,768 files or issue all their HEAD requests first. Interactive/Live, alerts
+and takeover share app's working-memory budget with other colocated roles and
+reserve64MiB throughout planning, including joined catalog readers and sealing.
+Local exhaustion rejects admission without queuing or creating a query job;
+HTTP returns retryable429 (`admission_limited`, Retry-After1), or503 on drain.
+Catalog/plan quota violations remain terminal422 `query_limit_exceeded`.
+The reservation is an admission bound, not proof of process RSS under load.
 Plan envelope includes protocol version, query/snapshot/task/fence/generation,
 deadline, operation IR, cut/scope, complete manifests and supervisor capability
 handles. No user S3 credential or URL can create a capability.

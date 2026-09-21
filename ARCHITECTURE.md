@@ -144,6 +144,13 @@ background worker's isolated DuckDB process.
 Combined-role children reserve 192 MiB from the same working budget used by
 decoding; API-only exports reserve 64 MiB. Admission waits are cancelable and
 permits remain owned until the native child has exited, not just until timeout.
+Interactive/Live and alert submission, plus coordinator takeover, reserve64MiB
+from that same working budget before loading catalog metadata. Query owns the
+reservation through joined HEAD verification, plan sealing and failure cleanup;
+app injects the budget and API maps local admission failure to retryable429/503.
+The16MiB catalog serialization ceiling is checked page-by-page before HEADs,
+in addition to the final exact plan/manifest ceilings. The64MiB reservation is
+a conservative admission estimate, not a measured worst-case RSS guarantee.
 Publication and delivery/GC have joined loops separate from native work, so a
 long query cannot block their dispatch. This is not a claim of tenant fairness
 or the 20% maintenance-time policy: those remain measured R1/R2 work. Bounded

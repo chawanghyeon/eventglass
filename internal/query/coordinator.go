@@ -6,6 +6,7 @@ import (
 
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/model"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 )
 
 type queryPlanningControl interface {
@@ -18,12 +19,18 @@ type queryPlanningControl interface {
 type Coordinator struct {
 	Control queryPlanningControl
 	Objects CatalogObjectReader
+	Working *resource.Budget
 }
 
 func (coordinator Coordinator) Execute(ctx context.Context, authority control.QueryCoordinatorAuthority) error {
-	if coordinator.Control == nil || coordinator.Objects == nil {
+	if coordinator.Control == nil || coordinator.Objects == nil || coordinator.Working == nil {
 		return errors.New("query coordinator dependencies are required")
 	}
+	permit, err := coordinator.Working.Acquire(PlanningWorkingBytes)
+	if err != nil {
+		return err
+	}
+	defer permit.Release()
 	planContext, err := coordinator.Control.LoadQueryPlanContext(ctx, authority)
 	if err != nil {
 		return err

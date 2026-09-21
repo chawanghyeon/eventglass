@@ -1110,6 +1110,16 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
+        /** @description Retryable admission_limited before planning; no query job was created. Applies before SSE headers for Live. Draining can return503 with the same code and Retry-After header. */
+        PlanningAdmission: {
+            headers: {
+                "Retry-After"?: "1";
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
     };
     parameters: {
         CSRF: string;
@@ -1602,6 +1612,8 @@ export interface operations {
             };
             403: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            429: components["responses"]["PlanningAdmission"];
+            503: components["responses"]["Error"];
         };
     };
     aggregateRecords: {
@@ -1637,6 +1649,8 @@ export interface operations {
             };
             403: components["responses"]["Error"];
             422: components["responses"]["Error"];
+            429: components["responses"]["PlanningAdmission"];
+            503: components["responses"]["Error"];
         };
     };
     getRecord: {
@@ -1666,6 +1680,9 @@ export interface operations {
             403: components["responses"]["Error"];
             404: components["responses"]["Error"];
             410: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["PlanningAdmission"];
+            503: components["responses"]["Error"];
         };
     };
     getRelatedRecords: {
@@ -1693,6 +1710,9 @@ export interface operations {
                 };
             };
             403: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["PlanningAdmission"];
+            503: components["responses"]["Error"];
         };
     };
     getLiveRecords: {
@@ -1721,6 +1741,9 @@ export interface operations {
                 };
             };
             403: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+            429: components["responses"]["PlanningAdmission"];
+            503: components["responses"]["Error"];
         };
     };
     listIssues: {

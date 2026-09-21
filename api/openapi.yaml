@@ -123,28 +123,28 @@ paths:
     post:
       operationId: searchRecords
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/SearchRequest"}}}}
-      responses: {"200": {description: Search result, content: {application/json: {schema: {$ref: "#/components/schemas/SearchResult"}}}}, "202": {description: Async query, content: {application/json: {schema: {$ref: "#/components/schemas/QueryJob"}}}}, "403": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}}
+      responses: {"200": {description: Search result, content: {application/json: {schema: {$ref: "#/components/schemas/SearchResult"}}}}, "202": {description: Async query, content: {application/json: {schema: {$ref: "#/components/schemas/QueryJob"}}}}, "403": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}, "429": {$ref: "#/components/responses/PlanningAdmission"}, "503": {$ref: "#/components/responses/Error"}}
   /v1/aggregate:
     post:
       operationId: aggregateRecords
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AggregateRequest"}}}}
-      responses: {"200": {description: Aggregate result, content: {application/json: {schema: {$ref: "#/components/schemas/AggregateResult"}}}}, "202": {description: Async query, content: {application/json: {schema: {$ref: "#/components/schemas/QueryJob"}}}}, "403": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}}
+      responses: {"200": {description: Aggregate result, content: {application/json: {schema: {$ref: "#/components/schemas/AggregateResult"}}}}, "202": {description: Async query, content: {application/json: {schema: {$ref: "#/components/schemas/QueryJob"}}}}, "403": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}, "429": {$ref: "#/components/responses/PlanningAdmission"}, "503": {$ref: "#/components/responses/Error"}}
   /v1/records/{id}:
     get:
       operationId: getRecord
       parameters: [{$ref: "#/components/parameters/RecordID"}, {$ref: "#/components/parameters/TenantID"}, {$ref: "#/components/parameters/ProjectID"}, {$ref: "#/components/parameters/ReadToken"}]
-      responses: {"200": {description: Record detail, content: {application/json: {schema: {$ref: "#/components/schemas/RecordDetail"}}}}, "403": {$ref: "#/components/responses/Error"}, "404": {$ref: "#/components/responses/Error"}, "410": {$ref: "#/components/responses/Error"}}
+      responses: {"200": {description: Record detail, content: {application/json: {schema: {$ref: "#/components/schemas/RecordDetail"}}}}, "403": {$ref: "#/components/responses/Error"}, "404": {$ref: "#/components/responses/Error"}, "410": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}, "429": {$ref: "#/components/responses/PlanningAdmission"}, "503": {$ref: "#/components/responses/Error"}}
   /v1/records/{id}/related:
     post:
       operationId: getRelatedRecords
       parameters: [{$ref: "#/components/parameters/RecordID"}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/RelatedRequest"}}}}
-      responses: {"200": {description: Related rows, content: {application/json: {schema: {$ref: "#/components/schemas/SearchResult"}}}}, "403": {$ref: "#/components/responses/Error"}}
+      responses: {"200": {description: Related rows, content: {application/json: {schema: {$ref: "#/components/schemas/SearchResult"}}}}, "403": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}, "429": {$ref: "#/components/responses/PlanningAdmission"}, "503": {$ref: "#/components/responses/Error"}}
   /v1/live:
     get:
       operationId: getLiveRecords
       parameters: [{$ref: "#/components/parameters/TenantID"}, {name: project_ids, in: query, required: true, schema: {type: array, items: {$ref: "#/components/schemas/Int64"}}}, {name: kinds, in: query, schema: {type: array, items: {$ref: "#/components/schemas/Kind"}}}, {name: expression, in: query, schema: {type: string, maxLength: 8192}}, {name: catchup_start_us, in: query, schema: {$ref: "#/components/schemas/Int64"}}, {name: resume_token, in: query, schema: {type: string, maxLength: 8192}}]
-      responses: {"200": {description: SSE stream, content: {text/event-stream: {schema: {type: string}}}}, "403": {$ref: "#/components/responses/Error"}}
+      responses: {"200": {description: SSE stream, content: {text/event-stream: {schema: {type: string}}}}, "403": {$ref: "#/components/responses/Error"}, "422": {$ref: "#/components/responses/Error"}, "429": {$ref: "#/components/responses/PlanningAdmission"}, "503": {$ref: "#/components/responses/Error"}}
   /v1/issues:
     get:
       operationId: listIssues
@@ -266,6 +266,11 @@ components:
     ReadToken: {name: read_token, in: query, schema: {type: string, maxLength: 8192}}
   responses:
     Error: {description: Error, content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}}
+    PlanningAdmission:
+      description: Retryable admission_limited before planning; no query job was created. Applies before SSE headers for Live. Draining can return503 with the same code and Retry-After header.
+      headers:
+        Retry-After: {schema: {type: string, enum: ["1"]}}
+      content: {application/json: {schema: {$ref: "#/components/schemas/Error"}}}
   schemas:
     UUID: {type: string, format: uuid, pattern: "^[0-9a-f-]{36}$"}
     SHA256: {type: string, pattern: "^[0-9a-f]{64}$"}

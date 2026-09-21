@@ -81,7 +81,7 @@ func TestPublicQueryEndToEndAlertEvaluation(t *testing.T) {
 			t.Errorf("alert worker: %v", err)
 		}
 	}()
-	evaluator := &alerts.Evaluator{Alerts: fixture.operations, Queries: queryOps, Objects: store, Results: app.AlertCountReader{Store: store, Exporter: app.ProcessQueryExportRunner{BinaryPath: env["EVENTGLASS_TEST_BINARY"]}, ScratchDir: filepath.Join(t.TempDir(), "results")}, Owner: "alert-e2e-scheduler", PublicURL: "https://events.example.invalid", StorageGeneration: 1}
+	evaluator := &alerts.Evaluator{Alerts: fixture.operations, Queries: queryOps, Objects: store, Working: resource.NewBudget(query.PlanningWorkingBytes), Results: app.AlertCountReader{Store: store, Exporter: app.ProcessQueryExportRunner{BinaryPath: env["EVENTGLASS_TEST_BINARY"]}, ScratchDir: filepath.Join(t.TempDir(), "results")}, Owner: "alert-e2e-scheduler", PublicURL: "https://events.example.invalid", StorageGeneration: 1}
 	if err := evaluator.EvaluateOnce(ctx); err != nil {
 		t.Fatal(err)
 	}

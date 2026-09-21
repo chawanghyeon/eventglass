@@ -134,6 +134,15 @@ all60 searches complete and final backlog0. It keeps the64MiB scan and1MiB task
 limits; metadata-heavy groups split deterministically only before plan sealing.
 The official5min/30min/10min1/2/4-worker evidence is still required. A separate
 late-query scheduling experiment did not improve the targets and was discarded.
+Completion audit also found missing R3 evidence in the current harness: the
+`ColdRegexMS` request does not clear caches and still uses the last15min window;
+`DatasetSHA256` identifies the independent fixture definition, not the actual
+transmitted workload. Receipt totals are not a full published/query-result
+oracle, and equal offered load at1/2/4 workers does not establish increasing
+independent throughput or scaling efficiency. Add real cold/all-history and idle
+checks, actual input provenance and native/result oracle comparisons, plus a
+capacity/efficiency measurement before closing G07, even if the SLO target map
+passes. Preserve existing measurements with their original scope/limitations.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

@@ -13,6 +13,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/query"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/google/uuid"
 )
 
@@ -28,13 +29,14 @@ type Evaluator struct {
 	Owner             string
 	PublicURL         string
 	StorageGeneration int64
+	Working           *resource.Budget
 	runMu             sync.Mutex
 	cursorTenant      int64
 	cursorAlert       string
 }
 
 func (e *Evaluator) EvaluateOnce(ctx context.Context) error {
-	if e == nil || e.Alerts == nil || e.Queries == nil || e.Objects == nil || e.Results == nil || e.Owner == "" || e.StorageGeneration <= 0 {
+	if e == nil || e.Alerts == nil || e.Queries == nil || e.Objects == nil || e.Results == nil || e.Working == nil || e.Owner == "" || e.StorageGeneration <= 0 {
 		return errors.New("alert evaluator dependencies are required")
 	}
 	e.runMu.Lock()
@@ -204,7 +206,7 @@ func (e *Evaluator) submitAlertQuery(ctx context.Context, rule control.AlertRule
 	if err != nil {
 		return control.QueryStatus{}, err
 	}
-	job, err := (query.Submission{Control: e.Queries, Objects: e.Objects, Generation: e.StorageGeneration}).SubmitAlert(ctx, rule.AlertID, snapshot, operation)
+	job, err := (query.Submission{Control: e.Queries, Objects: e.Objects, Working: e.Working, Generation: e.StorageGeneration}).SubmitAlert(ctx, rule.AlertID, snapshot, operation)
 	if err != nil {
 		return control.QueryStatus{}, err
 	}

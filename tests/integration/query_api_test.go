@@ -49,6 +49,7 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 	syncExecutor := query.Awaiter{Control: operations}
 	service := &api.QueryAdapter{
 		Control: operations, Store: store, Tokens: codec, Exporter: app.ProcessQueryExportRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"]},
+		Working:    resource.NewBudget(query.PlanningWorkingBytes),
 		ScratchDir: filepath.Join(t.TempDir(), "results"), InstallationID: acceptInstallationID, StorageGeneration: 1,
 	}
 	principal := control.SessionPrincipal{UserID: fixture.tenantID*100 + 1}
@@ -63,6 +64,28 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	dataset := query.PublicDataset{Spec: spec, Filter: filter, SHA256: digest, EncodedBytes: encoded}
+	busy, err := service.Working.Acquire(query.PlanningWorkingBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Release()
+	admissionBefore := store.OperationCounts()
+	if _, err := service.Search(ctx, principal, tokenHash, query.PublicSearchRequest{Dataset: dataset, Limit: 1, Sort: "event_desc", Mode: query.ModeSync}); !errors.Is(err, resource.ErrLimited) {
+		t.Fatalf("planning admission did not reject before catalog I/O: %v", err)
+	}
+	if store.OperationCounts().HeadRequests != admissionBefore.HeadRequests {
+		t.Fatal("rejected planning performed HEAD requests")
+	}
+	var rejectedJobs int
+	if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM query_jobs`).Scan(&rejectedJobs); err != nil || rejectedJobs != 0 {
+		t.Fatalf("rejected planning created jobs=%d err=%v", rejectedJobs, err)
+	}
+	busy.Release()
+	t.Cleanup(func() {
+		if service.Working.Used() != 0 {
+			t.Error("planning permit leaked")
+		}
+	})
 
 	before := store.OperationCounts()
 	coldStarted := time.Now()

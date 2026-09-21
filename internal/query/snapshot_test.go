@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,63 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
+
+func TestVerifiedCatalogStopsBeforeReadingUnplannableMetadata(t *testing.T) {
+	checksum := strings.Repeat("a", 64)
+	blocks := make([]string, 128)
+	for index := range blocks {
+		blocks[index] = checksum
+	}
+	pages := 0
+	pager := catalogPagerFunc(func(context.Context, control.CatalogCommand) ([]model.CatalogFile, error) {
+		if pages == 10 {
+			return nil, nil
+		}
+		page := make([]model.CatalogFile, control.MaxCatalogPageFiles)
+		for index := range page {
+			id := fmt.Sprintf("%08x-0000-4000-8000-000000000000", pages*len(page)+index)
+			page[index] = model.CatalogFile{FileID: id, ObjectKey: "analytics/" + id, Bytes: 128 << 20,
+				SHA256: checksum, BlockSHA256: blocks, PayloadFileID: id,
+				PayloadObjectKey: "payload/" + id, PayloadBytes: 128 << 20, PayloadSHA256: checksum, PayloadBlockSHA256: blocks}
+		}
+		pages++
+		return page, nil
+	})
+	var heads atomic.Int64
+	reader := catalogReaderFunc(func(_ context.Context, key string) (storage.ObjectInfo, error) {
+		heads.Add(1)
+		return storage.ObjectInfo{Key: key, Size: 128 << 20, SHA256: checksum}, nil
+	})
+	files, err := LoadVerifiedCatalog(context.Background(), pager, reader, control.CatalogCommand{})
+	if !errors.Is(err, ErrCatalogLimit) || files != nil {
+		t.Fatalf("unplannable metadata retained: files=%d pages=%d heads=%d err=%v", len(files), pages, heads.Load(), err)
+	}
+	if pages > 4 || heads.Load() >= int64(pages*control.MaxCatalogPageFiles*2) {
+		t.Fatalf("metadata limit did not stop before verifying the overflowing page: pages=%d heads=%d", pages, heads.Load())
+	}
+}
+
+// Local catalog bookkeeping only; the reader performs no S3 I/O.
+func BenchmarkLoadVerifiedCatalogMetadata(b *testing.B) {
+	checksum := strings.Repeat("a", 64)
+	page := make([]model.CatalogFile, 192)
+	for index := range page {
+		id := fmt.Sprintf("%08x-0000-4000-8000-000000000000", index)
+		page[index] = model.CatalogFile{FileID: id, ObjectKey: "analytics/" + id, Bytes: 4096, SHA256: checksum,
+			BlockSHA256: []string{checksum}, PayloadFileID: id, PayloadObjectKey: "payload/" + id,
+			PayloadBytes: 4096, PayloadSHA256: checksum, PayloadBlockSHA256: []string{checksum}}
+	}
+	pager := catalogPagerFunc(func(context.Context, control.CatalogCommand) ([]model.CatalogFile, error) { return page, nil })
+	reader := catalogReaderFunc(func(_ context.Context, key string) (storage.ObjectInfo, error) {
+		return storage.ObjectInfo{Key: key, Size: 4096, SHA256: checksum}, nil
+	})
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := LoadVerifiedCatalog(context.Background(), pager, reader, control.CatalogCommand{}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 type catalogPagerFunc func(context.Context, control.CatalogCommand) ([]model.CatalogFile, error)
 

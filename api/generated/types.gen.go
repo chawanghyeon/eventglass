@@ -1705,6 +1705,9 @@ type Revision = Int64
 // TenantID defines model for TenantID.
 type TenantID = Int64
 
+// PlanningAdmission defines model for PlanningAdmission.
+type PlanningAdmission = Error
+
 // ListAlertsParams defines parameters for ListAlerts.
 type ListAlertsParams struct {
 	TenantId  TenantID  `form:"tenant_id" json:"tenant_id"`
