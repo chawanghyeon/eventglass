@@ -204,6 +204,16 @@ and two native children per CPU1 worker were rejected; the latter doubled
 average conversion duration and missed throughput/latency targets. No relaxed
 verification or GC override was retained.
 
+In an equal 20s/300s/90s one-worker follow-up, keeping every catalog HEAD but
+bounding concurrent metadata checks at eight instead of four measured
+rows/histogram p95 2,838/3,231ms versus 3,057/3,376ms, backlog slope +65.38
+versus +84.77 jobs/min, drain 33.051s versus 42.056s, and S3 HEAD requests
+62,840 versus 69,185. Both runs completed 59 searches; 30,000 logs and 1,500
+errors were measured in each. The single-run difference includes variable
+compaction/object counts (6,765 versus 6,844) and is not proof of proportional
+end-to-end speedup. CPU1 query p95, visibility and growing backlog still miss;
+the official R3 profile has not passed.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

@@ -15,7 +15,7 @@ const MaxCatalogFiles = 32768
 
 // Bound remote metadata fan-out independently of catalog cardinality. A page
 // completes before fetching the next, and cancellation joins all readers.
-const catalogVerificationConcurrency = 4
+const catalogVerificationConcurrency = 8
 
 var (
 	ErrCatalogObjectMissing = errors.New("catalog object is missing or changed")
