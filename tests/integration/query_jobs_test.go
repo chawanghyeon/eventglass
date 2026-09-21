@@ -59,6 +59,19 @@ func TestQueryPlanTasksWinningAttemptsAndFixedReduction(t *testing.T) {
 	if err != nil || first == nil || first.Authority.Key.Stage != model.QueryTaskScan {
 		t.Fatalf("first=%#v err=%v", first, err)
 	}
+	if _, err := fixture.pool.Exec(ctx, `UPDATE query_tasks SET lease_until=clock_timestamp()-interval '1 second'
+		WHERE tenant_id=$1 AND query_id=$2 AND stage=$3 AND level=$4 AND partition_id=$5`, fixture.tenantID, queryID,
+		first.Authority.Key.Stage, first.Authority.Key.Level, first.Authority.Key.PartitionID); err != nil {
+		t.Fatal(err)
+	}
+	reclaimed, err := operations.ClaimQueryTask(ctx, acceptInstallationID, 1, "worker-restarted")
+	if err != nil || reclaimed == nil || reclaimed.Authority.Key != first.Authority.Key || reclaimed.Authority.Attempt != first.Authority.Attempt+1 || reclaimed.Authority.Fence != first.Authority.Fence+1 {
+		t.Fatalf("reclaimed=%#v first=%#v err=%v", reclaimed, first, err)
+	}
+	if _, err := operations.HeartbeatQueryTask(ctx, first.Authority); !errors.Is(err, control.ErrQueryFenceStale) {
+		t.Fatalf("expired worker retained query authority: %v", err)
+	}
+	first = reclaimed
 	completeQueryTaskFixture(t, ctx, operations, first, 1)
 	second, err := operations.ClaimQueryTask(ctx, acceptInstallationID, 1, "worker-b")
 	if err != nil || second == nil || second.Authority.Key.Stage != model.QueryTaskScan || second.Authority.Key.PartitionID == first.Authority.Key.PartitionID {

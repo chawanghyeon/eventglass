@@ -126,6 +126,9 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 	if err := lockRuntimeGeneration(ctx, tx, installationID, generation); err != nil {
 		return nil, err
 	}
+	if err := recoverExpiredQueryTasks(ctx, tx); err != nil {
+		return nil, err
+	}
 	var queryID, snapshotID string
 	var tenantID int64
 	var deadline time.Time
@@ -219,6 +222,41 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 		return nil, err
 	}
 	return &task, nil
+}
+
+// recoverExpiredQueryTasks makes a crashed worker's durable task claimable
+// again before admission selects work. The expired fence is already invalid;
+// changing state under the task row lock prevents a late completion from
+// winning after the replacement claim increments it.
+func recoverExpiredQueryTasks(ctx context.Context, tx pgx.Tx) error {
+	if _, err := tx.Exec(ctx, `WITH candidate AS (
+		SELECT q.tenant_id,q.query_id FROM query_jobs q JOIN query_tasks t
+		ON t.tenant_id=q.tenant_id AND t.query_id=q.query_id
+		WHERE q.state='running' AND q.deadline>clock_timestamp() AND t.state='running'
+		AND t.lease_until<=clock_timestamp() AND t.attempt>=3
+		ORDER BY q.deadline,q.query_id,t.level,t.partition_id
+		FOR UPDATE OF q,t SKIP LOCKED LIMIT 1
+	), failed AS (
+		UPDATE query_jobs q SET state='failed',error_code='query_worker_failed',coordinator_owner=NULL,
+		lease_until=NULL,updated_at=clock_timestamp() FROM candidate c
+		WHERE q.tenant_id=c.tenant_id AND q.query_id=c.query_id RETURNING q.tenant_id,q.query_id
+	)
+	UPDATE query_tasks t SET state='canceled',owner=NULL,lease_until=NULL,error_code='query_worker_failed'
+	FROM failed f WHERE t.tenant_id=f.tenant_id AND t.query_id=f.query_id AND t.state IN ('queued','running')`); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `WITH candidate AS (
+		SELECT t.tenant_id,t.query_id,t.stage,t.level,t.partition_id FROM query_tasks t JOIN query_jobs q
+		ON q.tenant_id=t.tenant_id AND q.query_id=t.query_id
+		WHERE q.state='running' AND q.deadline>clock_timestamp() AND t.state='running'
+		AND t.lease_until<=clock_timestamp() AND t.attempt<3
+		ORDER BY q.deadline,q.query_id,t.level,t.partition_id
+		FOR UPDATE OF t SKIP LOCKED LIMIT 1
+	)
+	UPDATE query_tasks t SET state='queued',owner=NULL,lease_until=NULL,retry_at=clock_timestamp(),error_code='lease_expired'
+	FROM candidate c WHERE t.tenant_id=c.tenant_id AND t.query_id=c.query_id AND t.stage=c.stage
+	AND t.level=c.level AND t.partition_id=c.partition_id`)
+	return err
 }
 
 func (operations *QueryOperations) HeartbeatQueryTask(ctx context.Context, authority QueryTaskAuthority) (time.Time, error) {

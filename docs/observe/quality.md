@@ -151,9 +151,16 @@ It accepted 220,500 records plus 35 duplicate retries with zero conflicts; ACK
 p95 was 375 ms. All Go units stayed below 512 MiB with no OOM, while peak whole
 installation RSS was 1,257,012,985 bytes. Rows/histogram p95 was 11,812/11,085
 ms, 113 queries failed, the load backlog slope was +474.52 jobs/min, maximum
-backlog was 13,310, and 13,060 remained after a 600,759 ms drain. Query responses
-provided zero usable visibility-lag samples, which the harness now fails closed
-instead of treating as zero latency. The measured local rates project to
+backlog was 13,310, and 13,060 remained after a 600,759 ms drain. That report
+predates usable visibility samples. The harness now derives a real sample from
+the newest returned row's server `received_time_us` when the nullable response
+estimate is absent, and still fails closed if neither source exists. A Go1.27.1
+20s/60s/90s diagnostic accepted 8,400 records with ACK p95 372ms, rows/histogram
+p95 1,149/933ms, backlog slope +48.59 jobs/min and zero final backlog; it is not
+an official-duration pass. Raising catalog metadata concurrency from4 to32
+reduced the 32-object synthetic latency from about10.3ms to1.4ms, but the same
+end-to-end diagnostic regressed rows/histogram p95 to1,244/1,133ms and was
+rejected. The measured local rates project to
 $384.01/month under the fixture's stated Fargate/RDS/S3 assumptions, including
 $265.54/month of S3 requests; EKS, load balancer, NAT, CloudWatch, DNS, support,
 tax, cross-region transfer, and multi-AZ premium are explicit exclusions. This

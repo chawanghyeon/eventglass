@@ -428,6 +428,9 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		time.Sleep(250 * time.Millisecond)
 	}
 	var wire struct {
+		Rows []struct {
+			ReceivedTimeUS string `json:"received_time_us"`
+		} `json:"rows"`
 		Stats struct {
 			VisibilityLagMS *string `json:"visibility_lag_ms"`
 		} `json:"stats"`
@@ -442,6 +445,23 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 			return 0, 0, parseErr
 		}
 		visible = time.Duration(value) * time.Millisecond
+	} else if !histogram && len(wire.Rows) > 0 {
+		// visibility_lag_ms is nullable by contract. The comparison still needs
+		// an observed ACK-to-query sample, so use the newest returned received
+		// timestamp rather than treating a missing server estimate as zero.
+		var newest int64
+		for _, row := range wire.Rows {
+			value, parseErr := strconv.ParseInt(row.ReceivedTimeUS, 10, 64)
+			if parseErr != nil {
+				return 0, 0, parseErr
+			}
+			newest = max(newest, value)
+		}
+		lag := time.Since(time.UnixMicro(newest))
+		if lag < 0 {
+			lag = 0
+		}
+		visible = lag
 	}
 	return time.Since(started), visible, nil
 }
