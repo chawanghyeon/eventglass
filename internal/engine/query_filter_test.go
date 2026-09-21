@@ -5,7 +5,10 @@ package engine_test
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"math/big"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -84,6 +87,160 @@ func TestFilterSQLMatchesIndependentOracle(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: DuckDB=%v oracle=%v; SQL=%s args=%#v", expression, got, want, predicate.Text, predicate.Args)
+		}
+	}
+}
+
+func TestAttributeLookupsRejectDuplicateStoredPaths(t *testing.T) {
+	one := "1"
+	integer := model.Attribute{Namespace: "attributes", Path: "/v", ValueType: "integer", IntegerValue: &one}
+	text := model.Attribute{Namespace: "attributes", Path: "/v", ValueType: "string", StringValue: &one}
+	null := model.Attribute{Namespace: "attributes", Path: "/v", ValueType: "null", JSONValue: json.RawMessage("null")}
+	array := model.Attribute{Namespace: "attributes", Path: "/features/0", ValueType: "string", StringValue: &one}
+	cases := []struct {
+		name, filter string
+		attrs        []model.Attribute
+		group        *query.GroupDimension
+		metric       *query.NumericField
+	}{
+		{name: "same_type_scalar", filter: `iattr("attributes", "/v") == 1`, attrs: []model.Attribute{integer, integer}},
+		{name: "mixed_type_scalar", filter: `iattr("attributes", "/v") == 1`, attrs: []model.Attribute{integer, text}},
+		{name: "presence", filter: `exists("attributes", "/v")`, attrs: []model.Attribute{integer, text}},
+		{name: "null", filter: `is_null("attributes", "/v")`, attrs: []model.Attribute{null, integer}},
+		{name: "array", filter: `array_contains("attributes", "/features", "1")`, attrs: []model.Attribute{array, array}},
+		{name: "untyped_group", attrs: []model.Attribute{integer, text}, group: &query.GroupDimension{Op: "group_attr", Namespace: "attributes", Path: "/v"}},
+		{name: "typed_group", attrs: []model.Attribute{integer, text}, group: &query.GroupDimension{Op: "attr", Type: query.IntegerType, Namespace: "attributes", Path: "/v"}},
+		{name: "integer_metric", attrs: []model.Attribute{integer, text}, metric: &query.NumericField{Op: "attr", Type: query.IntegerType, Namespace: "attributes", Path: "/v"}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			db, err := engine.Open(ctx, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			createQueryFixture(t, ctx, db)
+			encoded, err := json.Marshal(test.attrs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			const schema = `'[{"namespace":"VARCHAR","path":"VARCHAR","value_type":"VARCHAR","string_value":"VARCHAR","integer_value":"DECIMAL(38,0)","double_value":"DOUBLE","boolean_value":"BOOLEAN","json_value":"VARCHAR","unit":"VARCHAR"}]'`
+			if _, err := db.ExecContext(ctx, `UPDATE records SET attrs=from_json(?,`+schema+`) WHERE record_id='c'`, string(encoded)); err != nil {
+				t.Fatal(err)
+			}
+			if test.filter != "" {
+				node, err := query.ParseCEL(test.filter)
+				if err != nil {
+					t.Fatal(err)
+				}
+				predicate, err := query.CompilePredicate(node)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var count int64
+				err = db.QueryRowContext(ctx, `SELECT count(*) FROM records r WHERE r.record_id='c' AND (`+predicate.Text+`)`, predicate.Args...).Scan(&count)
+				requireDuplicateAttributeError(t, err)
+				return
+			}
+			if _, err := db.ExecContext(ctx, `CREATE VIEW input_rows AS SELECT * FROM records WHERE record_id='c'`); err != nil {
+				t.Fatal(err)
+			}
+			node, err := query.ParseCEL("true")
+			if err != nil {
+				t.Fatal(err)
+			}
+			canonical, err := query.CanonicalFilter(node)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var cuts [model.LaneCount]int64
+			cuts[0] = 9
+			plan, err := query.BuildPlan(model.DatasetSpec{TenantID: 1, ProjectIDs: []int64{10}, Kinds: []model.Kind{model.KindError}, TimeBasis: model.QueryTimeEvent, StartUS: 100, EndUS: 200, Filter: canonical}, model.SnapshotScope{LaneCuts: cuts, RetentionFloorUS: 100}, node)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := query.AggregateOperationSpec{Plan: plan, Metrics: []query.AggregateMetric{{Name: "count", Op: "count"}}}
+			if test.group != nil {
+				spec.GroupBy = []query.GroupDimension{*test.group}
+			}
+			if test.metric != nil {
+				spec.Metrics = append(spec.Metrics, query.AggregateMetric{Name: "total", Op: "sum", Field: test.metric})
+			}
+			operation, err := query.BuildAggregateOperation(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Exercise the actual bound scan via the engine, not a SQL-string assertion.
+			root := t.TempDir()
+			input := filepath.Join(root, "duplicate.parquet")
+			if _, err := db.ExecContext(ctx, `COPY input_rows TO '`+strings.ReplaceAll(input, "'", "''")+`' (FORMAT PARQUET)`); err != nil {
+				t.Fatal(err)
+			}
+			_, err = engine.ExecuteQuery(ctx, engine.QueryRequest{Version: 1, QueryID: "duplicate-attribute", Task: model.QueryTaskKey{Stage: model.QueryTaskScan}, Operation: operation, InputPaths: []string{input}, OutputPath: filepath.Join(root, "result.parquet"), SpillDirectory: filepath.Join(root, "spill")})
+			requireDuplicateAttributeError(t, err)
+		})
+	}
+}
+
+func requireDuplicateAttributeError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil || !strings.Contains(err.Error(), "duplicate attribute path") && !strings.Contains(err.Error(), "More than one row returned by a subquery") {
+		t.Fatalf("expected stored-format duplicate-path error, got %v", err)
+	}
+}
+
+func TestMaximumAttributeAggregateExecutesExactAccumulators(t *testing.T) {
+	ctx := context.Background()
+	db, err := engine.Open(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	createQueryFixture(t, ctx, db)
+	root := t.TempDir()
+	input := filepath.Join(root, "input.parquet")
+	if _, err := db.ExecContext(ctx, `COPY records TO '`+strings.ReplaceAll(input, "'", "''")+`' (FORMAT PARQUET)`); err != nil {
+		t.Fatal(err)
+	}
+	node, err := query.ParseCEL("true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := query.CanonicalFilter(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cuts [model.LaneCount]int64
+	for i := range cuts {
+		cuts[i] = 9
+	}
+	plan, err := query.BuildPlan(model.DatasetSpec{TenantID: 1, ProjectIDs: []int64{10}, Kinds: []model.Kind{model.KindError}, TimeBasis: model.QueryTimeEvent, StartUS: 100, EndUS: 200, Filter: canonical}, model.SnapshotScope{LaneCuts: cuts, RetentionFloorUS: 100}, node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := query.AggregateOperationSpec{Plan: plan, GroupBy: []query.GroupDimension{{Op: "field", Name: "service"}, {Op: "group_attr", Namespace: "attributes", Path: "/absent"}}}
+	for i := range 8 {
+		spec.Metrics = append(spec.Metrics, query.AggregateMetric{Name: fmt.Sprintf("metric%d", i), Op: []string{"sum", "avg", "min", "max"}[i%4], Field: &query.NumericField{Op: "attr", Namespace: "attributes", Path: "/v", Type: query.IntegerType}})
+	}
+	op, err := query.BuildAggregateOperation(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(root, "output.parquet")
+	result, err := engine.ExecuteQuery(ctx, engine.QueryRequest{Version: 1, QueryID: "maximum-aggregate", Task: model.QueryTaskKey{Stage: model.QueryTaskScan}, Operation: op, InputPaths: []string{input}, OutputPath: output, SpillDirectory: filepath.Join(root, "spill")})
+	if err != nil || result.Rows != 1 {
+		t.Fatalf("result=%+v err=%v", result, err)
+	}
+	for i := range 8 {
+		var service, missing, low, high string
+		var state query.IntegerState
+		statement := fmt.Sprintf(`SELECT g0_string,g1_type,m%[1]d_l0::VARCHAR,m%[1]d_l1::VARCHAR,m%[1]d_l2::VARCHAR,m%[1]d_l3::VARCHAR,m%[1]d_l4::VARCHAR,m%[1]d_valid,m%[1]d_excluded,m%[1]d_min::VARCHAR,m%[1]d_max::VARCHAR FROM read_parquet(?)`, i)
+		if err := db.QueryRowContext(ctx, statement, output).Scan(&service, &missing, &state.Limbs[0], &state.Limbs[1], &state.Limbs[2], &state.Limbs[3], &state.Limbs[4], &state.Count, &state.Excluded, &low, &high); err != nil {
+			t.Fatal(err)
+		}
+		if service != "api" || missing != "missing" || state.Count != 2 || state.Excluded != 8 || state.Limbs != [5]string{"3", "0", "0", "0", "0"} || low != "1" || high != "2" {
+			t.Fatalf("metric%d service=%s group=%s state=%+v min/max=%s/%s", i, service, missing, state, low, high)
 		}
 	}
 }

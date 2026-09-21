@@ -177,14 +177,19 @@ required by the official comparison command. It uncovered a reproducible10k-row
 conversion OOM: repeated parsing of the full stage JSON exceeded192MiB. Shared
 path-list extraction fixes that case without changing native/cgroup limits,
 schema, publication ownership or record identity. Exact scalar/NULL and large
-batch regression tests cover the change. Actual10k/100k profiles pass typed
-filters, partition identities and equal-time pagination. The1m profile converts
-all records and passes count/time/row queries, but typed-attribute scans exhaust
-the192MiB query budget;10m has not passed or been executed by this fail-fast run.
-This is the next local R3 capacity limit to investigate, including the separate
-worker's256MiB profile, not an external blocker. Preserve the failed run and
-prove the query change before claiming the four-size oracle or
-G07 complete. Official-duration capacity/efficiency and R4 remain outstanding.
+batch regression tests cover the change. The original1m typed-attribute scans
+exhausted both192MiB and the separate worker's256MiB native profiles. Row-local
+list projection now removes correlated attribute materialization without
+changing limits or scan partitioning, and rejects duplicate stored paths before
+type selection. Exact accumulator tests cover projected numeric operands.
+The fresh2026-09-22 actual10k/100k/1m/10m oracle passes all typed/time/count,
+partition identity and equal-time page checks (`.tools/native-oracle.JAxTts`);
+1m/10m elapsed106.241s/1,053.615s, cgroup OOM/kills0. The10m cgroup peak was
+536,879,104bytes (reported8KiB above its configured512MiB maximum),
+including filesystem cache;2,684 memory-limit events were recorded. This is
+functional Mode A evidence, not a worst-case RSS guarantee or official G07 pass.
+Official-duration1/2/4-worker SLOs, independent capacity/efficiency and R4 remain
+outstanding. Preserve the old failed profiles alongside the new evidence.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

@@ -148,7 +148,7 @@ func (compiler *sqlCompiler) node(node *Node) (string, ScalarType, error) {
 		return "r." + column, fieldTypes[node.Name], nil
 	case "attr":
 		valueColumn := map[ScalarType]string{StringType: "string_value", IntegerType: "integer_value", DoubleType: "double_value", BooleanType: "boolean_value"}[node.Type]
-		text := `(SELECT a.` + valueColumn + ` FROM UNNEST(r.attrs) AS u(a) WHERE a.namespace=` + compiler.bind(node.Namespace) + ` AND a.path=` + compiler.bind(node.Path) + ` AND a.value_type=` + compiler.bind(string(node.Type)) + `)`
+		text := typedAttributeSQL(compiler.bind(node.Namespace), compiler.bind(node.Path), compiler.bind(string(node.Type)), valueColumn)
 		return text, node.Type, nil
 	case "literal":
 		return compiler.literal(*node.Literal), node.Type, nil
@@ -214,7 +214,7 @@ func (compiler *sqlCompiler) node(node *Node) (string, ScalarType, error) {
 		}
 		return "COALESCE((" + expression + "),FALSE)", BooleanType, nil
 	case "text":
-		return `EXISTS (SELECT 1 FROM UNNEST(r.search_values) AS s(value) WHERE contains(s.value,` + compiler.bind(node.Pattern) + `))`, BooleanType, nil
+		return `COALESCE(len(list_filter(r.search_values, lambda value: contains(value,` + compiler.bind(node.Pattern) + `)))>0,FALSE)`, BooleanType, nil
 	case "exists":
 		return compiler.attributeExists(node.Namespace, node.Path, ""), BooleanType, nil
 	case "is_null":
@@ -226,7 +226,9 @@ func (compiler *sqlCompiler) node(node *Node) (string, ScalarType, error) {
 		prefixLength := compiler.bind(node.Path + "/")
 		kind := compiler.bind(string(node.Literal.Type))
 		literal := compiler.literal(*node.Literal)
-		return `EXISTS (SELECT 1 FROM UNNEST(r.attrs) AS u(a) WHERE a.namespace=` + namespace + ` AND starts_with(a.path,` + prefixMatch + `) AND regexp_matches(substr(a.path,length(` + prefixLength + `)+1),'^[0-9]+$') AND a.value_type=` + kind + ` AND COALESCE(a.` + valueColumn + `=` + literal + `,FALSE))`, BooleanType, nil
+		return `(list_transform([list_filter(r.attrs, lambda a: a.namespace=` + namespace + ` AND starts_with(a.path,` + prefixMatch + `) AND regexp_matches(substr(a.path,length(` + prefixLength + `)+1),'^[0-9]+$'))], lambda selected:
+			CASE WHEN len(selected)<>len(list_distinct(list_transform(selected,lambda a: a.path))) THEN error('duplicate attribute path')
+			ELSE COALESCE(len(list_filter(selected,lambda a: a.value_type=` + kind + ` AND COALESCE(a.` + valueColumn + `=` + literal + `,FALSE)))>0,FALSE) END))[1]`, BooleanType, nil
 	default:
 		return "", "", fmt.Errorf("unsupported filter op %q", node.Op)
 	}
@@ -248,9 +250,23 @@ func (compiler *sqlCompiler) literal(literal Literal) string {
 }
 
 func (compiler *sqlCompiler) attributeExists(namespace, path, valueType string) string {
-	text := `EXISTS (SELECT 1 FROM UNNEST(r.attrs) AS u(a) WHERE a.namespace=` + compiler.bind(namespace) + ` AND a.path=` + compiler.bind(path)
+	namespaceSlot, pathSlot := compiler.bind(namespace), compiler.bind(path)
+	value := `COALESCE(len(selected)>0,FALSE)`
 	if valueType != "" {
-		text += ` AND a.value_type=` + compiler.bind(valueType)
+		value = `COALESCE(selected[1].value_type=` + compiler.bind(valueType) + `,FALSE)`
 	}
-	return text + `)`
+	return attributeProjectionSQL(namespaceSlot, pathSlot, value)
+}
+
+// Keep attribute lookup within each bounded row list. Correlated UNNEST can
+// build a cross-record relation even for a scalar lookup. The one-element outer
+// list binds the filtered list once, without choosing an arbitrary first value
+// when the stored namespace/path is duplicated (including different types).
+// All arguments here are fixed internal SQL or parameter slots, never user SQL.
+func attributeProjectionSQL(namespace, path, value string) string {
+	return `(list_transform([list_filter(r.attrs,lambda a: a.namespace=` + namespace + ` AND a.path=` + path + `)], lambda selected: CASE WHEN len(selected)>1 THEN error('duplicate attribute path') ELSE ` + value + ` END))[1]`
+}
+
+func typedAttributeSQL(namespace, path, valueType, valueColumn string) string {
+	return attributeProjectionSQL(namespace, path, `CASE WHEN selected[1].value_type=`+valueType+` THEN selected[1].`+valueColumn+` END`)
 }

@@ -1,11 +1,37 @@
 package query
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/chawanghyeon/eventglass/internal/model"
 )
+
+func TestEightAttributeMetricsAndTwoGroupsFitOperationBudget(t *testing.T) {
+	spec := AggregateOperationSpec{Plan: aggregateTestPlan(t, 0, 10)}
+	for i := range 2 {
+		spec.GroupBy = append(spec.GroupBy, GroupDimension{Op: "group_attr", Namespace: "attributes", Path: "/" + strings.Repeat("g", 1022) + fmt.Sprint(i)})
+	}
+	for i := range 8 {
+		spec.Metrics = append(spec.Metrics, AggregateMetric{Name: fmt.Sprintf("metric%d", i), Op: "sum", Field: &NumericField{Op: "attr", Namespace: "attributes", Path: "/" + strings.Repeat("v", 1022) + fmt.Sprint(i), Type: IntegerType}})
+	}
+	op, err := BuildAggregateOperation(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := CanonicalOperation(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > 65536 {
+		t.Fatalf("operation exceeds 64KiB budget: %d", len(encoded))
+	}
+	if got, want := strings.Count(op.ScanSQL, "?"), len(op.ScanArguments); got != want {
+		t.Fatalf("placeholders=%d arguments=%d", got, want)
+	}
+	t.Logf("maximum attribute aggregate operation bytes=%d", len(encoded))
+}
 
 func TestBuildAggregateOperationBindsRepeatedTypedAttributeExpressions(t *testing.T) {
 	plan := aggregateTestPlan(t, 0, 10_000_000)

@@ -69,6 +69,7 @@ func TestNativeFixtureBoundaryAndRetryContracts(t *testing.T) {
 // query planning and native scan/reduce. There is deliberately no invented PG
 // receipt/authorization/ACK or S3 measurement; Mode B owns those checks.
 func TestNativeDatasetOracle(t *testing.T) {
+	queryMemory := nativeOracleQueryMemory(t)
 	rows, err := strconv.Atoi(os.Getenv("EVENTGLASS_NATIVE_ORACLE_ROWS"))
 	if err != nil || fixedFixtureSummaries[rows].Rows == 0 {
 		t.Fatal("EVENTGLASS_NATIVE_ORACLE_ROWS must select 10000, 100000, 1000000 or 10000000")
@@ -317,7 +318,22 @@ func TestNativeDatasetOracle(t *testing.T) {
 			t.Fatalf("cgroup OOM: %s", line)
 		}
 	}
-	t.Logf("native oracle PASS version=native-fixture-v1 rows=%d actual_envelope_sha256=%x analytics_files=%d analytics_bytes=%d journal_bytes=%d normalize_ms=%d conversion_ms=%d elapsed_ms=%d supervisor_allocated_bytes=%d cgroup_peak_bytes=%s s3_requests=0 network_bytes=0", rows, digest.Sum(nil), len(files), parquetBytes, journalBytes, normalizeTime.Milliseconds(), convertTime.Milliseconds(), time.Since(started).Milliseconds(), allocatedAfter.TotalAlloc-allocatedBefore.TotalAlloc, nativeCgroup(t, "memory.peak"))
+	t.Logf("native oracle PASS version=native-fixture-v1 rows=%d actual_envelope_sha256=%x analytics_files=%d analytics_bytes=%d journal_bytes=%d normalize_ms=%d conversion_ms=%d elapsed_ms=%d supervisor_allocated_bytes=%d cgroup_peak_bytes=%s query_memory_bytes=%d s3_requests=0 network_bytes=0", rows, digest.Sum(nil), len(files), parquetBytes, journalBytes, normalizeTime.Milliseconds(), convertTime.Milliseconds(), time.Since(started).Milliseconds(), allocatedAfter.TotalAlloc-allocatedBefore.TotalAlloc, nativeCgroup(t, "memory.peak"), queryMemory)
+}
+
+func nativeOracleQueryMemory(t *testing.T) int64 {
+	t.Helper()
+	// The official runner keeps the stricter192MiB default. This explicit
+	// diagnostic selects the existing separate-worker profile, not a new limit.
+	switch os.Getenv("EVENTGLASS_NATIVE_ORACLE_QUERY_MEMORY_MIB") {
+	case "", "192":
+		return 192 << 20
+	case "256":
+		return 256 << 20
+	default:
+		t.Fatal("native query memory must select the existing192 or256MiB profile")
+		return 0
+	}
 }
 
 type nativeRow struct {
@@ -560,7 +576,7 @@ func nativeExecute(t *testing.T, ctx context.Context, binaryPath, root string, f
 			inputs = append(inputs, path)
 		}
 		final = filepath.Join(directory, fmt.Sprintf("%06d.parquet", index))
-		summary, err := (app.ProcessQueryRunner{BinaryPath: binaryPath}).Run(ctx, engine.QueryRequest{Version: 1, QueryID: "native-oracle", Task: task.Key, Operation: operation, InputPaths: inputs, OutputPath: final, SpillDirectory: final + ".spill", NativeMemoryBytes: 192 << 20, NativeSpillBytes: 256 << 20})
+		summary, err := (app.ProcessQueryRunner{BinaryPath: binaryPath}).Run(ctx, engine.QueryRequest{Version: 1, QueryID: "native-oracle", Task: task.Key, Operation: operation, InputPaths: inputs, OutputPath: final, SpillDirectory: final + ".spill", NativeMemoryBytes: nativeOracleQueryMemory(t), NativeSpillBytes: 256 << 20})
 		if err != nil {
 			t.Fatalf("task=%+v: %v", task.Key, err)
 		}
@@ -596,7 +612,7 @@ func nativeExecute(t *testing.T, ctx context.Context, binaryPath, root string, f
 			t.Fatal("unexpectedly large fixture result")
 		}
 	}
-	t.Logf("native query kind=%s scans=%d reducers=%d rows=%d elapsed_ms=%d", operation.Kind, plan.ScanCount, plan.ReducerCount, len(result), time.Since(started).Milliseconds())
+	t.Logf("native query kind=%s scans=%d reducers=%d rows=%d elapsed_ms=%d native_memory_bytes=%d", operation.Kind, plan.ScanCount, plan.ReducerCount, len(result), time.Since(started).Milliseconds(), nativeOracleQueryMemory(t))
 	return result
 }
 

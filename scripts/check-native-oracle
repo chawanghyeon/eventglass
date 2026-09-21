@@ -25,9 +25,10 @@ docker run --rm --platform linux/arm64 --network none -v "$artifacts:/artifacts"
   git status --short
   docker image inspect --format '{{.Id}} {{.Architecture}}' "$image"
   docker info --format 'host_arch={{.Architecture}} host_cpus={{.NCPU}} host_memory={{.MemTotal}}'
-  printf '%s\n' 'cpu=1 memory=512MiB swap=0 native_memory=256MiB native_spill=256MiB supervisor_GOMEMLIMIT=96MiB network=none scratch=disk_volume'
+  printf '%s\n' 'cpu=1 memory=512MiB swap=0 conversion_native_memory=256MiB query_native_memory=192MiB native_spill=256MiB supervisor_GOMEMLIMIT=96MiB network=none scratch=disk_volume'
   docker run --rm --platform linux/arm64 --network none "$image" sha256sum \
     /src/tests/comparison/native_fixture_test.go /src/internal/engine/convert.go \
+    /src/internal/query/sql.go /src/internal/query/aggregate.go \
     /out/eventglass-go /opt/duckdb/lib/libduckdb_bundle.a
 } >"$artifacts/environment.txt"
 printf 'Native oracle evidence: %s\n' "$artifacts"

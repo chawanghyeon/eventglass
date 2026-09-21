@@ -119,6 +119,10 @@ bounded stage/journal/output/spill; volumes are removed after child termination.
 Logs, source/image identity, actual input hashes, timings, supervisor allocations
 and cgroup peak/OOM evidence remain in `.tools/native-oracle.*`. Allocation
 counts exclude unmanaged native memory; cgroup peaks include filesystem cache.
+For matched diagnostics the native test binary accepts
+`EVENTGLASS_NATIVE_ORACLE_QUERY_MEMORY_MIB=192` or`256`, selecting only existing
+native profiles. The official runner does not forward this override and always
+uses192MiB; neither product limits nor a failed gate may be bypassed with it.
 Capacity/scaling measurements and all phases under the official-duration
 profile remain required before R3 closure.
 `EVENTGLASS_COMPARISON_QUICK=1` permits shorter local

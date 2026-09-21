@@ -56,7 +56,7 @@ func BuildAggregateOperation(spec AggregateOperationSpec) (engine.QueryOperation
 	if err != nil {
 		return engine.QueryOperation{}, err
 	}
-	metricScan, metricReduce, metricEmpty, metricArgs, err := compileAggregateMetrics(spec.Metrics)
+	metricScan, metricReduce, metricEmpty, metricProjection, metricArgs, err := compileAggregateMetrics(spec.Metrics)
 	if err != nil {
 		return engine.QueryOperation{}, err
 	}
@@ -67,6 +67,13 @@ func BuildAggregateOperation(spec AggregateOperationSpec) (engine.QueryOperation
 		return engine.QueryOperation{}, errors.New("aggregate has no output state")
 	}
 	scan := `SELECT ` + strings.Join(scanSelect, ",") + ` FROM input_rows r WHERE ` + spec.Plan.Where.Text
+	if len(metricProjection) > 0 {
+		// Project each numeric operand once in SQL before its exact accumulator
+		// expressions. Repeating an attribute lookup for every integer limb can
+		// exceed the existing operation-byte budget at eight metrics. This is a
+		// row projection, not a materialized cross-record attribute relation.
+		scan = `SELECT ` + strings.Join(scanSelect, ",") + ` FROM (SELECT r.*,` + strings.Join(metricProjection, ",") + ` FROM input_rows r WHERE ` + spec.Plan.Where.Text + `) r`
+	}
 	if len(groupScan) > 0 {
 		scan += ` GROUP BY ALL`
 	}
@@ -175,7 +182,7 @@ func compileGroupDimension(dimension GroupDimension, index int) ([]string, []any
 			return nil, nil, errors.New("typed aggregate group must be scalar")
 		}
 		column := map[ScalarType]string{StringType: "string_value", IntegerType: "integer_value", DoubleType: "double_value", BooleanType: "boolean_value"}[dimension.Type]
-		value := `(SELECT a.` + column + ` FROM UNNEST(r.attrs) AS u(a) WHERE a.namespace=? AND a.path=? AND a.value_type=?)`
+		value := typedAttributeSQL("?", "?", "?", column)
 		args = append(args, dimension.Namespace, dimension.Path, string(dimension.Type))
 		typeExpr = fmt.Sprintf(`CASE WHEN %s IS NULL THEN %s ELSE '%s' END`, value, missing, dimension.Type)
 		// The value expression appears in its typed column; double grouping
@@ -186,13 +193,12 @@ func compileGroupDimension(dimension GroupDimension, index int) ([]string, []any
 			args = append(args, dimension.Namespace, dimension.Path, string(dimension.Type))
 		}
 	case "group_attr":
-		base := ` FROM UNNEST(r.attrs) AS u(a) WHERE a.namespace=? AND a.path=? LIMIT 1)`
-		typeExpr = `(SELECT a.value_type` + base
-		stringExpr = `(SELECT a.string_value` + base
-		integerExpr = `(SELECT a.integer_value` + base
-		doubleValue := `(SELECT a.double_value` + base
+		typeExpr = attributeProjectionSQL("?", "?", "selected[1].value_type")
+		stringExpr = attributeProjectionSQL("?", "?", "selected[1].string_value")
+		integerExpr = attributeProjectionSQL("?", "?", "selected[1].integer_value")
+		doubleValue := attributeProjectionSQL("?", "?", "selected[1].double_value")
 		doubleExpr = `CASE WHEN ` + doubleValue + `=0 THEN 0.0 ELSE ` + doubleValue + ` END`
-		booleanExpr = `(SELECT a.boolean_value` + base
+		booleanExpr = attributeProjectionSQL("?", "?", "selected[1].boolean_value")
 		for range 6 {
 			args = append(args, dimension.Namespace, dimension.Path)
 		}
@@ -223,17 +229,17 @@ func typedGroupValues(value string, scalarType ScalarType) (string, string, stri
 	return stringExpr, integerExpr, doubleExpr, booleanExpr
 }
 
-func compileAggregateMetrics(metrics []AggregateMetric) (scan, reduce, empty []string, args []any, err error) {
+func compileAggregateMetrics(metrics []AggregateMetric) (scan, reduce, empty, projection []string, args []any, err error) {
 	seen := map[string]bool{}
 	for index, metric := range metrics {
 		if !metricNamePattern.MatchString(metric.Name) || seen[metric.Name] {
-			return nil, nil, nil, nil, errors.New("invalid or duplicate aggregate metric name")
+			return nil, nil, nil, nil, nil, errors.New("invalid or duplicate aggregate metric name")
 		}
 		seen[metric.Name] = true
 		prefix := fmt.Sprintf("m%d_", index)
 		if metric.Op == "count" {
 			if metric.Field != nil {
-				return nil, nil, nil, nil, errors.New("count metric cannot name a field")
+				return nil, nil, nil, nil, nil, errors.New("count metric cannot name a field")
 			}
 			scan = append(scan, `count(*)::BIGINT AS `+prefix+`valid`, `0::BIGINT AS `+prefix+`excluded`)
 			reduce = append(reduce, `sum(r.`+prefix+`valid)::BIGINT AS `+prefix+`valid`, `sum(r.`+prefix+`excluded)::BIGINT AS `+prefix+`excluded`)
@@ -241,47 +247,38 @@ func compileAggregateMetrics(metrics []AggregateMetric) (scan, reduce, empty []s
 			continue
 		}
 		if metric.Op != "sum" && metric.Op != "min" && metric.Op != "max" && metric.Op != "avg" || metric.Field == nil {
-			return nil, nil, nil, nil, errors.New("unsupported aggregate metric")
+			return nil, nil, nil, nil, nil, errors.New("unsupported aggregate metric")
 		}
 		value, valueArgs, fieldType, fieldErr := compileNumericField(*metric.Field)
 		if fieldErr != nil {
-			return nil, nil, nil, nil, fieldErr
+			return nil, nil, nil, nil, nil, fieldErr
 		}
 		args = append(args, valueArgs...)
+		projection = append(projection, value+` AS `+prefix+`operand`)
+		value = `r.` + prefix + `operand`
 		scan = append(scan, `count(`+value+`)::BIGINT AS `+prefix+`valid`, `(count(*)-count(`+value+`))::BIGINT AS `+prefix+`excluded`)
-		args = append(args, valueArgs...)
 		reduce = append(reduce, `sum(r.`+prefix+`valid)::BIGINT AS `+prefix+`valid`, `sum(r.`+prefix+`excluded)::BIGINT AS `+prefix+`excluded`)
 		empty = append(empty, `0::BIGINT AS `+prefix+`valid`, `0::BIGINT AS `+prefix+`excluded`)
 		if fieldType == IntegerType {
 			for limb := 0; limb < IntegerLimbCount; limb++ {
 				expression, limbErr := IntegerLimbSQL(value, limb)
 				if limbErr != nil {
-					return nil, nil, nil, nil, limbErr
+					return nil, nil, nil, nil, nil, limbErr
 				}
 				scan = append(scan, fmt.Sprintf(`coalesce(sum(%s),0::DECIMAL(38,0)) AS %sl%d`, expression, prefix, limb))
-				// IntegerLimbSQL repeats the value expression for null, sign,
-				// and magnitude extraction. Preserve placeholder order exactly.
-				for range 3 {
-					args = append(args, valueArgs...)
-				}
 				reduce = append(reduce, fmt.Sprintf(`sum(r.%sl%d) AS %sl%d`, prefix, limb, prefix, limb))
 				empty = append(empty, fmt.Sprintf(`0::DECIMAL(38,0) AS %sl%d`, prefix, limb))
 			}
 			scan = append(scan, `min(`+value+`) AS `+prefix+`min`, `max(`+value+`) AS `+prefix+`max`)
-			args = append(args, valueArgs...)
-			args = append(args, valueArgs...)
 			reduce = append(reduce, `min(r.`+prefix+`min) AS `+prefix+`min`, `max(r.`+prefix+`max) AS `+prefix+`max`)
 			empty = append(empty, `CAST(NULL AS DECIMAL(38,0)) AS `+prefix+`min`, `CAST(NULL AS DECIMAL(38,0)) AS `+prefix+`max`)
 		} else {
 			scan = append(scan, `fsum(`+value+`) AS `+prefix+`sum`, `min(`+value+`) AS `+prefix+`min`, `max(`+value+`) AS `+prefix+`max`)
-			args = append(args, valueArgs...)
-			args = append(args, valueArgs...)
-			args = append(args, valueArgs...)
 			reduce = append(reduce, `fsum(r.`+prefix+`sum) AS `+prefix+`sum`, `min(r.`+prefix+`min) AS `+prefix+`min`, `max(r.`+prefix+`max) AS `+prefix+`max`)
 			empty = append(empty, `CAST(NULL AS DOUBLE) AS `+prefix+`sum`, `CAST(NULL AS DOUBLE) AS `+prefix+`min`, `CAST(NULL AS DOUBLE) AS `+prefix+`max`)
 		}
 	}
-	return scan, reduce, empty, args, nil
+	return scan, reduce, empty, projection, args, nil
 }
 
 func compileNumericField(field NumericField) (string, []any, ScalarType, error) {
@@ -297,7 +294,7 @@ func compileNumericField(field NumericField) (string, []any, ScalarType, error) 
 		return "r." + column, nil, field.Type, nil
 	case "attr":
 		column := map[ScalarType]string{IntegerType: "integer_value", DoubleType: "double_value"}[field.Type]
-		return `(SELECT a.` + column + ` FROM UNNEST(r.attrs) AS u(a) WHERE a.namespace=? AND a.path=? AND a.value_type=?)`,
+		return typedAttributeSQL("?", "?", "?", column),
 			[]any{field.Namespace, field.Path, string(field.Type)}, field.Type, nil
 	default:
 		return "", nil, "", errors.New("unsupported numeric metric field")

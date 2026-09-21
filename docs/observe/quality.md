@@ -669,6 +669,89 @@ valid-ID duplicate and partial-envelope checks passed ARM64 race/count3.
 No API/schema changed; capability gates remain incomplete and source-design's
 frozen SHA256 is unchanged.
 
+### Row-local attribute queries under native memory bounds
+
+The subsequent2026-09-22 matched worker-profile check also failed the same
+seven typed/presence filters at256MiB (`.tools/attribute-actual-million-before-256.log`):
+all1m records converted into52,794,512 analytics bytes, but the query budget
+was exhausted; total108.06s, cgroup peak536,870,912bytes, OOM/kills0. This
+established a real worker-path limitation, not only the stricter192MiB oracle.
+
+The query compiler now performs scalar/presence/array/text lookups within each
+bounded row list using pinned2.0 list lambdas rather than correlated UNNEST.
+Namespace/path duplicates are rejected before type selection. Actual native
+regressions reproduced seven previously silent duplicate-path cases (mixed
+types, presence, null, array, untyped/typed group, integer metric); all now fail
+with the specific stored-format error, while valid scalar/missing/null and
+independent Boolean-oracle cases pass. Eight integer metrics plus two grouping
+dimensions execute with exact limbs, counts, exclusions and min/max. Numeric
+operands use a row projection before repeated accumulator expressions: no new
+repository/workflow layer, global relation, dynamic repartitioning or higher
+memory/operation limit. Mandatory BuildPlan scope, shared authorization,
+Submission/Awaiter, child joining and cache lifetime are unchanged.
+The operation-budget test uses eight integer metrics, two groups and1KiB
+pointers:46,066 encoded bytes under the unchanged65,536-byte limit. Native
+tests also verify typed/untyped double grouping normalizes negative zero,
+finite sums/counts/exclusions/min/max and negative-epoch empty histogram buckets.
+
+Sequential paired measurements used a1m-row single Parquet file with two
+attributes, including a high-cardinality string; every scan returned the exact
+399,000 expected matches. Three before/after pairs used the same ARM64 image,
+library, CPU1/512MiB/swap0,96MiB Go soft limit,256MiB spill and disk volume.
+The baseline compiler sources are byte-identical to1f175a5. No heavy checks ran
+concurrently. Medians (`.tools/attribute-paired.yF01lS`) are:
+
+| Native MiB | Scan/readback ms, before→after | Input rows/s, before→after | Process peak RSS KiB, before→after | Go allocated bytes, before→after | Go allocations, before→after |
+|---|---:|---:|---:|---:|---:|
+|192|7,786.850→194.973|128,422→5,128,911|268,756→75,704|1,103,344→1,105,632|811→826|
+|256|7,753.628→194.442|128,972→5,142,916|334,016→75,704|1,096,952→1,095,504|793→798|
+
+The timer covers native scan plus exact count readback, not fixture generation;
+input throughput is1m divided by that median duration. Process peak RSS includes
+fixture construction and earlier subtests; Go allocation counters exclude native
+allocations. Median cgroup peak across both profiles was501,161,984→79,003,648
+bytes, including filesystem cache; all OOM/kills0, S3/network requests/bytes0.
+The smaller single-file fixture also passed before the fix: this is a narrow
+performance comparison, **not** the SDK multi-file failure reproduction or an
+end-to-end/competitor throughput claim. Earlier uninstrumented pairs remain in
+`.tools/attribute-paired.Q6HJYE`.
+
+The fresh four-size Mode A run (`.tools/native-oracle.JAxTts`) passed all actual
+SDK normalization/journal, exact partition-identity, typed/time/count and two
+equal-time page checks. It used Go1.27.1/Linux ARM64, the same pinned2.0 library,
+CPU1/512MiB/swap0,96MiB Go soft limit,256MiB conversion/192MiB query memory and
+256MiB spill, network denied and private disk volumes. Colima had4CPU/8GiB;
+no concurrent heavy checks ran during measurement.
+
+| Records | Analytics bytes | Total time | Supervisor allocated bytes | Cgroup peak bytes |
+|---|---:|---:|---:|---:|
+|10,000|540,409|1.958s|315,662,544|258,134,016|
+|100,000|5,318,576|11.579s|2,805,721,088|338,571,264|
+|1,000,000|52,794,512|106.241s|27,688,857,920|397,402,112|
+|10,000,000|528,495,771|1,053.615s|277,314,720,816|536,879,104|
+
+All cgroup OOM/kills were0. The10m peak includes filesystem cache and is8KiB
+above the configured536,870,912-byte limit; memory.events
+reported2,684 `max` events. Do not describe this as guaranteed RSS below512MiB.
+Allocation totals exclude unmanaged native memory and are cumulative, not live
+heap. S3 requests/transferred network bytes were0. The1m attribute queries took
+259–345ms;10m used nine fixed scans and three reducers, with attribute queries
+2.397–3.139s. These are local native-oracle observations, not service p95 values.
+Actual1m/10m envelope SHA256 values are
+`9cac00b14d958cb966c231bb64a4d0734534688db622940e4f887ad6de751677` and
+`1497dc8c86ac7ed8990b081b5d74e71833a75ef3185a4e6529fdb218aca2f5ec`;
+10k/100k hashes match the earlier run. The10m run retained2,196 analytics files,
+wrote/replayed682,231,716 journal bytes and spent148.437s normalizing/oracle
+setup and657.290s in conversion; those timers are subsets, not a partition of
+total elapsed time. Containers exited0 and owned scratch volumes were removed
+only after child exit. Official-duration capacity/scaling and R4 remain open.
+Final Go unit/vet, generated-contract equality, architecture/layout, pinned
+ARM64 native contracts/vet, query/app/control race checks and frontend29 tests,
+typecheck/build passed. Real isolated PostgreSQL/MinIO integration passed on the
+host(10.944s) and the native ARM64 query/Live paths(24.456s); Chromium's actual
+SDK-to-Issue flow passed in2.7s. No API/schema changed, so generated contracts and
+capability gate status remain unchanged. The frozen source-design hash matches.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

@@ -58,8 +58,16 @@ Filter syntax/type errors400 with safe field path/offset, never SQL.
 
 Every comparison leaf compiles to COALESCE(predicate,FALSE). IS NULL on a SQL
 value is not is_null(attribute): the latter requires existence+value_type=null.
-Attribute lookup is a scalar subquery/unnest filtered by namespace/path and type;
-duplicate attribute paths are a stored-format error, not arbitrarily first().
+Attribute lookup filters the bounded per-record list by namespace/path, checks
+uniqueness before type selection, then projects the typed value. Native2.0 list
+lambdas avoid correlated UNNEST's cross-record materialization; all namespace,
+path, type and literal values remain bound parameters. Duplicate attribute paths
+are a stored-format error, not arbitrarily first(), including mixed-type entries,
+presence/null tests, grouping and direct-index array lookups. Text search also
+stays within each record's search-value list. Aggregate numeric operands are
+projected before the repeated exact integer-limb expressions to retain the64KiB
+operation limit at eight metrics; this does not materialize an attribute table
+or change the mandatory dataset/snapshot predicates, partition plan or reducers.
 For array_contains use typed scalar children at direct array indices, not every
 descendant; one Boolean per record. All data values become bound parameters.
 contains uses literal substring function, never unescaped LIKE. matches uses
