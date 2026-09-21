@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
-VERSION=1.26.5
+VERSION=1.27.1
 INSTALL="$ROOT/.tools/go$VERSION"
 
 if [ -x "$INSTALL/bin/go" ]; then
@@ -18,19 +18,19 @@ fi
 case "$(uname -s)-$(uname -m)" in
   Darwin-x86_64)
     platform=darwin-amd64
-    checksum=6231d8d3b8f5552ec6cbf6d685bdd5482e1e703214b120e89b3bf0d7bf1ef725
+    checksum=8f8f52c6649542cf027bbc9b9c68d1ec042f9f34808a40413f0b8b3f66f3caa4
     ;;
   Darwin-arm64)
     platform=darwin-arm64
-    checksum=efb87ff28af9a188d0536ef5d42e63dd52ba8263cd7344a993cc48dd11dedb6a
+    checksum=ee215d57e0ec269c60cc9ceca68e6bda321ba9ee5afe24f4b0988703c2d87d12
     ;;
   Linux-x86_64)
     platform=linux-amd64
-    checksum=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+    checksum=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
     ;;
   Linux-aarch64|Linux-arm64)
     platform=linux-arm64
-    checksum=fe4789e92b1f33358680864bbe8704289e7bb5fc207d80623c308935bd696d49
+    checksum=3450b45a3f9ee8568792736a5c5e70a1f2e9b36c35a8f74958c03e51d7d92bec
     ;;
   *)
     echo "unsupported bootstrap platform: $(uname -s)-$(uname -m)" >&2

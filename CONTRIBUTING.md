@@ -1,6 +1,6 @@
 # Contributing to Eventglass
 
-The active product is the root Go module. Use Go 1.26.5 exactly and run commands from the repository root unless noted otherwise.
+The active product is the root Go module. Use Go 1.27.1 exactly and run commands from the repository root unless noted otherwise.
 
 ```sh
 ./scripts/bootstrap

@@ -9,7 +9,7 @@ This report describes the compatibility actually exercised by the G01 gate. It i
 | Python 3.14.7 | `sentry-sdk==2.69.0` | exception, message, default and opt-in DEBUG logging, ERROR Event plus Log, FastAPI shutdown, Celery fork/worker shutdown | gzip envelopes |
 | Node.js 24.21.0 | `@sentry/node@10.73.0` | exception, message, all log levels, batch flush, client report, all-category rate-limit backoff | identity envelopes |
 | Chromium via Playwright | `@sentry/browser@10.73.0` | exception, message, console integration, CORS preflight, Unicode, flush | identity envelopes |
-| Go 1.26.5 darwin/arm64 | `github.com/getsentry/sentry-go@v0.49.0` | exception, message, real structured logger, exact int64 and array attributes, versionless container, flush | identity envelopes |
+| Go 1.27.1 darwin/arm64 | `github.com/getsentry/sentry-go@v0.49.0` | exception, message, real structured logger, exact int64 and array attributes, versionless container, flush | identity envelopes |
 
 Every row was sent both to a localhost recorder for committed byte fixtures and to the Go ingestion handler. The offline replay checks byte length and SHA-256 before normalization. The live gate starts the Go API and executes the pinned SDK applications again. The Node rate-limit test verifies that the SDK suppresses later sends after the first all-category `429`.
 

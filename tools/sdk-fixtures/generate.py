@@ -451,7 +451,7 @@ def run_case(case: str) -> None:
             ["node", "--version"], capture_output=True, text=True, check=True
         ).stdout.strip()
     else:
-        go_binary = ROOT / ".tools" / "go1.26.5" / "bin" / "go"
+        go_binary = ROOT / ".tools" / "go1.27.1" / "bin" / "go"
         runtime = subprocess.run(
             [str(go_binary), "version"], capture_output=True, text=True, check=True
         ).stdout.strip()

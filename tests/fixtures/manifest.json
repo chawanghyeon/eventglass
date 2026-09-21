@@ -4,9 +4,9 @@
   "archived_implementation_tag": "rust-version",
   "preexisting_dirty_paths": ["AGENTS.md"],
   "source_design_sha256": "4cccddc98f76d5c38099958587386c55756a08cf366c26ed9e65eeedec0526e5",
-  "go_design_sha256": "95665f18b4ae271c788e838d0ece6856ebaaa50e41aea08ddb76e8f4ae782dac",
+  "go_design_sha256": "858d071d2c860ba4e06c35caf49916846d83651ad034437d5e4b941c8dc6758f",
   "sdk_sources_sha256": "81ee35e3842119915c9955d0d74d7c1bc71ff5f63dad3cda481b4e1024cf9333",
-  "sdk_support_sha256": "6b1abdb5b64a60e4856e8381da0b01c24cd81070964d398d88f296cf66464cf2",
+  "sdk_support_sha256": "89ffbf57d90832fa704c36a2fd6879214b12806188eb7535a52dc2a8a9f972dc",
   "sdk_sources": {
     "python": {"version": "2.69.0", "commit": "f186a62b34ea44eb6d0db1d20f535817991c32fd"},
     "javascript": {"version": "10.73.0", "commit": "f109d922f5971e2ade549b6c755524168b101818"},
@@ -14,7 +14,7 @@
   },
   "captured_fixtures": [
     {"case": "browser-events-and-console", "metadata_sha256": "5e3a3f955729077c6dcf97949c302ceba3ee9bc1ef02ae83c8704b03bfc008a9"},
-    {"case": "go-events", "metadata_sha256": "6f2d0a59ae19d699a0dc0e851e0ffc2b83a4125e7c420b28f7eb7ae2461a9465"},
+    {"case": "go-events", "metadata_sha256": "ccc7e3708b51cc0185fc0ef7e00ac0ccb06018478673995a214fd23def9f47a8"},
     {"case": "node-client-report", "metadata_sha256": "f35bee6ab9cf3c679e7242c054e2d9632d619641b6173c59fe94689f57fda9f5"},
     {"case": "node-events-and-logs", "metadata_sha256": "75f1856df8782137dba61ed376a675b569573f4d77db7e6e12e5aca57d8489ff"},
     {"case": "python-celery-fork", "metadata_sha256": "27fe8df94d7a0d44d9f9ca72f9b9f91b22920506445c421883bf50b51e518fed"},

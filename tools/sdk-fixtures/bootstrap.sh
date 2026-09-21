@@ -3,9 +3,9 @@ set -eu
 
 tool_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 root=$(CDPATH= cd -- "$tool_dir/../.." && pwd)
-go_bin="$root/.tools/go1.26.5/bin/go"
+go_bin="$root/.tools/go1.27.1/bin/go"
 if [ ! -x "$go_bin" ]; then
-  echo "Go 1.26.5 is required; run ./scripts/bootstrap first" >&2
+  echo "Go 1.27.1 is required; run ./scripts/bootstrap first" >&2
   exit 1
 fi
 

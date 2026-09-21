@@ -1,4 +1,4 @@
-FROM golang:1.26.5-bookworm@sha256:53eeac89074db483fdf0ab3be1df32bf6e47562263d2d0d6baa7f26acb4957dd AS duckdb-build
+FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS duckdb-build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates cmake curl git libcurl4-openssl-dev libssl-dev ninja-build python3 \
     && rm -rf /var/lib/apt/lists/*
@@ -22,7 +22,7 @@ RUN CORE_EXTENSIONS='icu;json;parquet;httpfs' \
     CMAKE_BUILD_PARALLEL_LEVEL="${DUCKDB_BUILD_JOBS}" \
     make bundle-library
 
-FROM golang:1.26.5-bookworm@sha256:53eeac89074db483fdf0ab3be1df32bf6e47562263d2d0d6baa7f26acb4957dd AS build
+FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS build
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libcurl4-openssl-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*

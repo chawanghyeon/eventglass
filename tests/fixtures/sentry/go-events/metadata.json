@@ -6,7 +6,7 @@
     "package": "github.com/getsentry/sentry-go",
     "version": "0.49.0"
   },
-  "runtime": "go version go1.26.5 darwin/arm64",
+  "runtime": "go version go1.27.1 darwin/arm64",
   "dsn": "http://fixturePublicKey@127.0.0.1:PORT/1",
   "response": {
     "status": 202,
@@ -28,7 +28,7 @@
       "original_transfer_encoding": "content-length",
       "wire_bytes": 1630,
       "decompressed_bytes": 1630,
-      "sha256": "f2caf7ecbed3b783c3ee374b2ddfb75482f7d32a98372259f07a805f1b44f163",
+      "sha256": "de1091b942616f211c66fcacccaf072d294d00face10bfe80292e03cfbdf3801",
       "item_types": [
         "event"
       ]
@@ -39,7 +39,7 @@
       "original_transfer_encoding": "content-length",
       "wire_bytes": 1613,
       "decompressed_bytes": 1613,
-      "sha256": "a004f76611c74d846ba01e5872d7398e44cde97cff31c47eb7aa2a53efe4caab",
+      "sha256": "a36f519214e7d93a4342f8b873e9e6780229653f9815e35667b765182ef8dfd3",
       "item_types": [
         "event"
       ]

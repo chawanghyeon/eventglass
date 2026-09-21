@@ -48,7 +48,7 @@ class GoLayoutTests(unittest.TestCase):
             for line in (ROOT / "tools/versions.env").read_text().splitlines()
             if line and not line.startswith("#")
         )
-        self.assertEqual(module_version, "1.26.5")
+        self.assertEqual(module_version, "1.27.1")
         self.assertEqual(version_lock["go"], module_version)
         self.assertEqual(tool_versions["GO_VERSION"], module_version)
         self.assertIn(f"VERSION={module_version}", (ROOT / "scripts/bootstrap").read_text())

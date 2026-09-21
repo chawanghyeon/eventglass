@@ -4,8 +4,8 @@ set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-if [ -x "$ROOT/.tools/go1.26.5/bin/go" ]; then
-  PATH="$ROOT/.tools/go1.26.5/bin:$PATH"
+if [ -x "$ROOT/.tools/go1.27.1/bin/go" ]; then
+  PATH="$ROOT/.tools/go1.27.1/bin:$PATH"
   export PATH
 fi
 

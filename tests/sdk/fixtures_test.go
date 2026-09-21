@@ -82,7 +82,7 @@ func TestCapturedSDKFixturesNormalizeThroughGoAPI(t *testing.T) {
 			if metadata.Capture != "real_sdk_to_localhost_http" || versions[metadata.SDK.Package] != metadata.SDK.Version {
 				t.Fatalf("unverified SDK metadata: %#v", metadata.SDK)
 			}
-			if metadata.SDK.Package == "github.com/getsentry/sentry-go" && metadata.Runtime != "go version go1.26.5 darwin/arm64" {
+			if metadata.SDK.Package == "github.com/getsentry/sentry-go" && metadata.Runtime != "go version go1.27.1 darwin/arm64" {
 				t.Fatalf("Go fixture runtime is not pinned: %q", metadata.Runtime)
 			}
 			if len(headers) != len(metadata.Requests) {

@@ -1,6 +1,6 @@
 module eventglass.local/sdk-fixture
 
-go 1.26.0
+go 1.27.1
 
 require github.com/getsentry/sentry-go v0.49.0
 
