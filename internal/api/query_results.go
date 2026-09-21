@@ -57,7 +57,7 @@ func (service *QueryAdapter) finalizeQueryResult(ctx context.Context, tokenHash 
 	}
 	defer os.RemoveAll(directory)
 	parquetPath := filepath.Join(directory, "result.parquet")
-	if err := service.Store.DownloadToFile(ctx, status.Result.ObjectKey, parquetPath, status.Result.Bytes, status.Result.SHA256); err != nil {
+	if err := service.Store.DownloadToFile(ctx, status.Result.ObjectKey, parquetPath, status.Result.Bytes, status.Result.SHA256, engine.MaxQueryOutputBytes); err != nil {
 		return nil, err
 	}
 	jsonPath := filepath.Join(directory, "result.jsonl")

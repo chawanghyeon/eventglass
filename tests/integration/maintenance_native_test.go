@@ -4,8 +4,10 @@ package integration
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -21,12 +23,22 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/query"
 	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/sdk"
+	"github.com/chawanghyeon/eventglass/internal/storage"
 	"github.com/google/uuid"
 )
 
 // Use durable ingestion and real native children, not synthetic catalog/output
 // manifests: the former retention tests never reached the one-input loader.
 func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
+	runNativeRetention(t, 2, 1, false)
+}
+
+func TestMaintenanceEndToEndLargeBundleRetention(t *testing.T) {
+	runNativeRetention(t, 16, 16, true)
+}
+
+func runNativeRetention(t *testing.T, batchCount, perBatch int, large bool) {
+	t.Helper()
 	environment := requiredEnvironment(t, "EVENTGLASS_TEST_BINARY")
 	fixture := setupAcceptFixture(t, 1780)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -50,17 +62,30 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 		Runner: app.ProcessConversionRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"], Gate: gate}, InstallationID: acceptInstallationID, ScratchDir: scratch}
 	publisher := ingest.DurablePublicationWorkflow{Control: publication, Store: store}
 	workflow := integrationWorkflow(t, fixture, ingestOps, store, "native-retention")
-	var received [2]int64
-	for index := range 2 {
+	received := make([]int64, batchCount)
+	random := rand.New(rand.NewSource(1780))
+	for index := range batchCount {
 		command := integrationCommand(t, fixture, fixture.projectID, fixture.auth, fixture.uuidForLane(0), "unused")
-		command.Request, err = ingest.NormalizeEnvelope(sdk.Envelope{Items: []sdk.Item{{Ordinal: 0, Type: "event", Value: map[string]any{
-			"event_id": fmt.Sprintf("%032x", index+1), "message": fmt.Sprintf("native retention %d", index),
-		}}}}, ingest.NormalizeOptions{TenantID: fixture.tenantID, ProjectID: fixture.projectID, AcceptanceID: command.Request.AcceptanceID, ArrivalTime: time.Unix(1, 0)})
+		items := make([]sdk.Item, perBatch)
+		for ordinal := range items {
+			value := map[string]any{"event_id": fmt.Sprintf("%032x", index*perBatch+ordinal+1), "message": fmt.Sprintf("native retention %d/%d", index, ordinal)}
+			if large {
+				// Deterministic high-entropy payload avoids a fake large file
+				// made of compressible zeroes. Each journal stays below24MiB.
+				blob := make([]byte, 72<<10)
+				if _, err := random.Read(blob); err != nil {
+					t.Fatal(err)
+				}
+				value["extra"] = map[string]any{"blob": base64.StdEncoding.EncodeToString(blob)}
+			}
+			items[ordinal] = sdk.Item{Ordinal: ordinal, Type: "event", Value: value}
+		}
+		command.Request, err = ingest.NormalizeEnvelope(sdk.Envelope{Items: items}, ingest.NormalizeOptions{TenantID: fixture.tenantID, ProjectID: fixture.projectID, AcceptanceID: command.Request.AcceptanceID, ArrivalTime: time.Unix(1, 0)})
 		if err != nil {
 			t.Fatal(err)
 		}
 		results := workflow.Process(ctx, []ingest.Command{command})
-		if len(results) != 1 || results[0].Err != nil || results[0].Receipt.AcceptedCount != 1 {
+		if len(results) != 1 || results[0].Err != nil || results[0].Receipt.AcceptedCount != perBatch {
 			t.Fatalf("accept: %+v", results)
 		}
 		received[index] = results[0].Receipt.ReceivedTimeUS
@@ -69,7 +94,7 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 			t.Fatalf("conversion claim: %+v %v", job, err)
 		}
 		if err := converter.ConvertAndPrepare(ctx, *job); err != nil {
-			t.Fatal(err)
+			t.Fatalf("convert batch %d: %v", index, err)
 		}
 		publish, err := publication.ClaimPublication(ctx, acceptInstallationID, 1, fixture.tenantID, 0, "native-publisher", time.Minute)
 		if err != nil || publish == nil {
@@ -79,14 +104,14 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if received[0] >= received[1] {
+	if received[0] >= received[batchCount-1] {
 		t.Fatalf("expected distinct durable receive times: %v", received)
 	}
 	var inputs []string
 	if err := fixture.pool.QueryRow(ctx, `SELECT array_agg(bundle_id::text ORDER BY bundle_id) FROM bundles WHERE tenant_id=$1 AND valid_to_generation IS NULL`, fixture.tenantID).Scan(&inputs); err != nil {
 		t.Fatal(err)
 	}
-	if len(inputs) != 2 {
+	if len(inputs) != batchCount {
 		t.Fatalf("published inputs: %v", inputs)
 	}
 	_, err = ops.ReserveCompaction(ctx, control.ReserveCompactionCommand{InstallationID: acceptInstallationID, StorageGeneration: 1, TaskID: uuid.NewString(), TenantID: fixture.tenantID, LaneID: 0, BundleIDs: inputs})
@@ -101,7 +126,7 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 		t.Fatalf("compaction claim: %+v %v", task, err)
 	}
 	if err := compactor.CompactAndPrepare(ctx, *task); err != nil {
-		t.Fatal(err)
+		t.Fatalf("compact %d batches: %v", batchCount, err)
 	}
 	prepared, err := ops.ClaimCompaction(ctx, acceptInstallationID, "native-swap", time.Minute)
 	if err != nil || prepared == nil || !prepared.Prepared {
@@ -126,9 +151,13 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 	}
 	catalog := control.CatalogCommand{SessionTokenHash: token, TenantID: fixture.tenantID, SnapshotID: snapshot.SnapshotID, DatasetSHA256: digest, DatasetBytes: encoded, TimeBasis: spec.TimeBasis, StartUS: spec.StartUS, EndUS: spec.EndUS, Kinds: spec.Kinds, Limit: 256}
 	original, err := queryOps.CatalogPage(ctx, catalog)
-	if err != nil || len(original) != 1 || original[0].RowCount != 2 {
+	if err != nil || len(original) != 1 || original[0].RowCount != int64(batchCount*perBatch) {
 		t.Fatalf("original catalog: %+v %v", original, err)
 	}
+	if large && (original[0].PayloadBytes <= storage.MaxJournalBytes || original[0].PayloadBytes > engine.MaxBundleFileBytes) {
+		t.Fatalf("fixture did not produce a real large bundle: %+v", original[0])
+	}
+	t.Logf("real compacted analytics_bytes=%d payload_bytes=%d records=%d", original[0].Bytes, original[0].PayloadBytes, original[0].RowCount)
 	// Independently read both actual S3 Parquet files through the pinned engine.
 	db, err := engine.Open(ctx, "")
 	if err != nil {
@@ -148,7 +177,7 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 			bytes    int64
 		}{{file.ObjectKey, file.SHA256, file.Bytes}, {file.PayloadObjectKey, file.PayloadSHA256, file.PayloadBytes}} {
 			path := filepath.Join(t.TempDir(), "pair.parquet")
-			if err := store.DownloadToFile(ctx, object.key, path, object.bytes, object.sha); err != nil {
+			if err := store.DownloadToFile(ctx, object.key, path, object.bytes, object.sha, engine.MaxBundleFileBytes); err != nil {
 				t.Fatal(err)
 			}
 			rows, err := db.QueryContext(ctx, `SELECT record_id FROM read_parquet(?) ORDER BY record_id`, path)
@@ -168,6 +197,9 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
 		}
 		if !reflect.DeepEqual(identities[0], identities[1]) {
 			t.Fatalf("actual pair differs: %v", identities)
@@ -175,16 +207,30 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 		return identities[0]
 	}
 	originalIDs := readPair(original[0])
-	if len(originalIDs) != 2 {
+	if len(originalIDs) != batchCount*perBatch {
 		t.Fatalf("original rows: %v", originalIDs)
 	}
-	var retainedID string
-	if err := fixture.pool.QueryRow(ctx, `SELECT record_id FROM issue_occurrences WHERE tenant_id=$1 AND received_time_us=$2`, fixture.tenantID, received[1]).Scan(&retainedID); err != nil {
+	var retainedIDs []string
+	rows, err := fixture.pool.Query(ctx, `SELECT record_id FROM issue_occurrences WHERE tenant_id=$1 AND received_time_us=$2 ORDER BY record_id`, fixture.tenantID, received[batchCount-1])
+	if err != nil {
 		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		retainedIDs = append(retainedIDs, id)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(retainedIDs) != perBatch {
+		t.Fatalf("retained identities=%d err=%v", len(retainedIDs), err)
 	}
 	retainer := maintenance.RetentionWorkflow{Control: ops, Store: store, Runner: runner, InstallationID: acceptInstallationID, ScratchDir: scratch, Disk: disk}
 	current := original[0]
-	for index, floor := range []int64{received[1], received[1] + 1} {
+	for index, floor := range []int64{received[batchCount-1], received[batchCount-1] + 1} {
 		if _, err := fixture.pool.Exec(ctx, `UPDATE installations SET retention_floor_us=$1,retention_tick_at=clock_timestamp()`, floor); err != nil {
 			t.Fatal(err)
 		}
@@ -237,7 +283,7 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 		}
 		if index == 0 {
 			current = files[0]
-			if current.RowCount != 1 || !reflect.DeepEqual(readPair(current), []string{retainedID}) {
+			if current.RowCount != int64(perBatch) || !reflect.DeepEqual(readPair(current), retainedIDs) {
 				t.Fatalf("half-open retention boundary: %+v", current)
 			}
 		}
@@ -257,7 +303,7 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 	if err := fixture.pool.QueryRow(ctx, `SELECT published_seq,(SELECT count(*) FROM bundles WHERE tenant_id=$1 AND valid_to_generation IS NULL),(SELECT count(*) FROM object_intents WHERE tenant_id=$1 AND state='deleted') FROM lanes WHERE tenant_id=$1 AND lane_id=0`, fixture.tenantID).Scan(&published, &currentRows, &deleted); err != nil {
 		t.Fatal(err)
 	}
-	if published != 2 || currentRows != 0 || deleted != 0 {
+	if published != int64(batchCount) || currentRows != 0 || deleted != 0 {
 		t.Fatalf("retirement changed cut or physically deleted: %d %d %d", published, currentRows, deleted)
 	}
 	if _, err := fixture.pool.Exec(ctx, `DELETE FROM memberships WHERE tenant_id=$1`, fixture.tenantID); err != nil {

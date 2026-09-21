@@ -82,10 +82,10 @@ func downloadInputs(ctx context.Context, store CompactionStore, directory string
 			return nil, err
 		}
 		analytics, payload := filepath.Join(inputDir, "analytics.parquet"), filepath.Join(inputDir, "payload.parquet")
-		if err := store.DownloadToFile(ctx, input.Analytics.ObjectKey, analytics, input.Analytics.Bytes, input.Analytics.SHA256); err != nil {
+		if err := store.DownloadToFile(ctx, input.Analytics.ObjectKey, analytics, input.Analytics.Bytes, input.Analytics.SHA256, engine.MaxBundleFileBytes); err != nil {
 			return nil, err
 		}
-		if err := store.DownloadToFile(ctx, input.Payload.ObjectKey, payload, input.Payload.Bytes, input.Payload.SHA256); err != nil {
+		if err := store.DownloadToFile(ctx, input.Payload.ObjectKey, payload, input.Payload.Bytes, input.Payload.SHA256, engine.MaxBundleFileBytes); err != nil {
 			return nil, err
 		}
 		inputs[index] = engine.CompactionInput{BundleID: input.BundleID, AnalyticsPath: analytics, PayloadPath: payload, IdentitySHA256: input.IdentitySHA256}

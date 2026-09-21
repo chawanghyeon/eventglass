@@ -66,6 +66,11 @@ at the exact received-time boundary, fully expired retirement, pinned old
 snapshot reads, authority revocation and retry/cancellation checks. It does not
 enable physical GC without signed backup evidence. Metadata-only maintenance
 fixtures are not a substitute for this end-to-end path.
+The same gate includes a real approximately36MiB-per-file paired bundle,
+operation-specific verified-download limits (journal24MiB, result64MiB,
+bundle128MiB), and actual S3 cancellation/retry. Passing a128MiB raw-object
+download is not evidence that a maximum-size Parquet rewrite fits the worker
+memory/time budget; retain those resource tests as separate requirements.
 
 `./scripts/check resource` runs the native ARM64 binary under CPU1/512MiB/swap0
 for two minutes by default. `EVENTGLASS_RESOURCE_DURATION=30s` is available only

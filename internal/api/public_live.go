@@ -321,7 +321,7 @@ func (service *QueryAdapter) finalizeLiveResult(ctx context.Context, status cont
 	}
 	defer os.RemoveAll(directory)
 	parquetPath, jsonPath := filepath.Join(directory, "result.parquet"), filepath.Join(directory, "result.jsonl")
-	if err := service.Store.DownloadToFile(ctx, status.Result.ObjectKey, parquetPath, status.Result.Bytes, status.Result.SHA256); err != nil {
+	if err := service.Store.DownloadToFile(ctx, status.Result.ObjectKey, parquetPath, status.Result.Bytes, status.Result.SHA256, engine.MaxQueryOutputBytes); err != nil {
 		return livePage{}, err
 	}
 	if _, err := service.Exporter.Export(ctx, engine.QueryExportRequest{Version: engine.QueryExecutionProtocolVersion, InputPath: parquetPath, OutputPath: jsonPath}); err != nil {

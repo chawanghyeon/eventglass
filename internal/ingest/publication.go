@@ -23,7 +23,7 @@ type publicationControl interface {
 }
 
 type publicationStore interface {
-	DownloadToFile(context.Context, string, string, int64, string) error
+	DownloadToFile(context.Context, string, string, int64, string, int64) error
 	PutStream(context.Context, string, io.ReadSeeker, int64, string) (storage.ObjectInfo, error)
 	VerifyObject(context.Context, string, int64, string) error
 }
@@ -82,7 +82,7 @@ func (workflow DurableConversionWorkflow) ConvertAndPrepare(ctx context.Context,
 		return err
 	}
 	journalPath := filepath.Join(taskDirectory, "journal.jsonl.zst")
-	if err := workflow.Store.DownloadToFile(ctx, work.JournalObjectKey, journalPath, work.JournalBytes, work.JournalSHA256); err != nil {
+	if err := workflow.Store.DownloadToFile(ctx, work.JournalObjectKey, journalPath, work.JournalBytes, work.JournalSHA256, storage.MaxJournalBytes); err != nil {
 		return err
 	}
 	receipts := make([]ConversionReceipt, len(work.Receipts))

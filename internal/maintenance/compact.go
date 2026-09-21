@@ -23,7 +23,7 @@ type CompactionControl interface {
 }
 
 type CompactionStore interface {
-	DownloadToFile(context.Context, string, string, int64, string) error
+	DownloadToFile(context.Context, string, string, int64, string, int64) error
 	PutStream(context.Context, string, io.ReadSeeker, int64, string) (storage.ObjectInfo, error)
 }
 

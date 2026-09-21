@@ -16,7 +16,7 @@ import (
 
 type AlertCountReader struct {
 	Store interface {
-		DownloadToFile(context.Context, string, string, int64, string) error
+		DownloadToFile(context.Context, string, string, int64, string, int64) error
 	}
 	Exporter   ProcessQueryExportRunner
 	ScratchDir string
@@ -35,7 +35,7 @@ func (reader AlertCountReader) ReadAlertCount(ctx context.Context, status contro
 	}
 	defer os.RemoveAll(directory)
 	parquetPath := filepath.Join(directory, "result.parquet")
-	if err := reader.Store.DownloadToFile(ctx, status.Result.ObjectKey, parquetPath, status.Result.Bytes, status.Result.SHA256); err != nil {
+	if err := reader.Store.DownloadToFile(ctx, status.Result.ObjectKey, parquetPath, status.Result.Bytes, status.Result.SHA256, engine.MaxQueryOutputBytes); err != nil {
 		return 0, err
 	}
 	jsonPath := filepath.Join(directory, "result.jsonl")

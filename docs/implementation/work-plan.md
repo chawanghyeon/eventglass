@@ -220,9 +220,16 @@ rows/histogram p95=864/1,053ms and load slope=+0.11549/min: both remain failures
 Maintenance overruns/compaction failures are0 in this run, exact33,600 public
 records and final backlog0 pass, and last planned files are761. Preserve
 `.tools/comparison-report-1.HMaw0M`; this is not official-duration or independent
-capacity evidence. The shared download path's24MiB journal cap also needs a
-real larger-bundle reproduction and correction before maximum-size maintenance
-progress can be claimed. R3 remains first incomplete.
+capacity evidence. The shared download path's24MiB journal cap was reproduced
+against actual MinIO bytes and corrected with explicit journal24MiB,
+query-result64MiB and bundle128MiB admission. Full SHA verification, exclusive
+private-file creation and joined response-close/partial cleanup are retained.
+A real16-batch/256-event native path now produces two approximately36MiB
+Parquet files and verifies mixed/full retention and pinned snapshots. This is
+not maximum-size maintenance evidence:64 wide events in one conversion hit
+the256MiB native limit, and a32-batch/512-event compaction failed in a native
+child. These larger cases still need bounded-memory fixes and verification;
+do not replace them with raw-object download success. R3 remains first incomplete.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

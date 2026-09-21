@@ -1029,10 +1029,69 @@ fixed105records/s is offered load, not independent capacity.
 Retained failure evidence: `.tools/comparison-report-1.HMaw0M`, log
 `.tools/native-compaction-comparison.log`, exact candidate code checksums
 `.tools/native-compaction-source-sha256.txt`. The next checks must cover larger
-maintenance inputs, including the shared downloader's currently journal-sized
+maintenance inputs, including the shared downloader's then journal-sized
 24MiB cap, and improve query latency/maintenance progress under the unchanged
 spare-time policy. Corrected official-duration1/2/4 runs, independent capacity
 and R4 provider/release evidence remain open.
+
+### Verified-download size contracts
+
+Actual MinIO objects of24MiB+1byte and128MiB reproduced the shared downloader's
+unconditional24MiB rejection before any GET. This affected maintenance's legal
+128MiB files and public/Live/alert query results with a64MiB contract, not just
+journals. The caller now supplies its operation limit; storage additionally
+enforces the shared128MiB format ceiling. Journal admission remains24MiB.
+Full-byte SHA/size verification, private exclusive creation and fsync remain;
+declared Content-Length mismatch fails before reading the body. HTTP/API schemas
+and capability gates are unchanged.
+
+Real-object regressions cover24MiB+1byte, exactly64MiB and exactly128MiB,
+one GET/exact transfer counts, operation-limit rejection with no file/network
+I/O, wrong size/SHA, missing objects, preservation of existing paths and
+in-flight cancellation followed by retry. A controlled response-close barrier
+also proves partial files remain owned until the response has finished closing;
+that unit test supplements, rather than replaces, the real MinIO cancellation.
+The raw-object fixtures are deliberately not presented as Parquet validation.
+
+The separate pinned-native regression durably accepts16 batches of16 unique
+events with deterministic96KiB high-entropy fields, converts and publishes each,
+then compacts256 records into actual analytics/payload files of approximately
+37,896,657/37,941,286bytes. It downloads both files, checks paired identities,
+rewrites at the exact last-batch received-time floor and fully retires at floor+1.
+It verifies the pinned old snapshot/bytes, revoked authorization, stale fence,
+cancellation, idempotent swap retry and zero reserved disk/scratch after joined
+work. Physical GC is not enabled and no backup attestation is synthesized.
+
+Important boundary failures remain: the initial8-batch/64-events-per-batch
+fixture failed during conversion with a16MiB allocation request at252.2/256MiB
+native usage. Splitting into32 batches of16 allowed conversion but failed the
+512-event compaction child. Reducing the separate download regression to16
+batches does not resolve either failure. Their evidence remains in
+`.tools/large-download-diagnostic.log` and
+`.tools/large-download-integration-second.log`. Maximum256MiB-input rewrite
+progress and fixed-profile cgroup bounds still need proof. Functional download
+timings are single observations, not a speedup, RSS or service-throughput claim.
+The original rejection evidence is `.tools/large-download-before.log`.
+
+The final actual PG/MinIO suite passed in16.936s and its pinned-native
+query/Live/alert/maintenance subset in32.015s. A separate Linux ARM64 run used
+CPU1/512MiB/swap0, non-root/read-only root,96MiB Go soft limit and an isolated
+disk-backed scratch volume. All real download and large-retention cases passed,
+OOM/kill counters0; the large-retention case took7.62s and recorded52 PUTs /
+178,200,443bytes,52 HEADs,142 full GETs /659,961,316bytes,0 Range GETs. Counts
+include fixture creation and independent verification, not only production
+rewrite work. The same cgroup also ran the24/64/128MiB raw-object cases.
+Observed memory.peak was536,875,008bytes with memory.max536,870,912 and
+memory.events.max837: it reached the512MiB boundary (peak one4KiB page above
+the configured limit), not spare-memory evidence. This includes page cache
+and is not anonymous RSS. Do not advertise a passed maximum-input resource
+gate or a latency/throughput improvement from these functional checks; other
+verification was active on the host. Evidence: `.tools/large-download-bounded.log`
+and `.tools/large-download-integration-final.log`.
+ARM64 unit/vet/architecture/layout, generated-contract byte comparison, race
+checks for storage/ingest/maintenance/API/app, full pinned static native
+contracts/vet and final-image Chromium(2.7s) also passed. The frozen source
+design checksum is unchanged. Logs use the `.tools/large-download-` prefix.
 
 ## Release and workflow
 

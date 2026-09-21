@@ -45,8 +45,8 @@ type workflowStoreFixture struct {
 	objects map[string][]byte
 }
 
-func (fixture *workflowStoreFixture) DownloadToFile(_ context.Context, _ string, path string, size int64, checksum string) error {
-	if int64(len(fixture.journal)) != size || digestBytes(fixture.journal) != checksum {
+func (fixture *workflowStoreFixture) DownloadToFile(_ context.Context, _ string, path string, size int64, checksum string, maxBytes int64) error {
+	if size > maxBytes || int64(len(fixture.journal)) != size || digestBytes(fixture.journal) != checksum {
 		return io.ErrUnexpectedEOF
 	}
 	return os.WriteFile(path, fixture.journal, 0o600)

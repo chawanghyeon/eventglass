@@ -154,8 +154,8 @@ func (fixture *workflowStoreFixture) ReadRange(_ context.Context, _ string, offs
 	return append([]byte(nil), fixture.journal[offset:offset+length]...), nil
 }
 
-func (fixture *workflowStoreFixture) DownloadToFile(_ context.Context, _ string, path string, size int64, checksum string) error {
-	if int64(len(fixture.journal)) != size || digestBytes(fixture.journal) != checksum {
+func (fixture *workflowStoreFixture) DownloadToFile(_ context.Context, _ string, path string, size int64, checksum string, maxBytes int64) error {
+	if size > maxBytes || int64(len(fixture.journal)) != size || digestBytes(fixture.journal) != checksum {
 		return io.ErrUnexpectedEOF
 	}
 	return os.WriteFile(path, fixture.journal, 0o600)

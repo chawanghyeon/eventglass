@@ -14,7 +14,7 @@ const (
 	QueryExecutionProtocolVersion = 1
 	DefaultNativeMemoryBytes      = int64(256 << 20)
 	DefaultNativeSpillBytes       = int64(2 << 30)
-	MaxBundleFileBytes            = int64(128 << 20)
+	MaxBundleFileBytes            = model.MaxBundleFileBytes
 )
 
 type CompactionInput struct {

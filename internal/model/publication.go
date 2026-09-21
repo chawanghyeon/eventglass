@@ -14,6 +14,7 @@ const (
 	MaxManifestPartBytes   = 64 << 10
 	MaxManifestBytes       = 32 << 20
 	FileBlockBytes         = 1 << 20
+	MaxBundleFileBytes     = int64(128 << 20)
 )
 
 type OutputManifestHeader struct {

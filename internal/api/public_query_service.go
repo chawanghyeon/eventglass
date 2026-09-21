@@ -32,7 +32,7 @@ type QueryAdapter struct {
 
 type PublicQueryStore interface {
 	query.CatalogObjectReader
-	DownloadToFile(context.Context, string, string, int64, string) error
+	DownloadToFile(context.Context, string, string, int64, string, int64) error
 }
 
 func (service *QueryAdapter) Search(ctx context.Context, principal control.SessionPrincipal, tokenHash [32]byte, request query.PublicSearchRequest) (_ SearchSubmission, resultErr error) {

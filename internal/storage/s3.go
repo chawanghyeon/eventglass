@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/chawanghyeon/eventglass/internal/model"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
@@ -212,9 +214,14 @@ func (s *S3Store) VerifyObject(ctx context.Context, key string, size int64, chec
 
 // DownloadToFile materializes one supervisor-owned private input and verifies
 // the actual object bytes. Callers must provide a new path in a private task
-// directory; partial data is removed on every failure.
-func (s *S3Store) DownloadToFile(ctx context.Context, key, path string, size int64, checksum string) (retErr error) {
-	if !filepath.IsAbs(path) || size <= 0 || size > MaxJournalBytes {
+// directory and an operation-specific limit (journal24MiB, query64MiB,
+// bundle128MiB). The shared format ceiling cannot be raised by a caller.
+// Partial data is removed on every failure.
+func (s *S3Store) DownloadToFile(ctx context.Context, key, path string, size int64, checksum string, maxBytes int64) (retErr error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !filepath.IsAbs(path) || maxBytes <= 0 || maxBytes > model.MaxBundleFileBytes || size <= 0 || size > maxBytes {
 		return errors.New("invalid verified download target")
 	}
 	if _, err := decodeHash(checksum); err != nil {
@@ -240,6 +247,9 @@ func (s *S3Store) DownloadToFile(ctx context.Context, key, path string, size int
 		return fmt.Errorf("get verified object: %w", err)
 	}
 	defer output.Body.Close()
+	if output.ContentLength != nil && aws.ToInt64(output.ContentLength) != size {
+		return errors.New("downloaded object size mismatch")
+	}
 	hash := sha256.New()
 	written, err := io.Copy(io.MultiWriter(file, hash), io.LimitReader(output.Body, size+1))
 	if written > 0 {
