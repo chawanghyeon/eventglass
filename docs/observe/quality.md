@@ -17,7 +17,7 @@ The unit gate discovers packages automatically, with only native engine executio
 excluded and covered by the pinned ARM64 contracts gate. `./scripts/check perf`
 records repeated journal and controlled metadata-latency samples with revision,
 dirty state and toolchain. CI records these samples; it does not establish SLOs.
-Catalog verification uses at most four readers per page, preserves catalog order,
+Catalog verification uses at most eight readers per page, preserves catalog order,
 and joins readers on error/cancellation. The synthetic 1ms/HEAD experiment is not
 a provider benchmark or proof of end-to-end search speed.
 
