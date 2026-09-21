@@ -48,8 +48,10 @@ and an atomic generation swap that preserves old readers without blocking
 unrelated publication. M2 adds received-time retention rewrites and full expiry,
 snapshot- and backup-interlocked mark/delete/confirm GC, journal retirement summaries,
 an eight-day recovery grace, and late-PUT resweeps. Physical deletion requires an unexpired verified backup horizon; it does not
-interpret an empty backup inventory as safety. M3's block-cache gate and M4's
-coordinated PostgreSQL/WAL/S3 recovery gate pass on Linux ARM64; sustained
+interpret an empty backup inventory as safety. A real durable-ingest/native-retention
+regression also verifies the one-bundle rewrite boundary, complete expiry and
+old paired-file snapshot reads. M3's block-cache gate and M4's coordinated
+PostgreSQL/WAL/S3 recovery gate pass on Linux ARM64; sustained
 resource and provider release evidence remain open.
 Pure-Go checks do not rebuild DuckDB.
 

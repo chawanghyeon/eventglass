@@ -156,6 +156,12 @@ their separate joined loops; GC's fresh-backup interlock remains mandatory.
 Reserve transaction locks lane then task and inputs: record selected bundle IDs,
 their exact valid_from and input identity hashes, set reserved_by; do not close
 catalog intervals yet. Read inputs with a maintenance pin and verify pairs.
+The fenced control loader permits exactly one retention input and two to128
+compaction inputs. It reads ordered project associations with the reserved
+metadata and all referenced analytics/payload pairs in one bounded file query;
+input count must not introduce a database round trip per bundle. A missing,
+duplicate or unknown file role fails closed. This is a control transaction,
+not a new workflow/repository layer; native pair verification remains required.
 Native merge preserves canonical values, IDs/seq/received time and grouping
 version, changes physical layout only. Upload outputs with fenced intents.
 Swap transaction locks lane/task/intents/bundles, rechecks live tuple and **each

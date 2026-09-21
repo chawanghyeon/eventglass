@@ -60,6 +60,13 @@ actual PostgreSQL base+WAL restore into isolated volumes, verifies restored S3
 references, imports a signed rehearsal report, and exercises the missing-object
 fail-closed path. It uses only disposable Colima/Docker resources.
 
+`./scripts/check integration` also runs the pinned-native maintenance path:
+real durable ingest, paired S3 publication, compaction, mixed-retention rewrite
+at the exact received-time boundary, fully expired retirement, pinned old
+snapshot reads, authority revocation and retry/cancellation checks. It does not
+enable physical GC without signed backup evidence. Metadata-only maintenance
+fixtures are not a substitute for this end-to-end path.
+
 `./scripts/check resource` runs the native ARM64 binary under CPU1/512MiB/swap0
 for two minutes by default. `EVENTGLASS_RESOURCE_DURATION=30s` is available only
 for development feedback; completion evidence uses the default. The gate checks

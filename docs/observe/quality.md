@@ -883,6 +883,61 @@ images were removed, preserving all raw reports, current before/after images,
 the pinned native cache and unrelated containers/volumes. Repeated integration,
 contract image export and the non-root lifetime tests then completed.
 
+### Maintenance metadata loader and real retention regression
+
+The next audit reproduced a functional M2 defect on committed3bdd56e:
+`LoadRetention` called a compaction loader requiring at least two bundles,
+although retention reserves exactly one. A real PG metadata test failed with
+`compaction inputs are incomplete`. The new pinned-native end-to-end test also
+reproduced this after actual durable ingestion, conversion, S3 publication and
+two-input compaction; it failed before the mixed-retention rewrite. Earlier
+synthetic prepared-manifest tests did not exercise this loader path.
+
+The fix keeps transaction/fence policy in control and existing workflows in
+ingest/maintenance: retention permits exactly one input, compaction two to128.
+Project associations are read with the reserved metadata; every referenced
+file pair is read in one bounded query. Stale authority, canceled requests and
+a payload whose intent is no longer referenced remain failures. No API/schema,
+authorization, durability, native engine, backup attestation or GC bypass changed.
+
+Matched real PostgreSQL17.11 measurements used Go1.27.1 Darwin ARM64, one warmed
+connection, isolated schemas and five samples per input count. No heavy build
+or verification ran alongside these samples. Median values:
+
+| Reserved inputs | Before/after SQL queries | Before/after latency ms | Before/after Go allocation bytes | Before/after allocations |
+|---|---:|---:|---:|---:|
+|2|8 /5|3.044 /2.014|10,104 /8,904|154 /125|
+|128|260 /5|95.982 /13.730|564,456 /407,008|7,161 /3,534|
+
+The SQL-count test enforces at most six queries independently of input count
+and checks exact bundle/file/project association. This is a PG metadata-loader
+micro-measurement, not native rewrite speed, whole-service throughput, capacity,
+RSS or R3 completion. S3 requests/transferred bytes are0 in both measurements;
+RSS was not measured. Raw samples: `.tools/maintenance-load-before.log` and
+`.tools/maintenance-load-after.log`; real native reproduction:
+`.tools/maintenance-retention-before.log`. Native per-input inspection cost,
+cancellation-budget overruns, maximum-size rewrite progress and corrected
+official-duration/capacity measurements remain open.
+
+Executed checks for this change: ARM64 Go unit/vet and architecture/layout,
+generated-contract equality, control/maintenance race checks, real host
+PostgreSQL/MinIO integration(14.888s), and pinned Linux ARM64 native
+query/Live/maintenance integration(25.167s). Full native contracts/vet and image
+export passed with the unchanged dependency cache. The final retention test,
+including a64MiB no-spill independent pair reader and an assertion of zero S3
+I/O for fully expired retirement, passed three times in a non-root/read-only
+CPU1/512MiB/swap0 container(0.66/0.63/0.64s). It checks exact paired identities,
+the inclusive received-time floor, old snapshot catalog/file preservation,
+stale fence, cancellation before work, idempotent prepared-swap retry, revoked
+membership, unchanged published_seq, zero scratch/permit residue and no
+physical GC. The first full run reached revocation correctly but expected the
+wrong error class; the test now requires the existing unauthenticated contract
+for a removed membership. No production authorization behavior was changed.
+These functional timings are not paired performance measurements. Logs:
+`.tools/maintenance-loader-*` and `.tools/maintenance-retention-bounded.log`.
+The freshly built ARM64 production image also passed Chromium's actual
+SDK-to-Issue UI flow(2.7s); no external alert or deployment occurred.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

@@ -95,7 +95,7 @@ integration() {
     -e AWS_ACCESS_KEY_ID=eventglass-local \
     -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
     -w /src eventglass-go:integration-build \
-    go test -tags=duckdb_use_static_lib -count=1 -run '^TestPublicQueryEndToEnd' -v ./tests/integration
+    go test -tags=duckdb_use_static_lib -count=1 -run '^(TestPublicQueryEndToEnd|TestMaintenanceEndToEnd)' -v ./tests/integration
 }
 
 crash() {

@@ -203,7 +203,11 @@ one-worker diagnostic with100ms native TERM grace and active-lane exclusion
 still has rows/histogram p95=1,441/1,856ms, load slope=+0.645/min and five
 maintenance-budget overruns, despite exact33,600 published records, no OOM and
 zero final backlog. Retain `.tools/comparison-report-1.xeG5dP` as failure
-evidence. Next work must address compaction's per-input SQL/native inspection
+evidence. The bounded control loader now removes per-input SQL round trips
+(128 inputs:260→5 queries, matched median95.982→13.730ms). This audit also
+reproduced and fixed retention's incorrect two-input minimum; a real
+ingest→publication→compaction→mixed/full-expiry native test supplements the
+earlier synthetic manifest coverage. Next work must address native inspection
 cost and cancellation/join allowance, including maximum-sized rewrite progress,
 without raising resource limits or weakening identity/snapshot/GC checks.
 

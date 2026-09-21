@@ -21,6 +21,12 @@ type MaintenanceIntentRegistration struct {
 }
 
 func (operations *MaintenanceOperations) LoadCompaction(ctx context.Context, authority MaintenanceAuthority) (CompactionWork, error) {
+	return operations.loadMaintenanceWork(ctx, authority, 2, MaxCompactionInputs)
+}
+
+// Retention reserves exactly one bundle; compaction reserves two to 128. Keep
+// those operation-specific bounds while sharing the same fenced metadata read.
+func (operations *MaintenanceOperations) loadMaintenanceWork(ctx context.Context, authority MaintenanceAuthority, minimum, maximum int) (CompactionWork, error) {
 	if err := validateMaintenanceAuthority(authority); err != nil {
 		return CompactionWork{}, err
 	}
@@ -32,80 +38,59 @@ func (operations *MaintenanceOperations) LoadCompaction(ctx context.Context, aut
 	if err := lockRunningMaintenance(ctx, tx, authority); err != nil {
 		return CompactionWork{}, err
 	}
-	work := CompactionWork{Task: CompactionTask{Authority: authority}}
-	rows, err := tx.Query(ctx, `SELECT b.bundle_id::text,b.schema_version,b.grouping_version,b.event_day::text,b.kind,b.valid_from_generation,b.identity_sha256,b.row_count,b.input_seq_min,b.input_seq_max
-		FROM maintenance_inputs mi JOIN bundles b ON b.tenant_id=mi.tenant_id AND b.bundle_id=mi.bundle_id
-		WHERE mi.task_id=$1 ORDER BY b.bundle_id`, authority.TaskID)
+	work, err := loadCompactionExpectations(ctx, tx, authority.TaskID)
 	if err != nil {
 		return work, err
 	}
-	for rows.Next() {
-		var input CompactionWorkInput
-		var partition CompactionPartition
-		if err := rows.Scan(&input.BundleID, &partition.SchemaVersion, &partition.GroupingVersion, &partition.EventDay, &partition.Kind, &input.ValidFromGeneration, &input.IdentitySHA256, &input.RowCount, &input.InputSeqMin, &input.InputSeqMax); err != nil {
-			rows.Close()
-			return work, err
-		}
-		if len(work.Inputs) == 0 {
-			work.Task.Partition = partition
-		} else if partition != work.Task.Partition {
-			rows.Close()
-			return work, errors.New("reserved compaction partition changed")
-		}
-		work.Inputs = append(work.Inputs, input)
+	work.Task.Authority = authority
+	if len(work.Inputs) < minimum || len(work.Inputs) > maximum {
+		return work, errors.New("maintenance inputs are incomplete or exceed the operation bound")
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
+	positions := make(map[string]int, len(work.Inputs))
+	for index, input := range work.Inputs {
+		positions[input.BundleID] = index
+	}
+	// One bounded read for every reserved pair, not two round trips per input.
+	files, err := tx.Query(ctx, `SELECT f.bundle_id::text,f.file_id::text,f.intent_id::text,oi.object_key,f.role,f.bytes,f.full_sha256,f.row_count,f.min_event_time_us,f.max_event_time_us,f.min_received_time_us,f.max_received_time_us,f.min_batch_seq,f.max_batch_seq
+		FROM maintenance_inputs mi JOIN files f ON f.tenant_id=mi.tenant_id AND f.bundle_id=mi.bundle_id
+		JOIN object_intents oi ON oi.tenant_id=f.tenant_id AND oi.intent_id=f.intent_id AND oi.state='referenced'
+		WHERE mi.task_id=$1 AND mi.tenant_id=$2 ORDER BY f.bundle_id,f.role`, authority.TaskID, authority.TenantID)
+	if err != nil {
 		return work, err
 	}
-	rows.Close()
-	for index := range work.Inputs {
-		projects, err := tx.Query(ctx, `SELECT project_id FROM bundle_projects WHERE tenant_id=$1 AND bundle_id=$2 ORDER BY project_id`, authority.TenantID, work.Inputs[index].BundleID)
-		if err != nil {
+	defer files.Close()
+	for files.Next() {
+		var bundleID string
+		var file CompactionFile
+		if err := files.Scan(&bundleID, &file.FileID, &file.IntentID, &file.ObjectKey, &file.Role, &file.Bytes, &file.SHA256, &file.RowCount, &file.MinEventTimeUS, &file.MaxEventTimeUS, &file.MinReceivedTimeUS, &file.MaxReceivedTimeUS, &file.MinBatchSeq, &file.MaxBatchSeq); err != nil {
 			return work, err
 		}
-		for projects.Next() {
-			var id int64
-			if err := projects.Scan(&id); err != nil {
-				projects.Close()
-				return work, err
-			}
-			work.Inputs[index].ProjectIDs = append(work.Inputs[index].ProjectIDs, id)
+		index, ok := positions[bundleID]
+		if !ok {
+			return work, errors.New("unreserved maintenance file")
 		}
-		if err := projects.Err(); err != nil {
-			projects.Close()
-			return work, err
+		var target *CompactionFile
+		switch file.Role {
+		case "analytics":
+			target = &work.Inputs[index].Analytics
+		case "payload":
+			target = &work.Inputs[index].Payload
+		default:
+			return work, errors.New("invalid maintenance file role")
 		}
-		projects.Close()
-		files, err := tx.Query(ctx, `SELECT f.file_id::text,f.intent_id::text,oi.object_key,f.role,f.bytes,f.full_sha256,f.row_count,f.min_event_time_us,f.max_event_time_us,f.min_received_time_us,f.max_received_time_us,f.min_batch_seq,f.max_batch_seq
-			FROM files f JOIN object_intents oi ON oi.tenant_id=f.tenant_id AND oi.intent_id=f.intent_id AND oi.state='referenced'
-			WHERE f.tenant_id=$1 AND f.bundle_id=$2 ORDER BY f.role`, authority.TenantID, work.Inputs[index].BundleID)
-		if err != nil {
-			return work, err
+		if target.FileID != "" {
+			return work, errors.New("duplicate maintenance file role")
 		}
-		for files.Next() {
-			var file CompactionFile
-			if err := files.Scan(&file.FileID, &file.IntentID, &file.ObjectKey, &file.Role, &file.Bytes, &file.SHA256, &file.RowCount, &file.MinEventTimeUS, &file.MaxEventTimeUS, &file.MinReceivedTimeUS, &file.MaxReceivedTimeUS, &file.MinBatchSeq, &file.MaxBatchSeq); err != nil {
-				files.Close()
-				return work, err
-			}
-			if file.Role == "analytics" {
-				work.Inputs[index].Analytics = file
-			} else {
-				work.Inputs[index].Payload = file
-			}
-		}
-		if err := files.Err(); err != nil {
-			files.Close()
-			return work, err
-		}
-		files.Close()
-		if work.Inputs[index].Analytics.FileID == "" || work.Inputs[index].Payload.FileID == "" {
+		*target = file
+	}
+	if err := files.Err(); err != nil {
+		return work, err
+	}
+	files.Close()
+	for _, input := range work.Inputs {
+		if input.Analytics.FileID == "" || input.Payload.FileID == "" {
 			return work, errors.New("reserved compaction pair is incomplete")
 		}
-	}
-	if len(work.Inputs) < 2 {
-		return work, errors.New("compaction inputs are incomplete")
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return work, err
@@ -214,14 +199,17 @@ func lockRunningMaintenance(ctx context.Context, tx pgx.Tx, authority Maintenanc
 
 func loadCompactionExpectations(ctx context.Context, tx pgx.Tx, taskID string) (CompactionWork, error) {
 	var work CompactionWork
-	rows, err := tx.Query(ctx, `SELECT b.bundle_id::text,b.schema_version,b.grouping_version,b.event_day::text,b.kind,b.valid_from_generation,b.identity_sha256,b.row_count,b.input_seq_min,b.input_seq_max FROM maintenance_inputs mi JOIN bundles b ON b.tenant_id=mi.tenant_id AND b.bundle_id=mi.bundle_id WHERE mi.task_id=$1 ORDER BY b.bundle_id`, taskID)
+	rows, err := tx.Query(ctx, `SELECT b.bundle_id::text,b.schema_version,b.grouping_version,b.event_day::text,b.kind,b.valid_from_generation,b.identity_sha256,b.row_count,b.input_seq_min,b.input_seq_max,
+		ARRAY(SELECT project_id FROM bundle_projects bp WHERE bp.tenant_id=b.tenant_id AND bp.bundle_id=b.bundle_id ORDER BY project_id)
+		FROM maintenance_inputs mi JOIN bundles b ON b.tenant_id=mi.tenant_id AND b.bundle_id=mi.bundle_id WHERE mi.task_id=$1 ORDER BY b.bundle_id`, taskID)
 	if err != nil {
 		return work, err
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var input CompactionWorkInput
 		var p CompactionPartition
-		if err := rows.Scan(&input.BundleID, &p.SchemaVersion, &p.GroupingVersion, &p.EventDay, &p.Kind, &input.ValidFromGeneration, &input.IdentitySHA256, &input.RowCount, &input.InputSeqMin, &input.InputSeqMax); err != nil {
+		if err := rows.Scan(&input.BundleID, &p.SchemaVersion, &p.GroupingVersion, &p.EventDay, &p.Kind, &input.ValidFromGeneration, &input.IdentitySHA256, &input.RowCount, &input.InputSeqMin, &input.InputSeqMax, &input.ProjectIDs); err != nil {
 			return work, err
 		}
 		if len(work.Inputs) == 0 {
@@ -229,33 +217,12 @@ func loadCompactionExpectations(ctx context.Context, tx pgx.Tx, taskID string) (
 		} else if p != work.Task.Partition {
 			return work, errors.New("compaction partition changed")
 		}
+		if len(work.Inputs) >= MaxCompactionInputs {
+			return work, errors.New("maintenance input bound exceeded")
+		}
 		work.Inputs = append(work.Inputs, input)
 	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return work, err
-	}
-	rows.Close()
-	for index := range work.Inputs {
-		projects, err := tx.Query(ctx, `SELECT project_id FROM bundle_projects WHERE bundle_id=$1 ORDER BY project_id`, work.Inputs[index].BundleID)
-		if err != nil {
-			return work, err
-		}
-		for projects.Next() {
-			var id int64
-			if err := projects.Scan(&id); err != nil {
-				projects.Close()
-				return work, err
-			}
-			work.Inputs[index].ProjectIDs = append(work.Inputs[index].ProjectIDs, id)
-		}
-		if err := projects.Err(); err != nil {
-			projects.Close()
-			return work, err
-		}
-		projects.Close()
-	}
-	return work, nil
+	return work, rows.Err()
 }
 
 func validateCompactionOutput(bundle model.BundleManifest, work CompactionWork) error {

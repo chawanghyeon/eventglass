@@ -168,7 +168,7 @@ func (operations *MaintenanceOperations) ClaimRetention(ctx context.Context, ins
 }
 
 func (operations *MaintenanceOperations) LoadRetention(ctx context.Context, task RetentionTask) (RetentionWork, error) {
-	work, err := operations.LoadCompaction(ctx, task.Authority)
+	work, err := operations.loadMaintenanceWork(ctx, task.Authority, 1, 1)
 	if err != nil {
 		return RetentionWork{}, err
 	}
