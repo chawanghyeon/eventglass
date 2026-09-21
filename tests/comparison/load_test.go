@@ -37,40 +37,44 @@ type comparisonState struct {
 }
 
 type comparisonReport struct {
-	Operations                                map[string]comparisonOperation
-	Revision, Architecture, DatasetSHA256     string
-	Workers                                   int
-	WarmupSeconds, LoadSeconds                int64
-	LogicalLogs, LogicalErrors                int64
-	Accepted, Duplicates, Conflicts           int64
-	ACKSamples, QuerySamples                  int
-	VisibilitySamples                         int
-	RowsQuerySamples, HistogramQuerySamples   int
-	QueryFailures                             int
-	QueryObjectsFirst, QueryObjectsLast       int64
-	QueryObjectsMax, QueryScannedBytesMax     int64
-	QueryFailureCodes                         map[string]int
-	QueryJobStates                            map[string]int
-	ACKP50MS, ACKP95MS, ACKP99MS              int64
-	QueryP50MS, QueryP95MS, QueryP99MS        int64
-	RowsQueryP95MS, HistogramQueryP95MS       int64
-	RowsServerP95MS, HistogramServerP95MS     int64
-	RowsOverheadP95MS, HistogramOverheadP95MS int64
-	VisibilityP95MS                           int64
-	ColdRegexMS                               int64
-	ColdRegexFailed                           bool
-	MaxConversionBacklog, FinalBacklog        int64
-	LoadBacklogSamples, LoadBacklogMax        int64
-	LoadBacklogSlopePerMinute                 float64
-	DrainMS                                   int64
-	PGDatabaseStartBytes, PGDatabaseEndBytes  int64
-	PGWALBytes                                int64
-	S3Objects, S3StoredBytes                  int64
-	S3PutRequests, S3HeadRequests             uint64
-	S3GetRequests, S3RangeRequests            uint64
-	S3PutBytes, S3GetBytes, S3RangeBytes      uint64
-	StartedAt, FinishedAt                     time.Time
-	Targets                                   map[string]bool
+	Operations                                      map[string]comparisonOperation
+	Revision, Architecture, FixtureDefinitionSHA256 string
+	SubmittedInput                                  submittedInput
+	PublishedCounts                                 map[string]int64
+	PublishedOracleFailure                          string
+	PublishedOracleMS                               int64
+	Workers                                         int
+	WarmupSeconds, LoadSeconds                      int64
+	LogicalLogs, LogicalErrors                      int64
+	Accepted, Duplicates, Conflicts                 int64
+	ACKSamples, QuerySamples                        int
+	VisibilitySamples                               int
+	RowsQuerySamples, HistogramQuerySamples         int
+	QueryFailures                                   int
+	QueryObjectsFirst, QueryObjectsLast             int64
+	QueryObjectsMax, QueryScannedBytesMax           int64
+	QueryFailureCodes                               map[string]int
+	QueryJobStates                                  map[string]int
+	ACKP50MS, ACKP95MS, ACKP99MS                    int64
+	QueryP50MS, QueryP95MS, QueryP99MS              int64
+	RowsQueryP95MS, HistogramQueryP95MS             int64
+	RowsServerP95MS, HistogramServerP95MS           int64
+	RowsOverheadP95MS, HistogramOverheadP95MS       int64
+	VisibilityP95MS                                 int64
+	PostDrainLast15MinRegexMS                       int64
+	PostDrainLast15MinRegexFailed                   bool
+	MaxConversionBacklog, FinalBacklog              int64
+	LoadBacklogSamples, LoadBacklogMax              int64
+	LoadBacklogSlopePerMinute                       float64
+	DrainMS                                         int64
+	PGDatabaseStartBytes, PGDatabaseEndBytes        int64
+	PGWALBytes                                      int64
+	S3Objects, S3StoredBytes                        int64
+	S3PutRequests, S3HeadRequests                   uint64
+	S3GetRequests, S3RangeRequests                  uint64
+	S3PutBytes, S3GetBytes, S3RangeBytes            uint64
+	StartedAt, FinishedAt                           time.Time
+	Targets                                         map[string]bool
 }
 
 type comparisonOperation struct {
@@ -148,7 +152,8 @@ func TestSustainedComparison(t *testing.T) {
 
 	report := comparisonReport{Revision: os.Getenv("EVENTGLASS_COMPARISON_REVISION"), Architecture: "linux/arm64", Workers: workers,
 		WarmupSeconds: int64(warmup.Seconds()), LoadSeconds: int64(load.Seconds()), StartedAt: time.Now().UTC(), Targets: make(map[string]bool), QueryFailureCodes: make(map[string]int), QueryJobStates: make(map[string]int)}
-	report.DatasetSHA256 = fixedFixtureSummaries[10_000_000].SHA256
+	report.FixtureDefinitionSHA256 = fixedFixtureSummaries[10_000_000].SHA256
+	input := newInputEvidence()
 	report.PGDatabaseStartBytes, _, _ = pgSize(t, pool)
 	walStart := pgWAL(t, pool)
 
@@ -161,17 +166,25 @@ func TestSustainedComparison(t *testing.T) {
 		&queryLatencies, &rowsQueryLatencies, &histogramQueryLatencies,
 		&rowsServerLatencies, &histogramServerLatencies, &rowsOverheadLatencies, &histogramOverheadLatencies,
 		&visibilityLatencies, &report, queryErrors)
+	queriesJoined := false
+	defer func() {
+		stopQueries()
+		if !queriesJoined {
+			<-queryErrors
+		}
+	}()
 
 	sequence := int64(0)
-	if err := runIngestPhase(client, baseURL, state, warmup, false, &sequence, &ackLatencies, &report); err != nil {
+	if err := runIngestPhase(client, baseURL, state, warmup, false, &sequence, &ackLatencies, &report, input); err != nil {
 		t.Fatal(err)
 	}
 	backlogContext, stopBacklog := context.WithCancel(context.Background())
 	backlogResult := make(chan backlogMonitorResult, 1)
 	go monitorBacklog(backlogContext, pool, backlogResult)
 	loadStarted := time.Now()
-	if err := runIngestPhase(client, baseURL, state, load, true, &sequence, &ackLatencies, &report); err != nil {
+	if err := runIngestPhase(client, baseURL, state, load, true, &sequence, &ackLatencies, &report, input); err != nil {
 		stopBacklog()
+		<-backlogResult
 		t.Fatal(err)
 	}
 	stopBacklog()
@@ -190,6 +203,7 @@ func TestSustainedComparison(t *testing.T) {
 	stopQueries()
 	select {
 	case err := <-queryErrors:
+		queriesJoined = true
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -200,8 +214,6 @@ func TestSustainedComparison(t *testing.T) {
 	drainStarted := time.Now()
 	report.MaxConversionBacklog, report.FinalBacklog = drainBacklog(t, pool, drain)
 	report.DrainMS = time.Since(drainStarted).Milliseconds()
-	report.PGDatabaseEndBytes, report.S3Objects, report.S3StoredBytes = pgSize(t, pool)
-	report.PGWALBytes = pgWAL(t, pool) - walStart
 	if err := pool.QueryRow(context.Background(), `SELECT COALESCE(sum(accepted_count),0),COALESCE(sum(duplicate_count),0),COALESCE(sum(conflict_count),0) FROM receipts WHERE tenant_id=$1`, state.TenantID).Scan(&report.Accepted, &report.Duplicates, &report.Conflicts); err != nil {
 		t.Fatal(err)
 	}
@@ -238,11 +250,22 @@ func TestSustainedComparison(t *testing.T) {
 	report.VisibilitySamples = len(visibilityLatencies)
 	report.VisibilityP95MS = percentileMS(visibilityLatencies, .95)
 	if measurement, searchErr := search(context.Background(), client, baseURL, state, session.CSRFToken, false, true); searchErr != nil {
-		report.ColdRegexFailed = true
+		report.PostDrainLast15MinRegexFailed = true
 	} else {
-		report.ColdRegexMS = measurement.Total.Milliseconds()
+		report.PostDrainLast15MinRegexMS = measurement.Total.Milliseconds()
 	}
+	checkStarted := time.Now()
+	report.PublishedCounts, err = publishedCounts(context.Background(), client, baseURL, state, session.CSRFToken, report.StartedAt, checkStarted)
+	if err != nil {
+		report.PublishedOracleFailure = searchFailureCode(err)
+	}
+	report.PublishedOracleMS = time.Since(checkStarted).Milliseconds()
+	report.SubmittedInput = input.snapshot()
 	collectS3Metrics(t, client, &report)
+	// Include the post-drain regex and publication oracle in both storage
+	// measurements, rather than charging S3 but omitting their PG/WAL work.
+	report.PGDatabaseEndBytes, report.S3Objects, report.S3StoredBytes = pgSize(t, pool)
+	report.PGWALBytes = pgWAL(t, pool) - walStart
 	report.FinishedAt = time.Now().UTC()
 	expectedAccepted := int64((warmup+load)/time.Second) * (logsPerSecond + errorsPerSecond)
 	setWorkloadTargets(&report, expectedAccepted)
@@ -265,9 +288,14 @@ func setWorkloadTargets(report *comparisonReport, expectedAccepted int64) {
 	report.Targets["no_growing_backlog"] = report.FinalBacklog == 0
 	report.Targets["no_conflicts"] = report.Conflicts == 0
 	report.Targets["complete_logical_count"] = report.Accepted == expectedAccepted
+	cycles := expectedAccepted / (logsPerSecond + errorsPerSecond)
+	report.Targets["published_query_count"] = report.PublishedOracleFailure == "" &&
+		report.PublishedCounts["log"] == cycles*logsPerSecond && report.PublishedCounts["error"] == cycles*errorsPerSecond && cycles > 0
+	report.Targets["submitted_input_provenance"] = report.SubmittedInput.Envelopes >= cycles*(1+errorsPerSecond)+cycles/60 &&
+		report.SubmittedInput.Bytes > 0 && len(report.SubmittedInput.SHA256) == 64
 }
 
-func runIngestPhase(client *http.Client, baseURL string, state comparisonState, duration time.Duration, measured bool, sequence *int64, latencies *[]time.Duration, report *comparisonReport) error {
+func runIngestPhase(client *http.Client, baseURL string, state comparisonState, duration time.Duration, measured bool, sequence *int64, latencies *[]time.Duration, report *comparisonReport, input *inputEvidence) error {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	cycles := int(duration / time.Second)
@@ -285,23 +313,29 @@ func runIngestPhase(client *http.Client, baseURL string, state comparisonState, 
 		for _, body := range bodies {
 			go func(payload []byte) {
 				started := time.Now()
-				status, response, err := postEnvelopeWithAdmissionRetry(client, baseURL, state, payload)
+				status, response, err := postEnvelopeWithAdmissionRetry(client, baseURL, state, payload, input)
 				answers <- answer{status: status, response: response, latency: time.Since(started), err: err}
 			}(body)
 		}
+		var firstErr error
 		for range bodies {
 			answer := <-answers
 			if answer.err != nil || answer.status != http.StatusOK {
-				return fmt.Errorf("ingest sequence %d status=%d body=%s err=%v", *sequence, answer.status, answer.response, answer.err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("ingest sequence %d status=%d body=%s err=%v", *sequence, answer.status, answer.response, answer.err)
+				}
 			}
 			*latencies = append(*latencies, answer.latency)
+		}
+		if firstErr != nil {
+			return firstErr
 		}
 		if measured {
 			report.LogicalLogs += logsPerSecond
 			report.LogicalErrors += errorsPerSecond
 		}
 		if *sequence%60 == 0 {
-			status, response, err := postEnvelope(client, baseURL, state, duplicateBody)
+			status, response, err := postEnvelope(client, baseURL, state, duplicateBody, input)
 			if err != nil || status != http.StatusOK {
 				return fmt.Errorf("duplicate sequence %d status=%d body=%s err=%v", *sequence, status, response, err)
 			}
@@ -347,10 +381,11 @@ func comparisonEnvelopes(state comparisonState, sequence int64, now time.Time) (
 	return bodies, duplicate
 }
 
-func postEnvelope(client *http.Client, baseURL string, state comparisonState, body []byte) (int, string, error) {
+func postEnvelope(client *http.Client, baseURL string, state comparisonState, body []byte, input *inputEvidence) (int, string, error) {
 	request, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/%d/envelope/", baseURL, state.ProjectID), bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/x-sentry-envelope")
 	request.Header.Set("X-Sentry-Auth", "Sentry sentry_version=7, sentry_key="+state.PublicKey)
+	input.record(body)
 	response, err := client.Do(request)
 	if err != nil {
 		return 0, "", err
@@ -360,10 +395,10 @@ func postEnvelope(client *http.Client, baseURL string, state comparisonState, bo
 	return response.StatusCode, string(data), readErr
 }
 
-func postEnvelopeWithAdmissionRetry(client *http.Client, baseURL string, state comparisonState, body []byte) (int, string, error) {
+func postEnvelopeWithAdmissionRetry(client *http.Client, baseURL string, state comparisonState, body []byte, input *inputEvidence) (int, string, error) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		status, response, err := postEnvelope(client, baseURL, state, body)
+		status, response, err := postEnvelope(client, baseURL, state, body, input)
 		if err != nil || status != http.StatusTooManyRequests || time.Now().After(deadline) {
 			return status, response, err
 		}

@@ -4,9 +4,16 @@ package comparison
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -106,4 +113,126 @@ type comparisonTransport func(*http.Request) (*http.Response, error)
 
 func (transport comparisonTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	return transport(request)
+}
+
+func TestSubmittedInputFramingAndActualRetries(t *testing.T) {
+	a, b := newInputEvidence(), newInputEvidence()
+	a.record([]byte("a"))
+	a.record([]byte("bc"))
+	b.record([]byte("ab"))
+	b.record([]byte("c"))
+	if a.snapshot().SHA256 == b.snapshot().SHA256 {
+		t.Fatal("input framing lost envelope boundaries")
+	}
+	var attempts atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	input := newInputEvidence()
+	status, _, err := postEnvelopeWithAdmissionRetry(server.Client(), server.URL, comparisonState{ProjectID: 1}, []byte("abc"), input)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("status=%d err=%v", status, err)
+	}
+	framed := "eventglass-submitted-envelope-v1\x00" + "\x00\x00\x00\x00\x00\x00\x00\x03abc" + "\x00\x00\x00\x00\x00\x00\x00\x03abc"
+	digest := sha256.Sum256([]byte(framed))
+	got := input.snapshot()
+	if got.Envelopes != 2 || got.Bytes != 6 || got.SHA256 != hex.EncodeToString(digest[:]) {
+		t.Fatalf("actual retry provenance=%+v", got)
+	}
+}
+
+func TestPublishedTargetRequiresActualQueryCounts(t *testing.T) {
+	report := comparisonReport{Accepted: 105, Targets: make(map[string]bool)}
+	setWorkloadTargets(&report, 105)
+	if !report.Targets["complete_logical_count"] || report.Targets["published_query_count"] || report.Targets["submitted_input_provenance"] {
+		t.Fatal("receipt-only evidence satisfied publication/input provenance")
+	}
+	report.PublishedCounts = map[string]int64{"log": 100, "error": 5}
+	setWorkloadTargets(&report, 105)
+	if !report.Targets["published_query_count"] {
+		t.Fatal("exact result rejected")
+	}
+	report.PublishedCounts["log"]--
+	setWorkloadTargets(&report, 105)
+	if report.Targets["published_query_count"] {
+		t.Fatal("missing published row accepted")
+	}
+}
+
+func TestPublishedCountsChecksFullWindowAndReleasesSnapshotOnInvalidResult(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	end := start.Add(45 * time.Minute)
+	const valid = `{"snapshot_id":"00000000-0000-4000-8000-000000000001","complete":true,"groups":[{"keys":[{"type":"string","value":"log"}],"metrics":{"events":{"type":"integer","value":"100"}}},{"keys":[{"type":"string","value":"error"}],"metrics":{"events":{"type":"integer","value":"5"}}}]}`
+	for _, body := range []string{valid, strings.Replace(valid, `"complete":true`, `"complete":false`, 1), strings.Replace(valid, `"value":"error"`, `"value":"log"`, 1), strings.Replace(valid, `"value":"100"`, `"value":"1.5"`, 1)} {
+		var releases atomic.Int64
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Origin") != comparisonOrigin || r.Header.Get("X-CSRF-Token") != "csrf" {
+				t.Error("missing authority headers")
+			}
+			if r.Method == http.MethodDelete {
+				releases.Add(1)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			var request map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Error(err)
+			}
+			if r.URL.Path != "/v1/aggregate" || request["start_us"] != fmt.Sprint(start.Add(-time.Minute).UnixMicro()) || request["end_us"] != fmt.Sprint(end.Add(time.Minute).UnixMicro()) || request["time_basis"] != "received" {
+				t.Errorf("wrong full-window request: %v", request)
+			}
+			_, _ = w.Write([]byte(body))
+		}))
+		counts, err := publishedCounts(context.Background(), server.Client(), server.URL, comparisonState{TenantID: 7, ProjectID: 8}, "csrf", start, end)
+		server.Close()
+		if (err == nil) != (body == valid) || releases.Load() != 1 {
+			t.Fatalf("counts=%v err=%v releases=%d", counts, err, releases.Load())
+		}
+	}
+}
+
+func TestFailedIngestCycleJoinsEveryRequest(t *testing.T) {
+	var arrived atomic.Int64
+	allStarted, release := make(chan struct{}), make(chan struct{})
+	finish := sync.OnceFunc(func() { close(release) })
+	defer finish()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := arrived.Add(1)
+		if n == 6 {
+			close(allStarted)
+		}
+		if n == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		<-release
+	}))
+	defer server.Close()
+	result := make(chan error, 1)
+	go func() {
+		var sequence int64
+		var latencies []time.Duration
+		result <- runIngestPhase(server.Client(), server.URL, comparisonState{ProjectID: 1}, time.Second, true, &sequence, &latencies, &comparisonReport{}, newInputEvidence())
+	}()
+	select {
+	case <-allStarted:
+	case <-time.After(5 * time.Second):
+		finish()
+		t.Fatal("requests did not start")
+	}
+	select {
+	case <-result:
+		finish()
+		t.Fatal("failure returned while requests were live")
+	case <-time.After(20 * time.Millisecond):
+	}
+	finish()
+	if err := <-result; err == nil {
+		t.Fatal("failed request became successful cycle")
+	}
 }

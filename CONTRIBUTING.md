@@ -80,6 +80,14 @@ samples and runtime logs in a unique `.tools/comparison-report-N.*` directory;
 the convenience `comparison-workers-N*.json` files represent only the latest
 run. Reports also accumulate private role-operation counters across the worker
 restart to distinguish empty claims from work time.
+Reports distinguish the fixed fixture-definition checksum from a streaming
+checksum of actual envelope bodies submitted to HTTP (including retries and
+duplicates, length-framed in submission order, not TCP arrival/ACK order).
+After drain, the public aggregate API must return the complete generated log
+and error counts across the whole run; receipts alone cannot satisfy this target.
+The post-drain last15min regex field is explicitly not cold-cache evidence.
+The four-size native fixture oracle, verified cold/all-history and idle phases,
+and capacity/scaling measurements remain required before R3 closure.
 `EVENTGLASS_COMPARISON_QUICK=1` permits shorter local
 diagnostics but cannot complete R3. A generated report whose target map contains
 `false` remains a failed gate; do not relabel the measurement as a pass.

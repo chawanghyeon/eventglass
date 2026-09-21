@@ -419,6 +419,65 @@ and executed before R3 closure. Existing reports remain useful for their actual
 SLO/resource workload, but an all-true target map is not by itself a complete
 G07 audit. No existing evidence file has been relabeled or rewritten.
 
+The subsequent harness now names the independent checksum
+`FixtureDefinitionSHA256` and the unreset regex observation
+`PostDrainLast15MinRegexMS`. `SubmittedInput` streams the exact envelope bodies
+offered to the HTTP client, including admission retries and intentional
+duplicates: domain prefix `eventglass-submitted-envelope-v1` plus NUL, followed
+by repeated big-endian uint64 body length and body bytes. Its order is the
+locked submission order, not TCP arrival order or a claim that every attempt
+was accepted. Raw bodies/DSN keys are not saved or retained for the whole run.
+The final public aggregate request covers the whole received-time workload and
+checks both kind counts independently of receipts. These checks add required
+targets; they do not complete the four-size typed/filter/identity oracle.
+Ingest-cycle failure now joins all six HTTP attempts, and phase failure joins
+the backlog/query monitors before teardown. Local HTTP regression tests cover
+retry accounting, frame ambiguity, incomplete/duplicate/malformed aggregates,
+snapshot release on invalid results, and outstanding requests after a failure.
+
+Fresh Linux ARM64 runtime image
+`e1a04b04be3253236c64ab05e09226f33d5ad380db60a708c32d13ee93514d09`
+from dcdbb9d plus harness changes ran20s warmup/60s load/90s maximum drain on
+the restarted4CPU/8GiB Colima host. It verified8,000 published logs+400 errors
+through the real API/worker/engine in504ms. Submitted input was2,702 attempts,
+8,725,120bytes, SHA256
+`95227d049074bb7693d784293331d272d0fd955967464b56f84d5fb1011cb15e`.
+Accepted8,400/duplicate1/conflict0; all12 mixed queries succeeded, but rows/
+histogram p95=624/592ms and backlog slope+2.11/min failed the targets.
+ACK p95=372ms, visibility1,019ms, final backlog0/drain2,013ms. Thus the
+command correctly exited nonzero; `.tools/comparison-report-1.vIQ320`
+preserves the failed report and logs. No same-host before/after speedup is claimed.
+
+S3 PUT/HEAD/fullGET/Range requests were1,492/6,295/3,666/545; PUT/fullGET/Range
+bytes8,498,788/20,762,726/5,254,700; reported WAL16,379,280bytes. Docker stats
+sampled whole-installation/worker peaks547,591,549/65,682,800bytes and recorded
+OOM kills0. These sampled usage figures are not a continuous RSS maximum;
+each Go runtime still had enforced CPU1/512MiB/swap0. The dated model projected
+USD515.78/month, not an actual bill or savings claim. The report's PG size/WAL
+sample precedes the final regex/oracle requests, while S3 counters include them;
+that boundary was subsequently corrected and rerun below. Verified cold cache,
+all-history regex, idle, native four-size oracle and capacity/efficiency
+measurements remain open along with the official-duration SLO rerun.
+
+The same product image, rebuilt neither in Go nor native code, was then reused
+for another fresh20s/60s/90s quick diagnostic of the corrected PG/WAL boundary.
+Current harness code was mounted explicitly; its `Revision` identifies the
+dcdbb9d product source, not an official clean-source measurement.
+`.tools/comparison-report-1.Rm83yU` passed its measured target map:8,400 accepted,
+8,000+400 published counts,12 complete queries, ACK p95=371ms, rows/histogram
+p95=236/359ms, visibility776ms, backlog slope−1.05/min, final0/drain1,001ms.
+Input provenance included2,776 attempts/8,302,217bytes, SHA256
+`c43b7ecc597c6d65ba4ad92a57e3bb36d6b1acfcc9b6cedc178329e36a141302`.
+The full-run count oracle took342ms. PUT/HEAD/fullGET/Range requests were
+1,500/5,001/3,662/481 and PUT/fullGET/Range bytes8,529,956/20,693,560/4,776,130.
+WAL16,702,584bytes now includes both final queries; sampled whole/worker peaks
+557,051,803/69,300,387bytes, OOM0. The same dated model projected USD500.03.
+Different compaction/task trajectories (max planned objects255 versus144) and
+the tiny sample make this variation evidence, not a product speedup or savings.
+Both runs and the unresolved official gate remain recorded. All harness checks
+also passed on Linux ARM64 with race/count3; the runner now executes those
+non-load checks before measuring, and unit/codegen/architecture checks pass.
+
 The official run from7ee4297 was interrupted before a complete report existed;
 its last samples/logs are preserved in
 `.tools/eventglass-comparison.LG4DOu/workers-1/artifacts`. On resumption Colima

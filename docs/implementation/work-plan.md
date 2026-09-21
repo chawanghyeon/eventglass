@@ -143,6 +143,17 @@ independent throughput or scaling efficiency. Add real cold/all-history and idle
 checks, actual input provenance and native/result oracle comparisons, plus a
 capacity/efficiency measurement before closing G07, even if the SLO target map
 passes. Preserve existing measurements with their original scope/limitations.
+The next harness increment records actual submitted envelope SHA/count/bytes
+separately from the fixture-definition hash, includes retries/duplicates, and
+requires the public aggregate API's full-run per-kind counts. A20s/60s/90s
+ARM64 diagnostic verified8,000 logs+400 errors and all12 mixed queries, but
+rows/histogram p95=624/592ms and backlog slope+2.11/min still miss. This is a
+count oracle for that actual workload, not the missing four-size typed/filter/
+identity oracle, cold/all-history/idle phases or official-duration capacity pass.
+A second fresh diagnostic of the same product image, after aligning PG/WAL
+measurement with final query work, passed its short target map at rows/histogram
+236/359ms, visibility776ms and backlog slope−1.05/min. It still cannot close
+R3; no product change explains the different compaction/task trajectory.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

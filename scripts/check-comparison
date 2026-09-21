@@ -8,6 +8,12 @@ case "$(uname -m)" in
   *) echo "comparison verification supports ARM64 only" >&2; exit 1 ;;
 esac
 
+# Exercise reporting/provenance/error cleanup contracts before measuring load.
+GOCACHE="$ROOT/.tools/go-build-cache" GOMODCACHE="$ROOT/.tools/go-mod-cache" \
+  go test -tags comparison -count=1 \
+  -skip '^(TestPrepareComparisonInstallation|TestSustainedComparison)$' \
+  ./tests/comparison ./tests/comparison/report
+
 revision=$(git rev-parse HEAD)
 if [ -n "$(git status --porcelain)" ]; then
   revision="${revision}-dirty"
