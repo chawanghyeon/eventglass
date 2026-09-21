@@ -3,8 +3,10 @@
 package comparison
 
 import (
+	"context"
 	"fmt"
 	"math"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -61,4 +63,37 @@ func TestSearchFailureCodeNeverReportsRawResponse(t *testing.T) {
 	if got := searchFailureCode(fmt.Errorf("a private transport error")); got != "client_or_decode_failure" {
 		t.Fatalf("transport error code=%q", got)
 	}
+	if got := searchFailureCode(fmt.Errorf("snapshot release status=403")); got != "snapshot_release_status_403" {
+		t.Fatalf("release error code=%q", got)
+	}
+}
+
+func TestReleaseComparisonSnapshotHonorsScopeAndFailure(t *testing.T) {
+	const snapshotID = "00000000-0000-4000-8000-000000000001"
+	var status = http.StatusNoContent
+	client := &http.Client{Transport: comparisonTransport(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodDelete || request.URL.Path != "/v1/snapshots/"+snapshotID || request.URL.Query().Get("tenant_id") != "7" || request.Header.Get("X-CSRF-Token") != "csrf" || request.Header.Get("Origin") != comparisonOrigin {
+			t.Errorf("release request=%s %s csrf=%q", request.Method, request.URL.String(), request.Header.Get("X-CSRF-Token"))
+		}
+		return &http.Response{StatusCode: status, Body: http.NoBody, Header: make(http.Header)}, nil
+	})}
+	if err := releaseComparisonSnapshot(context.Background(), client, "http://127.0.0.1:8080", 7, snapshotID, "csrf"); err != nil {
+		t.Fatal(err)
+	}
+	status = http.StatusForbidden
+	if err := releaseComparisonSnapshot(context.Background(), client, "http://127.0.0.1:8080", 7, snapshotID, "csrf"); err == nil {
+		t.Fatal("failed snapshot release was ignored")
+	}
+	status = http.StatusNoContent
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := releaseComparisonSnapshot(canceled, client, "http://127.0.0.1:8080", 7, snapshotID, "csrf"); err != nil {
+		t.Fatalf("canceled search must still release its snapshot: %v", err)
+	}
+}
+
+type comparisonTransport func(*http.Request) (*http.Response, error)
+
+func (transport comparisonTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport(request)
 }

@@ -186,8 +186,20 @@ drain, ACK p95 373ms and visibility p95 2.040s, but only four successful
 queries, 18 failures and rows/histogram p95 640/744ms. In the latest short run,
 two failed HTTP responses were 503 dependency_unavailable and only four durable
 jobs existed, all succeeded; this disproves the hypothesis that those failures
-were expired query-task leases. Their pre-job cause still needs diagnosis. R3
-remains incomplete and no release claim follows. Paired-file concurrent upload
+were expired query-task leases. The harness created a new moving-window snapshot
+for every query without releasing successful snapshots; the server's four-active-
+snapshots-per-user cap correctly rejected subsequent submissions. Its first
+release attempt also failed CSRF because DELETE omitted Origin. With Origin and
+CSRF supplied, the next 20s/120s/90s isolated one-worker run completed all 24
+queries with zero failures, ACK p95 374ms, visibility p95 4,725ms, rows/histogram
+p95 573/681ms, backlog slope +24.63 jobs/min and final backlog zero after
+6.011s. A second 20s/300s/90s diagnostic completed all 59 measured searches
+with zero HTTP failures, but rows/histogram p95 grew to 3,057/3,376ms,
+visibility p95 exceeded 5s, backlog slope reached +84.77 jobs/min, and drain
+took 42.056s. It issued 69,185 S3 HEADs across the run, with no conflicts or
+cgroup OOM. These query/visibility/load-backlog targets still fail; this is
+diagnostic evidence, not a completion claim. R3 remains incomplete and no
+release claim follows. Paired-file concurrent upload
 and two native children per CPU1 worker were rejected; the latter doubled
 average conversion duration and missed throughput/latency targets. No relaxed
 verification or GC override was retained.

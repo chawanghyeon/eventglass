@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -432,6 +433,12 @@ func searchFailureCode(err error) string {
 		}
 		return strings.TrimPrefix(status, "search status=") + ":unknown"
 	}
+	if strings.HasPrefix(message, "snapshot release status=") {
+		return strings.Replace(message, "snapshot release status=", "snapshot_release_status_", 1)
+	}
+	if message == "successful query omitted snapshot_id" {
+		return "missing_snapshot_id"
+	}
 	return "client_or_decode_failure"
 }
 
@@ -496,7 +503,8 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		time.Sleep(250 * time.Millisecond)
 	}
 	var wire struct {
-		Rows []struct {
+		SnapshotID string `json:"snapshot_id"`
+		Rows       []struct {
 			ReceivedTimeUS string `json:"received_time_us"`
 		} `json:"rows"`
 		Stats struct {
@@ -505,6 +513,13 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		} `json:"stats"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
+		return searchMeasurement{}, err
+	}
+	if wire.SnapshotID == "" {
+		return searchMeasurement{}, errors.New("successful query omitted snapshot_id")
+	}
+	queryLatency := time.Since(started)
+	if err := releaseComparisonSnapshot(ctx, client, baseURL, state.TenantID, wire.SnapshotID, csrf); err != nil {
 		return searchMeasurement{}, err
 	}
 	serverMS, err := strconv.ParseInt(wire.Stats.ElapsedMS, 10, 64)
@@ -536,7 +551,31 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		}
 		visible = lag
 	}
-	return searchMeasurement{Total: time.Since(started), Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible}, nil
+	return searchMeasurement{Total: queryLatency, Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible}, nil
+}
+
+func releaseComparisonSnapshot(ctx context.Context, client *http.Client, baseURL string, tenantID int64, snapshotID, csrf string) error {
+	// The workload issues moving last-15-minute queries, so each response owns
+	// its own snapshot. Release after the response has been measured instead of
+	// exhausting the real per-user active-snapshot admission limit of four.
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	endpoint := fmt.Sprintf("%s/v1/snapshots/%s?tenant_id=%d", baseURL, snapshotID, tenantID)
+	request, err := http.NewRequestWithContext(cleanup, http.MethodDelete, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("X-CSRF-Token", csrf)
+	request.Header.Set("Origin", comparisonOrigin)
+	response, err := client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("snapshot release status=%d", response.StatusCode)
+	}
+	return nil
 }
 
 func drainBacklog(t *testing.T, pool *pgxpool.Pool, limit time.Duration) (int64, int64) {
