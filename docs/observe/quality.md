@@ -272,6 +272,40 @@ This small startup-only difference does not explain the141ms mean conversion
 work time; it was not promoted as an end-to-end optimization. Go allocations
 exclude native memory, and this local benchmark performs no S3 requests.
 
+The next conversion experiment kept the original typed stage and reused its
+eight already-decoded analytics columns. Five2s `BenchmarkConvertSelectedBatch`
+samples per case, on the same pinned DuckDB2.0/Linux ARM64 CPU1/512MiB profile
+with tmpfs scratch and a256MiB native limit, gave these medians:
+
+| Local native conversion | Before | Reused stage columns |
+|---|---:|---:|
+| One-record batch ms / batches per second | 117.043 / 8.544 | 114.337 / 8.746 |
+| 100-record batch ms / batches per second | 132.552 / 7.544 | 127.518 / 7.842 |
+| One-record Go B/op / allocs/op | 2,223,951 / 896 | 2,222,550 / 895 |
+| 100-record Go B/op / allocs/op | 3,990,880 / 13,208 | 3,989,102 / 13,207 |
+
+An immediate three-sample repeat pair measured110.871/125.013ms before and
+110.384/124.738ms after; their ranges overlap. The initial percentage reduction
+is therefore not a stable speedup claim. That pair's whole benchmark-container
+`memory.peak` was111,226,880 versus104,562,688 bytes, including native allocations
+and cgroup-accounted cache; this is not isolated process RSS or proof of a fixed
+memory saving. The implementation removes redundant extraction and keeps the
+existing types without relying on a promised latency gain.
+
+These are local conversion rates, not durable-ACK or whole-installation
+throughput. Both variants perform zero S3 requests/transfers in this benchmark.
+Parquet types, paired identities, NULL versus empty service names, Unicode and
+integers above2^53 are checked with the actual pinned engine. Full ARM64 native
+contracts, disposable PG/S3 integration and the final-image browser flow pass.
+The first broad single-struct JSON projection was rejected: its strict decoder
+rejected absent optional fields; after preserving those semantics it still
+regressed to242.828/253.460ms for one/100 records. That SQL was removed.
+`BenchmarkConversionPhaseCosts` isolates opening/configuration, append,
+materialization, paired write/inspection and close; paired write/inspection
+took90–95ms in the unchanged baseline. It is a stage diagnostic, not the full
+conversion workflow. This small conversion change does not close R3 or
+replace a new official end-to-end run.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

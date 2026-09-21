@@ -113,6 +113,12 @@ sampled memory increased; full metrics and limitations are in quality.md.
 PostgreSQL regression coverage additionally exposed and fixed recovery rollback
 on a no-work claim, including retry exhaustion and query-specific help; this
 transaction policy stays in control, separate from app scheduling.
+The native converter now reuses eight typed stage columns without changing the
+Parquet schema. A same-limit local benchmark measured one/100-record batches
+at117.043/132.552ms before and114.337/127.518ms after, but a repeat pair's ranges
+overlap, so no stable speedup is claimed. A slower broad JSON rewrite was
+rejected. Exact types/NULLs/large integers and real PG/S3/browser flows pass,
+but this is not evidence that the end-to-end R3 targets now pass.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

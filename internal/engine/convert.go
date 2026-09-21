@@ -352,19 +352,21 @@ func writePartition(ctx context.Context, db *sql.DB, outputDirectory string, ind
 	paths := []string{analyticsPath, payloadPath}
 	where := ` WHERE event_day=CAST(? AS DATE) AND kind=?`
 	order := ` ORDER BY project_id,service NULLS FIRST,event_time_us,record_id`
+	// These typed stage columns were already decoded with the same types by
+	// materializeStage. Reuse them instead of parsing the full JSON again.
 	analyticsSQL := `COPY (SELECT
-		CAST(json_extract(stage_json,'$.record.tenant_id') AS BIGINT) AS tenant_id,
-		CAST(json_extract(stage_json,'$.record.project_id') AS BIGINT) AS project_id,
-		json_extract_string(stage_json,'$.record.record_id') AS record_id,
+		tenant_id,
+		project_id,
+		record_id,
 		json_extract_string(stage_json,'$.record.acceptance_id') AS acceptance_id,
 		json_extract_string(stage_json,'$.batch_id') AS batch_id,
 		CAST(json_extract(stage_json,'$.lane_id') AS INTEGER) AS lane_id,
-		CAST(json_extract(stage_json,'$.batch_seq') AS BIGINT) AS batch_seq,
+		batch_seq,
 		CAST(json_extract(stage_json,'$.global_ordinal') AS INTEGER) AS record_ordinal,
-		json_extract_string(stage_json,'$.record.kind') AS kind,
-		CAST(json_extract(stage_json,'$.record.event_time_us') AS BIGINT) AS event_time_us,
+		kind,
+		event_time_us,
 		CAST(json_extract(stage_json,'$.record.arrival_time_us') AS BIGINT) AS arrival_time_us,
-		CAST(json_extract(stage_json,'$.received_time_us') AS BIGINT) AS received_time_us,
+		received_time_us,
 		CAST(json_extract(stage_json,'$.record.event_time_ns_remainder') AS USMALLINT) AS event_time_ns_remainder,
 		json_extract_string(stage_json,'$.record.source_event_id') AS source_event_id,
 		json_extract_string(stage_json,'$.record.trace_id') AS trace_id,
@@ -374,7 +376,7 @@ func writePartition(ctx context.Context, db *sql.DB, outputDirectory string, ind
 		CAST(json_extract(stage_json,'$.record.severity_number') AS SMALLINT) AS severity_number,
 		json_extract_string(stage_json,'$.record.message') AS message,
 		json_extract_string(stage_json,'$.record.message_template') AS message_template,
-		json_extract_string(stage_json,'$.record.service') AS service,
+		service,
 		json_extract_string(stage_json,'$.record.environment') AS environment,
 		json_extract_string(stage_json,'$.record.release') AS release,
 		json_extract_string(stage_json,'$.record.logger') AS logger,

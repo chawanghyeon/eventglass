@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
-func writeConversionStage(t *testing.T, directory string, records []StageRecord) string {
+func writeConversionStage(t testing.TB, directory string, records []StageRecord) string {
 	t.Helper()
 	path := filepath.Join(directory, "selected.jsonl")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -31,6 +32,92 @@ func writeConversionStage(t *testing.T, directory string, records []StageRecord)
 		t.Fatal(err)
 	}
 	return path
+}
+
+func BenchmarkConvertSelectedBatch(b *testing.B) {
+	for _, count := range []int{1, 100} {
+		b.Run(fmt.Sprintf("records=%d", count), func(b *testing.B) {
+			root := b.TempDir()
+			records := make([]StageRecord, count)
+			for index := range records {
+				records[index] = conversionRecord("a", model.KindLog, 1_700_000_000_000_000+int64(index), index)
+				records[index].Record.RecordID = fmt.Sprintf("%064x", index+1)
+			}
+			request := ConversionRequest{
+				Version: ConversionProtocolVersion, StagePath: writeConversionStage(b, root, records),
+				OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"),
+				TenantID: 1, LaneID: 3, BatchSeq: 4, BatchID: records[0].BatchID, SelectedRecords: count,
+				NativeMemoryBytes: 256 << 20, NativeSpillBytes: 128 << 20,
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				summary, err := Convert(context.Background(), request, func(ConvertedBundle) error { return nil })
+				if err != nil || summary.SelectedRecordCount != count || summary.BundleCount != 1 {
+					b.Fatalf("summary=%+v err=%v", summary, err)
+				}
+				if err := os.RemoveAll(request.OutputDirectory); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkConversionPhaseCosts(b *testing.B) {
+	root := b.TempDir()
+	record := conversionRecord("a", model.KindLog, 1_700_000_000_000_000, 0)
+	request := ConversionRequest{
+		Version: ConversionProtocolVersion, StagePath: writeConversionStage(b, root, []StageRecord{record}),
+		OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"),
+		TenantID: 1, LaneID: 3, BatchSeq: 4, BatchID: record.BatchID, SelectedRecords: 1,
+		NativeMemoryBytes: 256 << 20, NativeSpillBytes: 128 << 20,
+	}
+	ctx := context.Background()
+	var opening, configuring, appending, materializing, writing, closing time.Duration
+	for b.Loop() {
+		if err := prepareConversionDirectories(request); err != nil {
+			b.Fatal(err)
+		}
+		started := time.Now()
+		db, err := Open(ctx, "")
+		opening += time.Since(started)
+		if err != nil {
+			b.Fatal(err)
+		}
+		started = time.Now()
+		if err := configureConversionDB(ctx, db, request); err != nil {
+			b.Fatal(err)
+		}
+		configuring += time.Since(started)
+		started = time.Now()
+		if count, _, err := appendStage(ctx, db, request); err != nil || count != 1 {
+			b.Fatalf("count=%d err=%v", count, err)
+		}
+		appending += time.Since(started)
+		started = time.Now()
+		if err := materializeStage(ctx, db); err != nil {
+			b.Fatal(err)
+		}
+		materializing += time.Since(started)
+		started = time.Now()
+		if bundle, _, err := writePartition(ctx, db, request.OutputDirectory, 0, partition{day: "2023-11-14", kind: model.KindLog}); err != nil || bundle.RowCount != 1 {
+			b.Fatalf("rows=%d err=%v", bundle.RowCount, err)
+		}
+		writing += time.Since(started)
+		started = time.Now()
+		if err := db.Close(); err != nil {
+			b.Fatal(err)
+		}
+		closing += time.Since(started)
+		for _, path := range []string{request.OutputDirectory, request.SpillDirectory} {
+			if err := os.RemoveAll(path); err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+	for name, elapsed := range map[string]time.Duration{"open": opening, "configure": configuring, "append": appending, "materialize": materializing, "write_inspect": writing, "close": closing} {
+		b.ReportMetric(float64(elapsed.Nanoseconds())/float64(b.N), name+"-ns/op")
+	}
 }
 
 func conversionRecord(idCharacter string, kind model.Kind, eventTimeUS int64, ordinal int) StageRecord {
@@ -114,6 +201,69 @@ func TestConvertBulkAppendPairedSchemaIdentityAndBounds(t *testing.T) {
 	}
 	if _, err := os.Stat(request.SpillDirectory); !os.IsNotExist(err) {
 		t.Fatalf("spill directory survived: %v", err)
+	}
+}
+
+func TestConvertTypedStageColumnsPreserveNullsAndIntegerPrecision(t *testing.T) {
+	root := t.TempDir()
+	empty, named := "", "검색 'service'"
+	services := []*string{nil, &empty, &named}
+	records := make([]StageRecord, len(services))
+	for index := range records {
+		records[index] = conversionRecord(string("abc"[index]), model.KindLog, 1_700_000_000_000_000+int64(index), index)
+		records[index].Record.TenantID = 9_007_199_254_740_993
+		records[index].Record.ProjectID = 9_007_199_254_740_994 + int64(index)
+		records[index].Record.Service = services[index]
+		records[index].BatchSeq = 9_007_199_254_741_000
+	}
+	request := ConversionRequest{
+		Version: ConversionProtocolVersion, StagePath: writeConversionStage(t, root, records),
+		OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"),
+		TenantID: records[0].Record.TenantID, LaneID: 3, BatchSeq: records[0].BatchSeq, BatchID: records[0].BatchID, SelectedRecords: len(records),
+	}
+	var bundle ConvertedBundle
+	if _, err := Convert(context.Background(), request, func(got ConvertedBundle) error { bundle = got; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`SELECT tenant_id,project_id,record_id,batch_seq,kind,event_time_us,received_time_us,service FROM read_parquet(?) ORDER BY record_id`, bundle.Analytics.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns, err := rows.ColumnTypes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, expected := range []string{"BIGINT", "BIGINT", "VARCHAR", "BIGINT", "VARCHAR", "BIGINT", "BIGINT", "VARCHAR"} {
+		if got := columns[index].DatabaseTypeName(); got != expected {
+			t.Fatalf("column %d type=%s want=%s", index, got, expected)
+		}
+	}
+	count := 0
+	for rows.Next() {
+		var tenant, project, sequence, event, received int64
+		var id, kind string
+		var service *string
+		if err := rows.Scan(&tenant, &project, &id, &sequence, &kind, &event, &received, &service); err != nil {
+			t.Fatal(err)
+		}
+		if count >= len(records) {
+			t.Fatal("unexpected extra row")
+		}
+		want := records[count]
+		if tenant != want.Record.TenantID || project != want.Record.ProjectID || id != want.Record.RecordID || sequence != want.BatchSeq || kind != string(want.Record.Kind) || event != want.Record.EventTimeUS || received != want.ReceivedTimeUS ||
+			(service == nil) != (want.Record.Service == nil) || service != nil && *service != *want.Record.Service {
+			t.Fatalf("typed stage projection differs at row %d", count)
+		}
+		count++
+	}
+	if err := rows.Err(); err != nil || count != len(records) {
+		t.Fatalf("rows=%d err=%v", count, err)
 	}
 }
 
