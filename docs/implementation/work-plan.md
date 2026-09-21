@@ -155,6 +155,22 @@ measurement with final query work, passed its short target map at rows/histogram
 236/359ms, visibility776ms and backlog slope−1.05/min. It still cannot close
 R3; no product change explains the different compaction/task trajectory.
 
+The harness now replaces every isolated worker/tmpfs after drain, verifies new
+container identities and empty block caches, then compares all-run regex rows
+on the same snapshot and observes idle query work. Actual quick1/2/4-worker
+post-load phases pass, including cold Range128/131/116 versus warm0/0/0.
+Resource evidence now requires sampled PG/S3 and Go containers plus cgroup peak,
+OOM and memory/swap limits for every worker incarnation; missing evidence fails.
+The4-worker short run still fails load-backlog slope(+0.132/min versus<=0.1),
+even though its cold/warm/idle/resource checks pass. The runner preserves that
+failure and continues those independent phases. Official-duration cold/idle,
+the actual four-size native oracle and capacity/efficiency remain unverified;
+neither fixed offered load nor quick cache checks close R3.
+The final1-worker repeat also verified all three cgroup incarnations and cold/
+warm Range117/0, but retained a load-backlog failure(+4.42/min). All three
+worker counts now have actual post-load/resource collector evidence, not a
+complete official R3 result. See quality.md for all successful and failed runs.
+
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured
 miss and revise implementation; do not relabel target as achieved by design.

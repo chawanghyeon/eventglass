@@ -11,7 +11,7 @@ esac
 # Exercise reporting/provenance/error cleanup contracts before measuring load.
 GOCACHE="$ROOT/.tools/go-build-cache" GOMODCACHE="$ROOT/.tools/go-mod-cache" \
   go test -tags comparison -count=1 \
-  -skip '^(TestPrepareComparisonInstallation|TestSustainedComparison)$' \
+  -skip '^(TestPrepareComparisonInstallation|TestSustainedComparison|TestPostLoadComparison)$' \
   ./tests/comparison ./tests/comparison/report
 
 revision=$(git rev-parse HEAD)
@@ -92,6 +92,22 @@ start_runtime() {
     -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
     -e EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE=/run/eventglass/alert.hex \
     "$runtime_image" run >/dev/null
+}
+
+capture_cgroup() {
+  observed_container=$1
+  observed_id=$(docker inspect --format '{{.Id}}' "$observed_container") || return 1
+  docker exec "$observed_container" sh -c '
+    peak=$(cat /sys/fs/cgroup/memory.peak) || exit 1
+    limit=$(cat /sys/fs/cgroup/memory.max) || exit 1
+    swap=$(cat /sys/fs/cgroup/memory.swap.max) || exit 1
+    oom=missing
+    killed=missing
+    while read -r key value; do
+      case "$key" in oom) oom=$value ;; oom_kill) killed=$value ;; esac
+    done </sys/fs/cgroup/memory.events
+    printf "%s %s %s %s %s %s %s\n" "$1" "$2" "$peak" "$oom" "$killed" "$limit" "$swap"
+  ' sh "$observed_container" "$observed_id" >>"$cgroup_file"
 }
 
 for workers in $profiles; do
@@ -175,6 +191,7 @@ for workers in $profiles; do
 
   stats_file="$artifacts_dir/docker-stats.jsonl"
   oom_file="$artifacts_dir/docker-oom.tsv"
+  cgroup_file="$artifacts_dir/cgroup-memory.tsv"
   (
     while docker inspect "$api_container" >/dev/null 2>&1; do
       sample=$(date +%s)
@@ -194,6 +211,8 @@ for workers in $profiles; do
     docker run --rm --platform linux/arm64 --network "${active_project}_default" \
       --entrypoint curl "$build_image" -fsS "http://${victim}:9090/metrics" \
       >"$artifacts_dir/restarted-worker.metrics"
+    capture_cgroup "$victim"
+    docker logs "$victim" >"$artifacts_dir/restarted-worker.log" 2>&1
     docker kill "$victim" >/dev/null
     docker inspect --format '{{.Name}} {{.State.OOMKilled}}' "$victim" >>"$oom_file"
     docker rm "$victim" >/dev/null
@@ -220,17 +239,57 @@ for workers in $profiles; do
     test -tags comparison -count=1 -timeout "$test_timeout" -run '^TestSustainedComparison$' -v ./tests/comparison
   status=$?
   set -e
-  kill "$stats_pid" >/dev/null 2>&1 || true
-  wait "$stats_pid" >/dev/null 2>&1 || true
   kill "$restart_pid" >/dev/null 2>&1 || true
   wait "$restart_pid" >/dev/null 2>&1 || true
-  for container in $app_containers; do
-    docker inspect --format '{{.Name}} {{.State.OOMKilled}}' "$container" >>"$oom_file" 2>/dev/null || true
+  # Finish independent cold/idle validation even if a load SLO missed. Replace
+  # only this disposable project's workers; every cache lives on their tmpfs.
+  if [ -f "$artifacts_dir/report.json" ]; then
+    postload_ready=1
+    index=1
+    while [ "$index" -le "$workers" ]; do
+      cold_worker="${active_project}-worker-$index"
+      old_id=$(docker inspect --format '{{.Id}}' "$cold_worker") || { postload_ready=0; break; }
+      capture_cgroup "$cold_worker" || { postload_ready=0; break; }
+      docker logs "$cold_worker" >"$artifacts_dir/pre-cold-worker-$index.log" 2>&1 || { postload_ready=0; break; }
+      docker stop --time 30 "$cold_worker" >/dev/null || { postload_ready=0; break; }
+      docker inspect --format '{{.Name}} {{.State.OOMKilled}}' "$cold_worker" >>"$oom_file" || { postload_ready=0; break; }
+      docker rm "$cold_worker" >/dev/null || { postload_ready=0; break; }
+      start_runtime "$cold_worker" worker "$prefix" || { postload_ready=0; break; }
+      new_id=$(docker inspect --format '{{.Id}}' "$cold_worker") || { postload_ready=0; break; }
+      docker exec "$cold_worker" sh -c 'test ! -d /tmp/eventglass/block-cache || test -z "$(find /tmp/eventglass/block-cache -type f -print -quit)"' || { postload_ready=0; break; }
+      printf '%s %s %s\n' "$cold_worker" "$old_id" "$new_id" >>"$artifacts_dir/cold-cache-workers.tsv"
+      index=$((index + 1))
+    done
+    if [ "$postload_ready" -eq 1 ]; then
+      set +e
+      docker run --rm --platform linux/arm64 --network "${active_project}_default" \
+        -v "$artifacts_dir:/comparison" -v "$ROOT/tests/comparison:/src/tests/comparison:ro" -w /src \
+        -e EVENTGLASS_DATABASE_URL="$database_url" \
+        -e EVENTGLASS_COMPARISON_BASE_URL="http://${api_container}:8080" \
+        -e EVENTGLASS_COMPARISON_STATE=/comparison/state.json \
+        -e EVENTGLASS_COMPARISON_REPORT=/comparison/report.json \
+        -e EVENTGLASS_COMPARISON_COLD_WORKERS=/comparison/cold-cache-workers.tsv \
+        -e EVENTGLASS_COMPARISON_METRICS="$metrics" \
+        -e EVENTGLASS_COMPARISON_QUICK="${EVENTGLASS_COMPARISON_QUICK:-}" \
+        --entrypoint go "$build_image" \
+        test -tags comparison -count=1 -timeout 5m -run '^TestPostLoadComparison$' -v ./tests/comparison
+      postload_status=$?
+      set -e
+      if [ "$postload_status" -ne 0 ]; then status=$postload_status; fi
+    else
+      status=1
+    fi
+  fi
+  kill "$stats_pid" >/dev/null 2>&1 || true
+  wait "$stats_pid" >/dev/null 2>&1 || true
+  for container in $app_containers "${active_project}-postgres-1" "${active_project}-minio-1"; do
+    capture_cgroup "$container" || status=1
+    docker inspect --format '{{.Name}} {{.State.OOMKilled}}' "$container" >>"$oom_file" || status=1
   done
   if [ -f "$artifacts_dir/report.json" ]; then
     set +e
     GOCACHE="$ROOT/.tools/go-build-cache" go run ./tests/comparison/report \
-      "$artifacts_dir/report.json" "$stats_file" "$oom_file" "$ROOT/tests/comparison/pricing.json"
+      "$artifacts_dir/report.json" "$stats_file" "$oom_file" "$ROOT/tests/comparison/pricing.json" "$cgroup_file"
     report_status=$?
     set -e
     if [ "$status" -eq 0 ] && [ "$report_status" -ne 0 ]; then status=$report_status; fi
@@ -239,6 +298,16 @@ for workers in $profiles; do
     cp "$artifacts_dir/report.json" "$evidence_dir/report.json"
     cp "$stats_file" "$evidence_dir/docker-stats.jsonl"
     cp "$oom_file" "$evidence_dir/docker-oom.tsv"
+    if [ -f "$cgroup_file" ]; then cp "$cgroup_file" "$evidence_dir/cgroup-memory.tsv"; fi
+    if [ -f "$artifacts_dir/restarted-worker.log" ]; then
+      cp "$artifacts_dir/restarted-worker.log" "$evidence_dir/restarted-worker.log"
+    fi
+    if [ -f "$artifacts_dir/cold-cache-workers.tsv" ]; then
+      cp "$artifacts_dir/cold-cache-workers.tsv" "$evidence_dir/cold-cache-workers.tsv"
+    fi
+    for phase_log in "$artifacts_dir"/pre-cold-worker-*.log; do
+      if [ -f "$phase_log" ]; then cp "$phase_log" "$evidence_dir/"; fi
+    done
     for container in $app_containers; do
       docker logs "$container" >"$evidence_dir/$container.log" 2>&1 || true
     done

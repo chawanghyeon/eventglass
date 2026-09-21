@@ -519,6 +519,85 @@ and capability coverage were updated together; regenerated Go/TypeScript
 contracts pass byte-for-byte checking, and all29 frontend tests plus strict
 TypeScript/production build pass. Schema/storage formats are unchanged.
 
+### Post-load cold cache and idle evidence
+
+The R3 runner now gracefully joins and replaces every disposable worker after
+drain, keeping the same PG/S3 installation while dropping only those workers'
+tmpfs caches. It checks empty cache directories, different unique container
+IDs, zero query/Range counters before cold work, and retains replacement IDs
+and pre-replacement logs. The same full-run received-time regex and read token
+must return the identical100-row result hash on its warm repeat. Cold here means
+Eventglass block caches, not provider/OS cache. Warm misses are recorded rather
+than presumed zero because the scheduler may choose another worker.
+An idle phase requires no new query jobs, no executed query tasks and zero final
+backlog; normal maintenance HEAD work is recorded, not silently discarded.
+Official idle is60s; quick mode uses10s. Missing/incomplete post-load phases or
+shortened official idle fail final report validation. A failed load SLO still
+runs these independent checks without changing its failure to a pass.
+
+Actual Go1.27.1/pinned DuckDB2.0 Linux ARM64 diagnostics used the same4CPU/8GiB
+Colima host, CPU1/512MiB/swap0 per Go runtime,20s warmup/60s load/90s maximum
+drain and10s idle. Each accepted8,400 records, verified8,000 logs+400 errors via
+the public aggregate API, and completed12 mixed queries. Product image
+`e1a04b04be3253236c64ab05e09226f33d5ad380db60a708c32d13ee93514d09`
+was freshly built for1 worker and reused only in quick mode for2/4; all source
+changes in this increment are verification code, not product performance tuning.
+
+| Workers / retained report | Cold/warm ms | Cold/warm Range requests | Cold/warm Range bytes | Rows/histogram p95 ms | Load backlog slope/min |
+|---|---:|---:|---:|---:|---:|
+|1 / `.tools/comparison-report-1.miTHDo`|348/183|128/0|1,577,033/0|411/421|−21.36|
+|2 / `.tools/comparison-report-2.0ZzpqR`|278/218|131/0|1,629,211/0|312/372|−1.12|
+|4 / `.tools/comparison-report-4.kJ5B02`|225/203|116/0|1,489,481/0|316/404|+0.132 (fail)|
+
+Each cold/warm phase performed one output PUT and two full result GETs; those
+are not default full-object input reads. Cold/warm HEAD counts were260/260,
+267/267 and239/239. Cold/warm full GET bytes were16,056/16,056,16,060/16,060
+and16,174/16,174. Cold/warm cache-byte stats were0/1,577,033,0/1,629,211 and
+0/1,489,481. Idle observed no new queries, Range/fullGET/PUT calls or backlog;
+maintenance performed3/4/6 HEADs. Post-load WAL was216,864/250,080/348,272bytes.
+These are single-pair cache observations, not stable latency improvement or
+capacity/scaling evidence. The short time window also does not prove native
+search over records older than15min; the official workload must do that.
+
+Resource verification additionally reads `memory.peak`, `memory.events`,
+`memory.max` and `memory.swap.max` from each container before replacement and
+at final observation. Worker1 requires three distinct incarnation observations
+(initial, failure restart, cold replacement); other workers require two.
+Every Go role plus PG and MinIO requires memory samples and OOM observations.
+Empty/missing data, duplicate identities or wrong Go memory/swap caps fail.
+These are observed cgroup peaks, including the small observation process, not
+a final kernel read after kill or a sum pretending to be simultaneous RSS.
+The first1-worker table row predates this extra capture and is not evidence for it.
+
+For2 workers, observed API/scheduler peaks were145,092,608/13,074,432bytes,
+workers77,643,776/82,796,544, PG206,409,728 and MinIO289,382,400; simultaneous
+Docker-sampled whole usage peaked615,347,385bytes. For4 workers the corresponding
+API/scheduler peaks were145,149,952/12,922,880, workers78,512,128/73,400,320/
+74,530,816/74,629,120, PG237,600,768 and MinIO292,225,024; sampled whole usage
+peaked653,513,454bytes. All observed OOM events/kills were zero and all Go
+cgroups showed512MiB/zero swap. The4-worker command nevertheless exited nonzero
+for its measured backlog slope; the failed report remains unchanged.
+The pre-post-load dated monthly workload model projected USD517.72/538.91/607.42;
+post-load query/idle S3 and WAL are reported separately, not annualized as steady
+traffic. No real bill, cost saving or linear scaling claim follows.
+
+The final1-worker repeat with the strengthened resource collector is preserved
+in `.tools/comparison-report-1.do0Ozf`, including the original pre-SIGKILL log,
+all three worker cgroup observations and the cold replacement identity. It
+passed cold/warm/idle/resource checks:306/305ms, Range117/0 and1,500,366/0bytes,
+same100 rows/snapshot, warm cache1,500,366bytes. Each query did HEAD238/fullGET2/
+PUT1, with fullGET16,454bytes and PUT8,227bytes. Idle had HEAD3 and no new query
+work; phase WAL194,704bytes. Observed cgroup peaks were API144,838,656,
+scheduler13,160,448, worker78,827,520, PG192,446,464 and MinIO267,128,832bytes;
+sampled whole usage575,835,994bytes, OOM events/kills0, verified Go512MiB/swap0.
+The load still failed backlog slope+4.42/min despite final0/drain2.003s,
+rows/histogram359/394ms, ACK374ms, visibility913ms and all12 queries succeeding.
+The model projected USD508.93; this remains a failed short run, not official
+capacity evidence. No threshold was relaxed to make either failure pass.
+Final Linux ARM64 race/count2 checks passed for the entire non-load comparison
+and report suites; unit, codegen, architecture, shell syntax and source-design
+hash checks passed. No product API, schema, runtime or UI source changed.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

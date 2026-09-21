@@ -86,8 +86,22 @@ duplicates, length-framed in submission order, not TCP arrival/ACK order).
 After drain, the public aggregate API must return the complete generated log
 and error counts across the whole run; receipts alone cannot satisfy this target.
 The post-drain last15min regex field is explicitly not cold-cache evidence.
-The four-size native fixture oracle, verified cold/all-history and idle phases,
-and capacity/scaling measurements remain required before R3 closure.
+The runner then replaces every disposable worker and its tmpfs, verifies empty
+block caches and new container IDs, and runs an all-run received-time regex
+twice with the same read token. It records cold/warm latency, Range/full GET/
+HEAD/PUT requests and bytes, exact returned-row hash, and actual warm misses
+(work can move between workers). Only Eventglass's block caches are cold, not
+the provider or host OS cache. A60-second idle phase checks no new query work;
+quick diagnostics use10 seconds. These phases still run when load SLOs miss.
+Retained evidence includes pre-cold worker logs, replacement IDs, sampled
+whole-installation usage, and cgroup memory.peak/OOM/limit observations for
+every container incarnation before replacement and at the end. Missing samples,
+backends, previous workers or OOM observations fail resource verification;
+Go cgroups must actually show512MiB memory and zero swap. The observation command
+itself is included in the cgroup; its peak is observed before stop/kill, not a
+promise of a final kernel value after the container has ceased to exist.
+The four-size native fixture oracle, capacity/scaling measurements and all
+phases under the official-duration profile remain required before R3 closure.
 `EVENTGLASS_COMPARISON_QUICK=1` permits shorter local
 diagnostics but cannot complete R3. A generated report whose target map contains
 `false` remains a failed gate; do not relabel the measurement as a pass.

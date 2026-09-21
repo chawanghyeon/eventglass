@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,12 @@ type resourceReport struct {
 	PeakByContainerBytes       map[string]int64 `json:"peak_by_container_bytes"`
 	OOMKilled                  []string         `json:"oom_killed"`
 	GoUnitsWithin512MiB        bool             `json:"go_units_within_512_mib"`
+	ObservedCgroupPeakBytes    map[string]int64 `json:"observed_cgroup_peak_bytes"`
+	CgroupIncarnations         map[string]int   `json:"cgroup_incarnations"`
+	OOMObserved                map[string]bool  `json:"oom_observed"`
+	CgroupOOMEvents            uint64           `json:"cgroup_oom_events"`
+	CgroupOOMKills             uint64           `json:"cgroup_oom_kills"`
+	GoLimitsVerified           bool             `json:"go_limits_verified"`
 }
 
 type costReport struct {
@@ -75,13 +82,13 @@ type costReport struct {
 }
 
 func main() {
-	if len(os.Args) != 5 {
-		fatal("usage: comparison-report report.json stats.jsonl oom.tsv pricing.json")
+	if len(os.Args) != 6 {
+		fatal("usage: comparison-report report.json stats.jsonl oom.tsv pricing.json cgroup.tsv")
 	}
 	report := readObject(os.Args[1])
 	var price prices
 	readJSON(os.Args[4], &price)
-	resource := readResources(os.Args[2], os.Args[3])
+	resource := readResources(os.Args[2], os.Args[3], os.Args[5])
 	cost := calculateCost(report, price)
 	report["Resources"], report["Cost"] = resource, cost
 	targets, _ := report["Targets"].(map[string]any)
@@ -89,8 +96,11 @@ func main() {
 		targets = make(map[string]any)
 		report["Targets"] = targets
 	}
-	targets["no_cgroup_oom"] = len(resource.OOMKilled) == 0
-	targets["go_units_within_512mib"] = resource.GoUnitsWithin512MiB
+	complete := resourceEvidenceComplete(resource, int(number(report, "Workers")))
+	targets["resource_evidence_complete"] = complete
+	targets["no_cgroup_oom"] = complete && len(resource.OOMKilled) == 0 && resource.CgroupOOMEvents == 0 && resource.CgroupOOMKills == 0
+	targets["go_units_within_512mib"] = complete && resource.GoUnitsWithin512MiB && resource.GoLimitsVerified
+	targets["postload_complete"] = validPostLoad(report, targets)
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		fatal(err.Error())
@@ -99,9 +109,27 @@ func main() {
 	if err := os.WriteFile(os.Args[1], data, 0o600); err != nil {
 		fatal(err.Error())
 	}
-	if len(resource.OOMKilled) != 0 || !resource.GoUnitsWithin512MiB {
-		fatal("comparison resource target failed")
+	if targets["no_cgroup_oom"] != true || targets["go_units_within_512mib"] != true || targets["postload_complete"] != true {
+		fatal("comparison resource/post-load target failed")
 	}
+}
+
+func validPostLoad(report, targets map[string]any) bool {
+	phase, ok := report["PostLoad"].(map[string]any)
+	if !ok || phase["Complete"] != true {
+		return false
+	}
+	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work"} {
+		if targets[name] != true {
+			return false
+		}
+	}
+	minimumIdle := float64(10)
+	if report["WarmupSeconds"] == float64(300) && report["LoadSeconds"] == float64(1800) {
+		minimumIdle = 60
+	}
+	idle, ok := phase["IdleSeconds"].(float64)
+	return ok && idle >= minimumIdle
 }
 
 func readObject(path string) map[string]any {
@@ -120,8 +148,9 @@ func readJSON(path string, value any) {
 	}
 }
 
-func readResources(statsPath, oomPath string) resourceReport {
-	result := resourceReport{PeakByContainerBytes: make(map[string]int64), OOMKilled: []string{}, GoUnitsWithin512MiB: true}
+func readResources(statsPath, oomPath, cgroupPath string) resourceReport {
+	result := resourceReport{PeakByContainerBytes: make(map[string]int64), OOMKilled: []string{}, GoUnitsWithin512MiB: true,
+		ObservedCgroupPeakBytes: make(map[string]int64), CgroupIncarnations: make(map[string]int), OOMObserved: make(map[string]bool), GoLimitsVerified: true}
 	file, err := os.Open(statsPath)
 	if err != nil {
 		fatal(err.Error())
@@ -156,12 +185,95 @@ func readResources(statsPath, oomPath string) resourceReport {
 	}
 	for _, line := range strings.Split(string(oom), "\n") {
 		fields := strings.Fields(line)
+		if len(fields) == 2 && (fields[1] == "true" || fields[1] == "false") {
+			result.OOMObserved[strings.TrimPrefix(fields[0], "/")] = true
+		}
 		if len(fields) == 2 && fields[1] == "true" {
 			result.OOMKilled = append(result.OOMKilled, strings.TrimPrefix(fields[0], "/"))
 		}
 	}
+	cgroup, err := os.ReadFile(cgroupPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		fatal(err.Error())
+	}
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(strings.TrimSpace(string(cgroup)), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 7 || len(fields[1]) != 64 || seen[fields[1]] {
+			fatal("invalid/duplicate cgroup evidence")
+		}
+		if _, err := hex.DecodeString(fields[1]); err != nil {
+			fatal("invalid cgroup identity")
+		}
+		seen[fields[1]] = true
+		peak, err := strconv.ParseInt(fields[2], 10, 64)
+		if err != nil || peak <= 0 {
+			fatal("invalid cgroup peak")
+		}
+		oom, err := strconv.ParseUint(fields[3], 10, 64)
+		if err != nil {
+			fatal("invalid cgroup OOM counter")
+		}
+		killed, err := strconv.ParseUint(fields[4], 10, 64)
+		if err != nil {
+			fatal("invalid cgroup OOM kill counter")
+		}
+		name := fields[0]
+		result.ObservedCgroupPeakBytes[name] = max(result.ObservedCgroupPeakBytes[name], peak)
+		result.CgroupIncarnations[name]++
+		result.CgroupOOMEvents += oom
+		result.CgroupOOMKills += killed
+		if isGoUnit(name) {
+			if peak > 512<<20 {
+				result.GoUnitsWithin512MiB = false
+			}
+			if fields[5] != strconv.Itoa(512<<20) || fields[6] != "0" {
+				result.GoLimitsVerified = false
+			}
+		}
+	}
 	sort.Strings(result.OOMKilled)
 	return result
+}
+
+func resourceEvidenceComplete(resource resourceReport, workers int) bool {
+	if workers != 1 && workers != 2 && workers != 4 {
+		return false
+	}
+	if len(resource.PeakByContainerBytes) != workers+4 || len(resource.ObservedCgroupPeakBytes) != workers+4 {
+		return false
+	}
+	roles := make(map[string]bool)
+	for name, bytes := range resource.PeakByContainerBytes {
+		if bytes <= 0 || resource.ObservedCgroupPeakBytes[name] <= 0 || !resource.OOMObserved[name] {
+			return false
+		}
+		role := ""
+		for _, suffix := range []string{"api", "scheduler", "postgres-1", "minio-1"} {
+			if strings.HasSuffix(name, "-"+suffix) {
+				role = suffix
+			}
+		}
+		expectedIncarnations := 1
+		for index := 1; index <= workers; index++ {
+			suffix := fmt.Sprintf("worker-%d", index)
+			if strings.HasSuffix(name, "-"+suffix) {
+				role = suffix
+				expectedIncarnations = 2
+				if index == 1 {
+					expectedIncarnations = 3
+				}
+			}
+		}
+		if role == "" || roles[role] || resource.CgroupIncarnations[name] != expectedIncarnations {
+			return false
+		}
+		roles[role] = true
+	}
+	return len(roles) == workers+4
 }
 
 func calculateCost(report map[string]any, price prices) costReport {

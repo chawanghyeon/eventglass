@@ -236,3 +236,56 @@ func TestFailedIngestCycleJoinsEveryRequest(t *testing.T) {
 		t.Fatal("failed request became successful cycle")
 	}
 }
+
+func TestColdCacheRequiresEveryChangedWorkerIdentity(t *testing.T) {
+	a, b, c, d := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64), strings.Repeat("d", 64)
+	valid := "worker-1 " + a + " " + b + "\nworker-2 " + c + " " + d + "\n"
+	if err := verifyWorkerReplacements(valid, 2); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"", "worker-1 " + a + " " + a, valid + valid, "worker-1 " + a + " " + b, strings.Replace(valid, d, b, 1), strings.Replace(valid, d, strings.Repeat("z", 64), 1)} {
+		if err := verifyWorkerReplacements(invalid, 2); err == nil {
+			t.Fatal("invalid cold-worker evidence accepted")
+		}
+	}
+}
+
+func TestPhaseIODeltaRejectsCounterResets(t *testing.T) {
+	before := comparisonReport{S3RangeRequests: 2, S3RangeBytes: 10, S3GetRequests: 1}
+	after := comparisonReport{S3RangeRequests: 3, S3RangeBytes: 30, S3GetRequests: 1}
+	delta, err := ioDelta(before, after)
+	if err != nil || delta.RangeGET != 1 || delta.RangeBytes != 20 || delta.GET != 0 {
+		t.Fatalf("delta=%+v err=%v", delta, err)
+	}
+	after.S3GetRequests = 0
+	if _, err := ioDelta(before, after); err == nil {
+		t.Fatal("counter reset became valid phase evidence")
+	}
+}
+
+func TestAllHistoryRegexPinsWindowAndToken(t *testing.T) {
+	var requests atomic.Int64
+	start, end := int64(1_000_000), int64(3_601_000_000)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["start_us"] != fmt.Sprint(start) || body["end_us"] != fmt.Sprint(end) || body["time_basis"] != "received" || body["expression"] == nil {
+			t.Errorf("not fixed all-history regex: %v", body)
+		}
+		if requests.Add(1) == 2 && body["read_token"] != "pinned" {
+			t.Error("warm request lost snapshot token")
+		}
+		_, _ = w.Write([]byte(`{"snapshot_id":"snapshot","read_token":"pinned","complete":true,"rows":[{"record_id":"same"}],"stats":{"objects":"2","cache_bytes":"0"}}`))
+	}))
+	defer server.Close()
+	cold, err := allHistoryRegex(context.Background(), server.Client(), server.URL, comparisonState{TenantID: 1, ProjectID: 2}, "csrf", start, end, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	warm, err := allHistoryRegex(context.Background(), server.Client(), server.URL, comparisonState{TenantID: 1, ProjectID: 2}, "csrf", start, end, cold.ReadToken)
+	if err != nil || regexRowsHash(cold.Rows) != regexRowsHash(warm.Rows) {
+		t.Fatalf("warm mismatch: %v", err)
+	}
+}

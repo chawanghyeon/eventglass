@@ -37,6 +37,7 @@ type comparisonState struct {
 }
 
 type comparisonReport struct {
+	PostLoad                                        *postLoadEvidence `json:",omitempty"`
 	Operations                                      map[string]comparisonOperation
 	Revision, Architecture, FixtureDefinitionSHA256 string
 	SubmittedInput                                  submittedInput
