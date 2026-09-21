@@ -1,0 +1,83 @@
+# Sourced only by check-comparison after its isolated topology is ready.
+# It deliberately reuses that runner's budgets, image and resource collectors.
+capacity_test() {
+  capacity_name=$1
+  shift
+  docker run --rm --name "$capacity_name" --platform linux/arm64 --network "${active_project}_default" \
+    -v "$artifacts_dir:/comparison" -v "$run_dir/capacity.test:/capacity.test:ro" \
+    -e EVENTGLASS_DATABASE_URL="$database_url" \
+    -e EVENTGLASS_COMPARISON_BASE_URL="http://${api_container}:8080" \
+    -e EVENTGLASS_COMPARISON_STATE=/comparison/state.json \
+    -e EVENTGLASS_COMPARISON_REPORT=/comparison/report.json \
+    -e EVENTGLASS_COMPARISON_WORKERS="$workers" \
+    -e EVENTGLASS_COMPARISON_REVISION="$revision" \
+    -e EVENTGLASS_COMPARISON_METRICS="$metrics" \
+    -e EVENTGLASS_CAPACITY_CYCLES="$capacity_cycles" \
+    -e EVENTGLASS_CAPACITY_READY=/comparison/capacity.ready \
+    --entrypoint /capacity.test "$build_image" -test.v -test.count=1 -test.timeout=20m "$@"
+}
+
+run_capacity_profile() {
+  capacity_observer="${active_project}-capacity-observer"
+  index=1
+  while [ "$index" -le "$workers" ]; do
+    worker="${active_project}-worker-$index"
+    docker run --rm --platform linux/arm64 --network "${active_project}_default" \
+      --entrypoint curl "$build_image" --retry 20 --retry-connrefused --retry-delay 1 \
+      --retry-max-time 30 --max-time 2 -fsS "http://${worker}:9090/metrics" \
+      >>"$artifacts_dir/state.json.paused-metrics"
+    docker pause "$worker" >/dev/null
+    test "$(docker inspect --format '{{.State.Paused}}' "$worker")" = true
+    index=$((index + 1))
+  done
+  status=0
+  capacity_test "$capacity_observer" -test.run '^TestPrepareCapacityWorkload$' \
+    >"$artifacts_dir/capacity-preload.log" 2>&1 || status=$?
+  if [ "$status" -eq 0 ]; then
+    capacity_test "$capacity_observer" -test.run '^TestMeasureCapacityDrain$' \
+      >"$artifacts_dir/capacity-drain.log" 2>&1 &
+    capacity_pid=$!
+    attempts=0
+    until [ -s "$artifacts_dir/capacity.ready" ]; do
+      if ! kill -0 "$capacity_pid" 2>/dev/null; then status=1; break; fi
+      attempts=$((attempts + 1))
+      if [ "$attempts" -gt 60 ]; then status=1; break; fi
+      sleep 1
+    done
+  fi
+  # Unpause on either success or failure before cgroup inspection/cleanup.
+  index=1
+  while [ "$index" -le "$workers" ]; do
+    docker unpause "${active_project}-worker-$index" >/dev/null || status=1
+    index=$((index + 1))
+  done
+  if [ -n "${capacity_pid:-}" ]; then
+    if [ "$status" -ne 0 ]; then docker rm -f "$capacity_observer" >/dev/null 2>&1 || true; fi
+    wait "$capacity_pid" || status=$?
+    capacity_pid=""
+  fi
+  capacity_observer=""
+  kill "$stats_pid" >/dev/null 2>&1 || true
+  wait "$stats_pid" >/dev/null 2>&1 || true
+  stats_pid=""
+  for container in $app_containers "${active_project}-postgres-1" "${active_project}-minio-1"; do
+    capture_cgroup "$container" || status=1
+    docker inspect --format '{{.Name}} {{.State.OOMKilled}}' "$container" >>"$oom_file" || status=1
+  done
+  if [ -f "$artifacts_dir/report.json" ]; then
+    "$run_dir/capacity-report" capacity "$artifacts_dir/report.json" "$stats_file" "$oom_file" "$cgroup_file" || status=1
+  else
+    status=1
+  fi
+  evidence_dir=$(mktemp -d "$ROOT/.tools/capacity-report-${workers}.XXXXXX")
+  cp "$run_dir/capacity-environment.txt" "$evidence_dir/environment.txt"
+  for name in report.json docker-stats.jsonl docker-oom.tsv cgroup-memory.tsv capacity-preload.log capacity-drain.log; do
+    if [ -f "$artifacts_dir/$name" ]; then cp "$artifacts_dir/$name" "$evidence_dir/$name"; fi
+  done
+  for container in $app_containers; do docker logs "$container" >"$evidence_dir/$container.log" 2>&1 || true; done
+  cat "$artifacts_dir/capacity-preload.log"
+  if [ -f "$artifacts_dir/capacity-drain.log" ]; then cat "$artifacts_dir/capacity-drain.log"; fi
+  printf 'Capacity retained evidence: %s\n' "$evidence_dir"
+  if [ "$status" -ne 0 ]; then exit "$status"; fi
+  printf '%s\n' "$evidence_dir/report.json" >>"$run_dir/capacity-reports.txt"
+}

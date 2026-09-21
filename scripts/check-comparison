@@ -7,11 +7,13 @@ case "$(uname -m)" in
   arm64|aarch64) ;;
   *) echo "comparison verification supports ARM64 only" >&2; exit 1 ;;
 esac
+mode=${EVENTGLASS_COMPARISON_MODE:-sustained}
+case "$mode" in sustained|capacity) ;; *) echo 'invalid comparison mode' >&2; exit 2 ;; esac
 
 # Exercise reporting/provenance/error cleanup contracts before measuring load.
 GOCACHE="$ROOT/.tools/go-build-cache" GOMODCACHE="$ROOT/.tools/go-mod-cache" \
   go test -tags comparison -count=1 \
-  -skip '^(TestPrepareComparisonInstallation|TestSustainedComparison|TestPostLoadComparison)$' \
+  -skip '^(TestPrepareComparisonInstallation|TestSustainedComparison|TestPostLoadComparison|TestPrepareCapacityWorkload|TestMeasureCapacityDrain)$' \
   ./tests/comparison ./tests/comparison/report
 
 revision=$(git rev-parse HEAD)
@@ -40,14 +42,23 @@ else
   ./scripts/build-image --target build --load --tag eventglass-go:comparison-build
   ./scripts/build-image --load --tag eventglass-go:comparison-runtime
 fi
-if [ "${EVENTGLASS_COMPARISON_QUICK:-}" != "1" ]; then
+if [ "$mode" = sustained ] && [ "${EVENTGLASS_COMPARISON_QUICK:-}" != "1" ]; then
   # Mode A must exercise the actual engine, not only the selector checksums.
   ./scripts/check-native-oracle
 fi
 run_dir=$(mktemp -d "$ROOT/.tools/eventglass-comparison.XXXXXX")
 active_project=""
 app_containers=""
+stats_pid=""
+capacity_observer=""
+capacity_pid=""
 cleanup_profile() {
+  if [ -n "$capacity_observer" ]; then docker rm -f "$capacity_observer" >/dev/null 2>&1 || true; fi
+  if [ -n "$capacity_pid" ]; then wait "$capacity_pid" >/dev/null 2>&1 || true; fi
+  if [ -n "$stats_pid" ]; then kill "$stats_pid" >/dev/null 2>&1 || true; wait "$stats_pid" >/dev/null 2>&1 || true; fi
+  capacity_observer=""
+  capacity_pid=""
+  stats_pid=""
   for container in $app_containers; do docker rm -f "$container" >/dev/null 2>&1 || true; done
   if [ -n "$active_project" ]; then
     docker compose -p "$active_project" -f deploy/compose.yaml down --volumes --remove-orphans >/dev/null 2>&1 || true
@@ -61,7 +72,29 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then
+if [ "$mode" = capacity ]; then
+  if [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then
+    profiles=${EVENTGLASS_COMPARISON_WORKERS:-"1 2 4"}
+    capacity_cycles=32
+  else
+    profiles="1 2 4 1 2 4 1 2 4"
+    capacity_cycles=128
+  fi
+  # Compile before starting any timed capacity phase, including the reporter.
+  docker run --rm --platform linux/arm64 --network none -v "$run_dir:/comparison" \
+    -v "$ROOT/tests/comparison:/src/tests/comparison:ro" -w /src "$build_image" \
+    go test -tags comparison -c -o /comparison/capacity.test ./tests/comparison
+  go build -o "$run_dir/capacity-report" ./tests/comparison/report
+  {
+    printf 'revision=%s\n' "$revision"
+    docker image inspect --format '{{.Id}} {{.Architecture}}' "$build_image" "$runtime_image"
+    docker info --format 'host_arch={{.Architecture}} host_cpus={{.NCPU}} host_memory={{.MemTotal}}'
+    shasum -a 256 "$run_dir/capacity.test" tests/comparison/capacity_test.go scripts/comparison-capacity
+    docker run --rm --platform linux/arm64 --network none "$build_image" \
+      sha256sum /out/eventglass-go /opt/duckdb/lib/libduckdb_bundle.a
+    printf '%s\n' 'role_cpu=1 role_memory=512MiB swap=0 scratch=tmpfs isolated_PG_S3=tmpfs preload_concurrency=1 projects=4 native_dependencies=pinned'
+  } >"$run_dir/capacity-environment.txt"
+elif [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then
   profiles="${EVENTGLASS_COMPARISON_WORKERS:-1}"
   warmup=${EVENTGLASS_COMPARISON_WARMUP:-20s}
   load=${EVENTGLASS_COMPARISON_LOAD:-60s}
@@ -114,9 +147,13 @@ capture_cgroup() {
   ' sh "$observed_container" "$observed_id" >>"$cgroup_file"
 }
 
+profile_index=0
 for workers in $profiles; do
+  case "$workers" in 1|2|4) ;; *) echo 'workers must be 1,2,4' >&2; exit 2 ;; esac
+  profile_index=$((profile_index + 1))
+  if [ "$profile_index" -gt 9 ]; then echo 'at most nine comparison profiles are allowed' >&2; exit 2; fi
   active_project="eventglass-go-comparison-${workers}-$$"
-  profile_dir="$run_dir/workers-$workers"
+  profile_dir="$run_dir/workers-$workers-$profile_index"
   secrets_dir="$profile_dir/secrets"
   artifacts_dir="$profile_dir/artifacts"
   mkdir -p "$secrets_dir" "$artifacts_dir"
@@ -206,6 +243,15 @@ for workers in $profiles; do
   ) &
   stats_pid=$!
 
+  if [ "$mode" = capacity ]; then
+    # Same disposable topology/budgets as the sustained runner; only the
+    # workload and resource-incarnation policy differ. No runtime test flags.
+    . "$ROOT/scripts/comparison-capacity"
+    run_capacity_profile
+    cleanup_profile
+    continue
+  fi
+
   (
     # Keep the process restart inside sustained load without synchronizing it
     # to the five-second interactive-query tick. Expired in-flight query leases
@@ -286,6 +332,7 @@ for workers in $profiles; do
   fi
   kill "$stats_pid" >/dev/null 2>&1 || true
   wait "$stats_pid" >/dev/null 2>&1 || true
+  stats_pid=""
   for container in $app_containers "${active_project}-postgres-1" "${active_project}-minio-1"; do
     capture_cgroup "$container" || status=1
     docker inspect --format '{{.Name}} {{.State.OOMKilled}}' "$container" >>"$oom_file" || status=1
@@ -331,6 +378,12 @@ for workers in $profiles; do
   echo "R3 comparison evidence: $ROOT/.tools/comparison-workers-$workers.json"
   cleanup_profile
 done
+
+if [ "$mode" = capacity ]; then
+  matrix=$(mktemp "$ROOT/.tools/capacity-matrix.XXXXXX")
+  "$run_dir/capacity-report" capacity-matrix "$run_dir/capacity-reports.txt" "$matrix"
+  echo "Capacity matrix: $matrix"
+fi
 
 GOCACHE="$ROOT/.tools/go-build-cache" GOMODCACHE="$ROOT/.tools/go-mod-cache" \
   go test -count=1 -run '^TestFixedDatasetProfilesMatchIndependentOracle$' -v ./tests/comparison

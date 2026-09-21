@@ -251,6 +251,20 @@ remaining per-input round trips: actual PG checks show14/38/134/518→9 calls fo
 scope/generation/size rejection and joined cancellation/concurrent retry.
 R3 remains first incomplete; raw-object download success is not a substitute.
 
+Independent capacity now has an executable `scripts/check capacity` matrix,
+separate from the mixed-load SLO. Paused disposable workers receive exactly the
+same number of real durable-ACK jobs across four projects, then drain with the
+existing publication pipeline. A32-cycle/3,360-record diagnostic passes all
+three profiles:1/2/4 workers drain192 jobs in23.203/12.301/7.400s, respectively
+144.809/273.149/454.054 records/s (speedup1/1.886/3.136). Every project's public
+log/error counts match, with complete PG/S3/role cgroup observations and OOM0.
+This is one sample per profile on a dirty harness tree, not an official capacity
+or live-ingestion SLO pass. Run the clean128-cycle matrix with three independent
+installations per worker count. All four subsequent native-oracle containers
+passed on0bf0956, but editing its dispatcher mid-run caused the outer command
+to fail; a complete frozen-source rerun also remains required. See quality.md
+for retained evidence, memory and actual S3 transfer scope.
+
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured
 miss and revise implementation; do not relabel target as achieved by design.

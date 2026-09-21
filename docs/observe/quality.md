@@ -1431,6 +1431,88 @@ not authorized AWS or selfhost-provider release evidence. Host ARM64 uncached
 race checks pass control1.360s/app4.243s/maintenance1.651s; frozen source-design
 hash is unchanged. Logs use `.tools/reservation-{unit,codegen,integration,recovery,browser}.log`.
 
+The subsequent clean0bf0956 Mode A build reran all four native-fixture-v1 sizes
+in separate CPU1/512MiB/no-swap ARM64 cgroups with192MiB native query memory.
+All four actual test containers exit0 with OOM/kill0; typed filters, exact
+partition identities, paired files, half-open boundaries and equal-time pages
+pass. The outer `scripts/check` dispatcher nevertheless returns2: it was edited
+to add the capacity command while its delegated native test was running, so its
+shell resumed reading at an obsolete source-file offset. This is an execution
+mistake, not an engine test failure, but the whole command is **not** recorded
+as passing. Freeze the scripts before the next complete command run.
+
+| Records | Native-oracle elapsed | Analytics files / bytes | Cgroup peak bytes |
+| --- | --- | --- | --- |
+|10,000|2.006s|4 /540,409|186,687,488|
+|100,000|11.338s|26 /5,318,576|189,206,528|
+|1,000,000|102.274s|221 /52,794,512|244,535,296|
+|10,000,000|996.152s|2,196 /528,495,771|536,875,008|
+
+The10m run includes normalization148.943s/conversion600.338s,682,231,716 journal
+bytes and277,310,711,032 cumulative supervisor allocated bytes (not resident
+memory). Its cgroup has2,149 max events and no OOM/kills; the one-page transient
+peak over the limit is not headroom proof. S3 requests/network bytes are0.
+Actual10m envelope SHA remains
+`1497dc8c86ac7ed8990b081b5d74e71833a75ef3185a4e6529fdb218aca2f5ec`.
+These are scoped observations, not a paired performance improvement or R3 SLO
+pass. Container states, hashes and logs: `.tools/native-oracle.uXZ3wm` and
+`.tools/reservation-native-oracle.log`.
+
+### Independent queued-work capacity matrix
+
+`scripts/check capacity` reuses the comparison runner's isolated ARM64 topology,
+budgets and resource collectors. It does not alter runtime scheduling, Accept,
+publication, query authorization, snapshots or backup/GC interlocks. Actual HTTP
+ACKs preload four projects while workers are paused. Requests are sequential so
+random lane coalescing cannot change the number of durable jobs between runs.
+The observer verifies zero publication and the exact pending job count before
+signalling resume; measured drain includes Docker resume overhead. It then
+checks every project's complete log/error count through the public query API.
+Preload, drain and query-verification work are distinguished; no monthly bill
+is inferred from a finite queued-work experiment.
+
+The32-cycle quick matrix on0bf0956 plus the dirty harness passes all three
+profiles, each with3,360 records/192 jobs and four exact800-log/40-error public
+results. Native dependencies are unchanged and no heavy build/check overlapped
+the timed phases. Colima has4 CPUs/8GiB; every Go role retains CPU1/512MiB/swap0,
+non-root/read-only operation and bounded scratch. PG/S3 are fresh shared tmpfs
+services, not AWS or disk-backed capacity evidence.
+
+| Workers | Drain | Records/s | Relative speedup / efficiency | Whole-installation sampled peak bytes |
+| --- | --- | --- | --- | --- |
+|1|23.203s|144.809|1 /1|459,397,920|
+|2|12.301s|273.149|1.886 /0.943|432,165,352|
+|4|7.400s|454.054|3.136 /0.784|567,839,550|
+
+Observed worker cgroup peaks are40,824,832 bytes for1 worker,
+41,586,688/41,893,888 for2 and38,637,568–40,022,016 for4; all role/provider
+incarnations have resource observations, OOM/kill0. These are observed memory
+peaks, not total Go allocations or unbounded capacity claims. Drain full GETs
+are960 for every profile, transferring5,697,414/5,696,117/5,696,880 bytes;
+PUTs384 with2,692,249/2,691,725/2,692,208 bytes; HEAD387/388/390; Range GET0.
+Drain WAL is4,363,080/4,150,336/4,215,048 bytes. Public count verification adds
+192 Range GETs and1,695,602/1,695,162/1,695,510 bytes, recorded separately from
+drain. Maintenance remains enabled, so provider totals include its actual work.
+
+This establishes executable measurement, not a product before/after speedup,
+maximum live-ingestion throughput, linear scalability or R3 completion. The
+full matrix requires128 cycles/13,440 records/768 jobs and three fresh samples
+per profile on clean source. The report rejects partial project counts,
+differently batched jobs, already progressing or undrained work, invalid hashes,
+inconsistent rates, missing PG/S3 resources or unverified cgroup limits; its
+capacity policy does not relax sustained-run restart/cold incarnation checks.
+Evidence: `.tools/capacity-quick.log`, `.tools/capacity-matrix.OYQQEj`, and
+`.tools/capacity-report-1.ywSL2p`, `-2.s9086K`, `-4.VbSSQW`.
+
+Validation passes unit/vet/architecture/layout, byte-identical Go/TypeScript
+code generation, shell syntax, and uncached ARM64 race checks for comparison
+16.909s/report1.238s. The first sandboxed race attempt could not bind localhost;
+the permitted rerun executes the real HTTP retry tests successfully. The fresh
+non-root ARM64 release image also passes its actual Chromium flow in2.6s.
+Frozen source-design bytes remain unchanged. Logs use
+`.tools/capacity-{unit,codegen,race,browser}.log`. No API/schema or capability
+coverage changed; R3/R4 remain incomplete.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

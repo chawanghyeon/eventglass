@@ -17,8 +17,11 @@ import and missing-object failure. R1's CPU1/512MiB/swap0 containment gate also
 passes. R2's autoscale control, fair claims and bounded Kubernetes/KEDA baseline
 also pass. R3's latest1/2/4-worker official-duration profiles pass the former
 target map, but audited ACK sampling and maintenance-budget omissions require
-corrected measurements. The budgeted short diagnostic still misses query,
-load-backlog and cancellation-overrun targets. Independent capacity/efficiency is still missing; R3
+corrected measurements. The latest clean0004b4f budgeted short diagnostic still
+misses query and load-backlog targets, although that run has no cancellation
+budget overrun. Independent fixed-work capacity now has an executable1/2/4-worker
+matrix and a passing32-cycle diagnostic; the clean128-cycle three-sample matrix
+and corrected official-duration service measurements remain required. R3
 remains the first incomplete packet and R4 remains dependency-blocked. Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises

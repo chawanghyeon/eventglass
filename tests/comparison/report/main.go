@@ -82,6 +82,14 @@ type costReport struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "capacity" {
+		capacityMain(os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "capacity-matrix" {
+		capacityMatrixMain(os.Args[2:])
+		return
+	}
 	if len(os.Args) != 6 {
 		fatal("usage: comparison-report report.json stats.jsonl oom.tsv pricing.json cgroup.tsv")
 	}
@@ -240,6 +248,10 @@ func readResources(statsPath, oomPath, cgroupPath string) resourceReport {
 }
 
 func resourceEvidenceComplete(resource resourceReport, workers int) bool {
+	return resourceEvidenceForProfile(resource, workers, true)
+}
+
+func resourceEvidenceForProfile(resource resourceReport, workers int, restartAndCold bool) bool {
 	if workers != 1 && workers != 2 && workers != 4 {
 		return false
 	}
@@ -262,9 +274,11 @@ func resourceEvidenceComplete(resource resourceReport, workers int) bool {
 			suffix := fmt.Sprintf("worker-%d", index)
 			if strings.HasSuffix(name, "-"+suffix) {
 				role = suffix
-				expectedIncarnations = 2
-				if index == 1 {
-					expectedIncarnations = 3
+				if restartAndCold {
+					expectedIncarnations = 2
+					if index == 1 {
+						expectedIncarnations = 3
+					}
 				}
 			}
 		}

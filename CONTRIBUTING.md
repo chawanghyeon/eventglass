@@ -16,6 +16,7 @@ The active product is the root Go module. Use Go 1.27.1 exactly and run commands
 ./scripts/check resource
 ./scripts/check scale
 ./scripts/check comparison
+./scripts/check capacity
 ./scripts/check native-oracle
 ./scripts/check sdk
 ./scripts/check crash
@@ -146,6 +147,24 @@ native profiles. The official runner does not forward this override and always
 uses192MiB; neither product limits nor a failed gate may be bypassed with it.
 Capacity/scaling measurements and all phases under the official-duration
 profile remain required before R3 closure.
+`./scripts/check capacity` adds a separate fixed-work publication-capacity
+matrix: three fresh installations per1/2/4-worker profile,128 cycles each
+(12,800 logs+640 errors, exactly768 durable jobs across four projects). It
+preloads actual HTTP ACKs while the disposable workers are paused, awaits each
+ACK to prevent random lane coalescing, then starts observation before resuming
+them. Throughput includes resume overhead and ends at complete publication;
+preload and the per-project public-query count oracle are recorded separately.
+This is independent queued-work processing, not maximum live-ingestion capacity
+or a replacement for the5min/30min/10min mixed-load SLO. It preserves every
+role's CPU1/512MiB/no-swap profile, samples PG/S3 as shared costs, and records
+actual input hashes, image/test identities, progress, S3 operations/bytes, WAL,
+cgroup peaks/OOM and median speedup/efficiency without assuming linear scaling.
+Fixed-work drain reports do not extrapolate a steady-state monthly bill.
+`EVENTGLASS_COMPARISON_QUICK=1 ./scripts/check capacity` uses32 cycles and one
+sample per worker count for harness diagnosis only. Dirty/reused sources,
+shortened workloads or fewer samples remain diagnostic. Evidence is retained
+under `.tools/capacity-report-N.*` with a `.tools/capacity-matrix.*` summary;
+do not run heavy work alongside either capacity or sustained measurements.
 `EVENTGLASS_COMPARISON_QUICK=1` permits shorter local
 diagnostics but cannot complete R3. A generated report whose target map contains
 `false` remains a failed gate; do not relabel the measurement as a pass.

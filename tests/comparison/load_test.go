@@ -769,6 +769,11 @@ func collectS3Metrics(t *testing.T, client *http.Client, report *comparisonRepor
 	if len(endpoints) < 3 {
 		t.Fatal("EVENTGLASS_COMPARISON_METRICS must include API, scheduler, and worker listeners")
 	}
+	collectS3MetricsFrom(t, client, report, endpoints)
+}
+
+func collectS3MetricsFrom(t *testing.T, client *http.Client, report *comparisonReport, endpoints []string) {
+	t.Helper()
 	for _, endpoint := range endpoints {
 		response, err := client.Get(strings.TrimSpace(endpoint) + "/metrics")
 		if err != nil {
