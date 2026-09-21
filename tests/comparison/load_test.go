@@ -36,33 +36,37 @@ type comparisonState struct {
 }
 
 type comparisonReport struct {
-	Revision, Architecture, DatasetSHA256    string
-	Workers                                  int
-	WarmupSeconds, LoadSeconds               int64
-	LogicalLogs, LogicalErrors               int64
-	Accepted, Duplicates, Conflicts          int64
-	ACKSamples, QuerySamples                 int
-	VisibilitySamples                        int
-	RowsQuerySamples, HistogramQuerySamples  int
-	QueryFailures                            int
-	ACKP50MS, ACKP95MS, ACKP99MS             int64
-	QueryP50MS, QueryP95MS, QueryP99MS       int64
-	RowsQueryP95MS, HistogramQueryP95MS      int64
-	VisibilityP95MS                          int64
-	ColdRegexMS                              int64
-	ColdRegexFailed                          bool
-	MaxConversionBacklog, FinalBacklog       int64
-	LoadBacklogSamples, LoadBacklogMax       int64
-	LoadBacklogSlopePerMinute                float64
-	DrainMS                                  int64
-	PGDatabaseStartBytes, PGDatabaseEndBytes int64
-	PGWALBytes                               int64
-	S3Objects, S3StoredBytes                 int64
-	S3PutRequests, S3HeadRequests            uint64
-	S3GetRequests, S3RangeRequests           uint64
-	S3PutBytes, S3GetBytes, S3RangeBytes     uint64
-	StartedAt, FinishedAt                    time.Time
-	Targets                                  map[string]bool
+	Revision, Architecture, DatasetSHA256     string
+	Workers                                   int
+	WarmupSeconds, LoadSeconds                int64
+	LogicalLogs, LogicalErrors                int64
+	Accepted, Duplicates, Conflicts           int64
+	ACKSamples, QuerySamples                  int
+	VisibilitySamples                         int
+	RowsQuerySamples, HistogramQuerySamples   int
+	QueryFailures                             int
+	QueryFailureCodes                         map[string]int
+	QueryJobStates                            map[string]int
+	ACKP50MS, ACKP95MS, ACKP99MS              int64
+	QueryP50MS, QueryP95MS, QueryP99MS        int64
+	RowsQueryP95MS, HistogramQueryP95MS       int64
+	RowsServerP95MS, HistogramServerP95MS     int64
+	RowsOverheadP95MS, HistogramOverheadP95MS int64
+	VisibilityP95MS                           int64
+	ColdRegexMS                               int64
+	ColdRegexFailed                           bool
+	MaxConversionBacklog, FinalBacklog        int64
+	LoadBacklogSamples, LoadBacklogMax        int64
+	LoadBacklogSlopePerMinute                 float64
+	DrainMS                                   int64
+	PGDatabaseStartBytes, PGDatabaseEndBytes  int64
+	PGWALBytes                                int64
+	S3Objects, S3StoredBytes                  int64
+	S3PutRequests, S3HeadRequests             uint64
+	S3GetRequests, S3RangeRequests            uint64
+	S3PutBytes, S3GetBytes, S3RangeBytes      uint64
+	StartedAt, FinishedAt                     time.Time
+	Targets                                   map[string]bool
 }
 
 type sessionWire struct {
@@ -134,16 +138,20 @@ func TestSustainedComparison(t *testing.T) {
 	defer pool.Close()
 
 	report := comparisonReport{Revision: os.Getenv("EVENTGLASS_COMPARISON_REVISION"), Architecture: "linux/arm64", Workers: workers,
-		WarmupSeconds: int64(warmup.Seconds()), LoadSeconds: int64(load.Seconds()), StartedAt: time.Now().UTC(), Targets: make(map[string]bool)}
+		WarmupSeconds: int64(warmup.Seconds()), LoadSeconds: int64(load.Seconds()), StartedAt: time.Now().UTC(), Targets: make(map[string]bool), QueryFailureCodes: make(map[string]int), QueryJobStates: make(map[string]int)}
 	report.DatasetSHA256 = fixedFixtureSummaries[10_000_000].SHA256
 	report.PGDatabaseStartBytes, _, _ = pgSize(t, pool)
 	walStart := pgWAL(t, pool)
 
 	var ackLatencies, queryLatencies, rowsQueryLatencies, histogramQueryLatencies, visibilityLatencies []time.Duration
+	var rowsServerLatencies, histogramServerLatencies, rowsOverheadLatencies, histogramOverheadLatencies []time.Duration
 	var latencyMu sync.Mutex
 	queryContext, stopQueries := context.WithCancel(context.Background())
 	queryErrors := make(chan error, 1)
-	go runMixedQueries(queryContext, client, baseURL, state, session.CSRFToken, warmup, &latencyMu, &queryLatencies, &rowsQueryLatencies, &histogramQueryLatencies, &visibilityLatencies, &report.QueryFailures, queryErrors)
+	go runMixedQueries(queryContext, client, baseURL, state, session.CSRFToken, warmup, &latencyMu,
+		&queryLatencies, &rowsQueryLatencies, &histogramQueryLatencies,
+		&rowsServerLatencies, &histogramServerLatencies, &rowsOverheadLatencies, &histogramOverheadLatencies,
+		&visibilityLatencies, &report.QueryFailures, report.QueryFailureCodes, queryErrors)
 
 	sequence := int64(0)
 	if err := runIngestPhase(client, baseURL, state, warmup, false, &sequence, &ackLatencies, &report); err != nil {
@@ -188,6 +196,27 @@ func TestSustainedComparison(t *testing.T) {
 	if err := pool.QueryRow(context.Background(), `SELECT COALESCE(sum(accepted_count),0),COALESCE(sum(duplicate_count),0),COALESCE(sum(conflict_count),0) FROM receipts WHERE tenant_id=$1`, state.TenantID).Scan(&report.Accepted, &report.Duplicates, &report.Conflicts); err != nil {
 		t.Fatal(err)
 	}
+	jobStates, err := pool.Query(context.Background(), `SELECT state,COALESCE(error_code,''),count(*) FROM query_jobs WHERE tenant_id=$1 GROUP BY state,error_code ORDER BY state,error_code`, state.TenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for jobStates.Next() {
+		var state, code string
+		var count int
+		if err := jobStates.Scan(&state, &code, &count); err != nil {
+			jobStates.Close()
+			t.Fatal(err)
+		}
+		if code != "" {
+			state += ":" + code
+		}
+		report.QueryJobStates[state] = count
+	}
+	if err := jobStates.Err(); err != nil {
+		jobStates.Close()
+		t.Fatal(err)
+	}
+	jobStates.Close()
 
 	report.ACKSamples = len(ackLatencies)
 	report.QuerySamples = len(queryLatencies)
@@ -195,12 +224,14 @@ func TestSustainedComparison(t *testing.T) {
 	report.ACKP50MS, report.ACKP95MS, report.ACKP99MS = percentileMS(ackLatencies, .50), percentileMS(ackLatencies, .95), percentileMS(ackLatencies, .99)
 	report.QueryP50MS, report.QueryP95MS, report.QueryP99MS = percentileMS(queryLatencies, .50), percentileMS(queryLatencies, .95), percentileMS(queryLatencies, .99)
 	report.RowsQueryP95MS, report.HistogramQueryP95MS = percentileMS(rowsQueryLatencies, .95), percentileMS(histogramQueryLatencies, .95)
+	report.RowsServerP95MS, report.HistogramServerP95MS = percentileMS(rowsServerLatencies, .95), percentileMS(histogramServerLatencies, .95)
+	report.RowsOverheadP95MS, report.HistogramOverheadP95MS = percentileMS(rowsOverheadLatencies, .95), percentileMS(histogramOverheadLatencies, .95)
 	report.VisibilitySamples = len(visibilityLatencies)
 	report.VisibilityP95MS = percentileMS(visibilityLatencies, .95)
-	if latency, _, searchErr := search(context.Background(), client, baseURL, state, session.CSRFToken, false, true); searchErr != nil {
+	if measurement, searchErr := search(context.Background(), client, baseURL, state, session.CSRFToken, false, true); searchErr != nil {
 		report.ColdRegexFailed = true
 	} else {
-		report.ColdRegexMS = latency.Milliseconds()
+		report.ColdRegexMS = measurement.Total.Milliseconds()
 	}
 	collectS3Metrics(t, client, &report)
 	report.FinishedAt = time.Now().UTC()
@@ -331,7 +362,10 @@ func postEnvelopeWithAdmissionRetry(client *http.Client, baseURL string, state c
 	}
 }
 
-func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, state comparisonState, csrf string, delay time.Duration, mu *sync.Mutex, latencies, rows, histograms, visibility *[]time.Duration, failures *int, result chan<- error) {
+func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, state comparisonState, csrf string, delay time.Duration, mu *sync.Mutex,
+	latencies, rows, histograms, rowsServer, histogramsServer, rowsOverhead, histogramsOverhead, visibility *[]time.Duration,
+	failures *int, failureCodes map[string]int, result chan<- error,
+) {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -349,10 +383,9 @@ func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, s
 			result <- nil
 			return
 		case <-ticker.C:
-			started := time.Now()
 			histogram := queryIndex%2 == 1
 			queryIndex++
-			latency, visible, err := search(ctx, client, baseURL, state, csrf, histogram, false)
+			measurement, err := search(ctx, client, baseURL, state, csrf, histogram, false)
 			if err != nil {
 				if ctx.Err() != nil {
 					result <- nil
@@ -360,28 +393,63 @@ func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, s
 				}
 				mu.Lock()
 				(*failures)++
+				failureCodes[searchFailureCode(err)]++
 				mu.Unlock()
 				continue
 			}
-			if latency == 0 {
-				latency = time.Since(started)
-			}
 			mu.Lock()
-			*latencies = append(*latencies, latency)
+			*latencies = append(*latencies, measurement.Total)
 			if histogram {
-				*histograms = append(*histograms, latency)
+				*histograms = append(*histograms, measurement.Total)
+				*histogramsServer = append(*histogramsServer, measurement.Server)
+				*histogramsOverhead = append(*histogramsOverhead, measurement.Overhead())
 			} else {
-				*rows = append(*rows, latency)
+				*rows = append(*rows, measurement.Total)
+				*rowsServer = append(*rowsServer, measurement.Server)
+				*rowsOverhead = append(*rowsOverhead, measurement.Overhead())
 			}
-			if visible >= 0 {
-				*visibility = append(*visibility, visible)
+			if measurement.Visibility >= 0 {
+				*visibility = append(*visibility, measurement.Visibility)
 			}
 			mu.Unlock()
 		}
 	}
 }
 
-func search(ctx context.Context, client *http.Client, baseURL string, state comparisonState, csrf string, histogram, regex bool) (time.Duration, time.Duration, error) {
+func searchFailureCode(err error) string {
+	if err == nil {
+		return "ok"
+	}
+	message := err.Error()
+	if status, body, ok := strings.Cut(message, " body="); ok && strings.HasPrefix(status, "search status=") {
+		// The server returns only a fixed public error code. Do not store
+		// raw response bodies, query data or driver messages in reports.
+		var response struct {
+			Code string `json:"code"`
+		}
+		if json.Unmarshal([]byte(body), &response) == nil && response.Code != "" {
+			return strings.TrimPrefix(status, "search status=") + ":" + response.Code
+		}
+		return strings.TrimPrefix(status, "search status=") + ":unknown"
+	}
+	return "client_or_decode_failure"
+}
+
+type searchMeasurement struct {
+	Total      time.Duration
+	Server     time.Duration
+	Visibility time.Duration
+}
+
+func (measurement searchMeasurement) Overhead() time.Duration {
+	overhead := measurement.Total - measurement.Server
+	if overhead < 0 {
+		return 0
+	}
+	return overhead
+}
+
+func search(ctx context.Context, client *http.Client, baseURL string, state comparisonState, csrf string, histogram, regex bool) (searchMeasurement, error) {
 	now := time.Now()
 	body := map[string]any{"tenant_id": strconv.FormatInt(state.TenantID, 10), "project_ids": []string{strconv.FormatInt(state.ProjectID, 10)},
 		"start_us": strconv.FormatInt(now.Add(-15*time.Minute).UnixMicro(), 10), "end_us": strconv.FormatInt(now.Add(time.Minute).UnixMicro(), 10),
@@ -412,18 +480,18 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		request.Header.Set("X-CSRF-Token", csrf)
 		response, err := client.Do(request)
 		if err != nil {
-			return 0, 0, err
+			return searchMeasurement{}, err
 		}
 		data, err = io.ReadAll(io.LimitReader(response.Body, 8<<20))
 		response.Body.Close()
 		if err != nil {
-			return 0, 0, err
+			return searchMeasurement{}, err
 		}
 		if response.StatusCode == http.StatusOK {
 			break
 		}
 		if (response.StatusCode != http.StatusServiceUnavailable && response.StatusCode != http.StatusTooManyRequests) || time.Since(started) >= 15*time.Second {
-			return 0, 0, fmt.Errorf("search status=%d body=%s", response.StatusCode, data)
+			return searchMeasurement{}, fmt.Errorf("search status=%d body=%s", response.StatusCode, data)
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
@@ -433,16 +501,21 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		} `json:"rows"`
 		Stats struct {
 			VisibilityLagMS *string `json:"visibility_lag_ms"`
+			ElapsedMS       string  `json:"elapsed_ms"`
 		} `json:"stats"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
-		return 0, 0, err
+		return searchMeasurement{}, err
+	}
+	serverMS, err := strconv.ParseInt(wire.Stats.ElapsedMS, 10, 64)
+	if err != nil || serverMS < 0 {
+		return searchMeasurement{}, fmt.Errorf("invalid query elapsed_ms %q", wire.Stats.ElapsedMS)
 	}
 	visible := time.Duration(-1)
 	if wire.Stats.VisibilityLagMS != nil {
 		value, parseErr := strconv.ParseInt(*wire.Stats.VisibilityLagMS, 10, 64)
 		if parseErr != nil {
-			return 0, 0, parseErr
+			return searchMeasurement{}, parseErr
 		}
 		visible = time.Duration(value) * time.Millisecond
 	} else if !histogram && len(wire.Rows) > 0 {
@@ -453,7 +526,7 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		for _, row := range wire.Rows {
 			value, parseErr := strconv.ParseInt(row.ReceivedTimeUS, 10, 64)
 			if parseErr != nil {
-				return 0, 0, parseErr
+				return searchMeasurement{}, parseErr
 			}
 			newest = max(newest, value)
 		}
@@ -463,7 +536,7 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		}
 		visible = lag
 	}
-	return time.Since(started), visible, nil
+	return searchMeasurement{Total: time.Since(started), Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible}, nil
 }
 
 func drainBacklog(t *testing.T, pool *pgxpool.Pool, limit time.Duration) (int64, int64) {

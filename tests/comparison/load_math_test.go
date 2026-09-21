@@ -3,6 +3,7 @@
 package comparison
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -41,5 +42,23 @@ func TestWorkloadTargetsRequireLatencySamples(t *testing.T) {
 	setWorkloadTargets(&report, 0)
 	if !report.Targets["ack_p95_le_500ms"] || !report.Targets["visibility_p95_le_5s"] {
 		t.Fatal("measured zero latency satisfies the numeric targets")
+	}
+}
+
+func TestSearchMeasurementOverheadDoesNotGoNegative(t *testing.T) {
+	if got := (searchMeasurement{Total: 120 * time.Millisecond, Server: 80 * time.Millisecond}).Overhead(); got != 40*time.Millisecond {
+		t.Fatalf("overhead=%s", got)
+	}
+	if got := (searchMeasurement{Total: 80 * time.Millisecond, Server: 120 * time.Millisecond}).Overhead(); got != 0 {
+		t.Fatalf("negative overhead=%s", got)
+	}
+}
+
+func TestSearchFailureCodeNeverReportsRawResponse(t *testing.T) {
+	if got := searchFailureCode(fmt.Errorf(`search status=422 body={"code":"query_limit_exceeded","message":"private"}`)); got != "422:query_limit_exceeded" {
+		t.Fatalf("error code=%q", got)
+	}
+	if got := searchFailureCode(fmt.Errorf("a private transport error")); got != "client_or_decode_failure" {
+		t.Fatalf("transport error code=%q", got)
 	}
 }

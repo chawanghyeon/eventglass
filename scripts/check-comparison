@@ -12,6 +12,28 @@ revision=$(git rev-parse HEAD)
 if [ -n "$(git status --porcelain)" ]; then
   revision="${revision}-dirty"
 fi
+reuse_images=${EVENTGLASS_COMPARISON_REUSE_IMAGES:-}
+build_image=${EVENTGLASS_COMPARISON_BUILD_IMAGE:-eventglass-go:comparison-build}
+runtime_image=${EVENTGLASS_COMPARISON_RUNTIME_IMAGE:-eventglass-go:comparison-runtime}
+if [ -n "$reuse_images" ] && [ "$reuse_images" != "1" ]; then
+  echo "EVENTGLASS_COMPARISON_REUSE_IMAGES must be 1 or unset" >&2
+  exit 2
+fi
+if [ "$reuse_images" = "1" ]; then
+  if [ "${EVENTGLASS_COMPARISON_QUICK:-}" != "1" ]; then
+    echo "comparison image reuse is restricted to quick diagnostics" >&2
+    exit 2
+  fi
+  docker image inspect "$build_image" "$runtime_image" >/dev/null
+  revision=${EVENTGLASS_COMPARISON_REUSE_REVISION:-unverified-reused-image}
+else
+  if [ "$build_image" != "eventglass-go:comparison-build" ] || [ "$runtime_image" != "eventglass-go:comparison-runtime" ]; then
+    echo "custom comparison images are restricted to quick reuse diagnostics" >&2
+    exit 2
+  fi
+  docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:comparison-build .
+  docker buildx build --platform linux/arm64 --load --tag eventglass-go:comparison-runtime .
+fi
 run_dir=$(mktemp -d "$ROOT/.tools/eventglass-comparison.XXXXXX")
 active_project=""
 app_containers=""
@@ -28,9 +50,6 @@ cleanup() {
   rm -rf "$run_dir"
 }
 trap cleanup EXIT INT TERM
-
-docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:comparison-build .
-docker buildx build --platform linux/arm64 --load --tag eventglass-go:comparison-runtime .
 
 if [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then
   profiles="${EVENTGLASS_COMPARISON_WORKERS:-1}"
@@ -66,7 +85,7 @@ start_runtime() {
     -e AWS_ACCESS_KEY_ID=eventglass-local \
     -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
     -e EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE=/run/eventglass/alert.hex \
-    eventglass-go:comparison-runtime run >/dev/null
+    "$runtime_image" run >/dev/null
 }
 
 for workers in $profiles; do
@@ -94,7 +113,7 @@ for workers in $profiles; do
   done
   migration_attempt=0
   until docker run --rm --platform linux/arm64 --network "${active_project}_default" \
-    -e EVENTGLASS_DATABASE_URL="$database_url" eventglass-go:comparison-runtime migrate; do
+    -e EVENTGLASS_DATABASE_URL="$database_url" "$runtime_image" migrate; do
     migration_attempt=$((migration_attempt + 1))
     if [ "$migration_attempt" -ge 30 ]; then echo "comparison migration did not become ready" >&2; exit 1; fi
     sleep 1
@@ -122,15 +141,15 @@ for workers in $profiles; do
     -e EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE=/run/eventglass/alert.hex \
     -e AWS_ACCESS_KEY_ID=eventglass-local \
     -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
-    eventglass-go:comparison-runtime run >/dev/null
+    "$runtime_image" run >/dev/null
   app_containers="$api_container"
 
   docker run --rm --platform linux/arm64 --network "${active_project}_default" \
-    -v "$artifacts_dir:/comparison" -w /src \
+    -v "$artifacts_dir:/comparison" -v "$ROOT/tests/comparison:/src/tests/comparison:ro" -w /src \
     -e EVENTGLASS_COMPARISON_BASE_URL="http://${api_container}:8080" \
     -e EVENTGLASS_COMPARISON_STATE=/comparison/state.json \
     -e EVENTGLASS_COMPARISON_BOOTSTRAP_TOKEN="$bootstrap_token" \
-    --entrypoint go eventglass-go:comparison-build \
+    --entrypoint go "$build_image" \
     test -tags comparison -count=1 -run '^TestPrepareComparisonInstallation$' -v ./tests/comparison
 
   public_url=https://eventglass.invalid
@@ -161,10 +180,13 @@ for workers in $profiles; do
   stats_pid=$!
 
   (
-    if [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then sleep 35; else sleep 1200; fi
+    # Keep the process restart inside sustained load without synchronizing it
+    # to the five-second interactive-query tick. Expired in-flight query leases
+    # are exercised by the dedicated PostgreSQL integration test.
+    if [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then sleep 44; else sleep 1204; fi
     victim="${active_project}-worker-1"
     docker run --rm --platform linux/arm64 --network "${active_project}_default" \
-      --entrypoint curl eventglass-go:comparison-build -fsS "http://${victim}:9090/metrics" \
+      --entrypoint curl "$build_image" -fsS "http://${victim}:9090/metrics" \
       >"$artifacts_dir/restarted-worker.metrics"
     docker kill "$victim" >/dev/null
     docker inspect --format '{{.Name}} {{.State.OOMKilled}}' "$victim" >>"$oom_file"
@@ -175,7 +197,7 @@ for workers in $profiles; do
 
   set +e
   docker run --rm --platform linux/arm64 --network "${active_project}_default" \
-    -v "$artifacts_dir:/comparison" -w /src \
+    -v "$artifacts_dir:/comparison" -v "$ROOT/tests/comparison:/src/tests/comparison:ro" -w /src \
     -e EVENTGLASS_DATABASE_URL="$database_url" \
     -e EVENTGLASS_COMPARISON_BASE_URL="http://${api_container}:8080" \
     -e EVENTGLASS_COMPARISON_STATE=/comparison/state.json \
@@ -188,7 +210,7 @@ for workers in $profiles; do
     -e EVENTGLASS_COMPARISON_REVISION="$revision" \
     -e EVENTGLASS_COMPARISON_METRICS="$metrics" \
     -e EVENTGLASS_COMPARISON_RESTART_METRICS=/comparison/restarted-worker.metrics \
-    --entrypoint go eventglass-go:comparison-build \
+    --entrypoint go "$build_image" \
     test -tags comparison -count=1 -timeout "$test_timeout" -run '^TestSustainedComparison$' -v ./tests/comparison
   status=$?
   set -e

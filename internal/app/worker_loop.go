@@ -14,6 +14,7 @@ const (
 	workerLease     = 30 * time.Second
 	workerHeartbeat = 10 * time.Second
 	workerIdle      = 100 * time.Millisecond
+	queryTaskBurst  = control.MaxRunningQueryTasks * 2
 )
 
 func (runtime *Runtime) runWorker(ctx context.Context) error {
@@ -25,7 +26,7 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 	groups := [][]workerOperation{
 		{{"publication", runtime.runOnePublication}},
 		{{"delivery", runtime.runOneDelivery}, {"gc", runtime.runOneGC}},
-		{{"conversion", runtime.runOneConversion}, {"query_plan", runtime.runOneQueryCoordinator}, {"query", runtime.runOneQuery}, {"retention", runtime.runOneRetention}, {"compaction", runtime.runOneCompaction}},
+		runtime.nativeWorkerOperations(),
 	}
 	results := make(chan error, len(groups))
 	for _, group := range groups {
@@ -37,6 +38,19 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 		cancel()
 	}
 	return result
+}
+
+func (runtime *Runtime) nativeWorkerOperations() []workerOperation {
+	// A distributed query has up to MaxRunningQueryTasks ready partitions. Give
+	// those partitions plus one bounded reducer level a bounded burst so
+	// a conversion does not get inserted between every short query child. The
+	// following conversion slot preserves durable ingest progress under a
+	// continuous query queue.
+	work := []workerOperation{{"conversion", runtime.runOneConversion}, {"query_plan", runtime.runOneQueryCoordinator}}
+	for range queryTaskBurst {
+		work = append(work, workerOperation{"query", runtime.runOneQuery})
+	}
+	return append(work, workerOperation{"retention", runtime.runOneRetention}, workerOperation{"compaction", runtime.runOneCompaction})
 }
 
 type workerOperation struct {

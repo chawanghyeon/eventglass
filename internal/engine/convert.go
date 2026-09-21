@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -412,10 +413,9 @@ func inspectPartition(ctx context.Context, db *sql.DB, index int, current partit
 	var result ConvertedBundle
 	result.Index, result.EventDay, result.Kind = index, current.day, current.kind
 	stats := &result.Analytics
-	err := db.QueryRowContext(ctx, `SELECT count(*),min(event_time_us),max(event_time_us),min(received_time_us),max(received_time_us),min(batch_seq),max(batch_seq) FROM read_parquet(?)`, analyticsPath).Scan(
-		&stats.RowCount, &stats.MinEventTimeUS, &stats.MaxEventTimeUS, &stats.MinReceivedTimeUS, &stats.MaxReceivedTimeUS, &stats.MinBatchSeq, &stats.MaxBatchSeq)
-	if err != nil || stats.RowCount <= 0 {
-		return result, errors.Join(errors.New("invalid analytics output stats"), err)
+	identity, projects, err := inspectAnalyticsRows(ctx, db, analyticsPath, stats)
+	if err != nil {
+		return result, err
 	}
 	stats.Path = analyticsPath
 	stats.Evidence, err = storage.InspectFile(analyticsPath)
@@ -431,58 +431,100 @@ func inspectPartition(ctx context.Context, db *sql.DB, index int, current partit
 	if stats.Evidence.Bytes > MaxBundleFileBytes || result.Payload.Evidence.Bytes > MaxBundleFileBytes {
 		return result, errors.New("conversion output exceeds hard file target")
 	}
-	var payloadRows, mismatches int64
-	err = db.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM read_parquet(?)),(SELECT count(*) FROM ((SELECT record_id FROM read_parquet(?)) EXCEPT ALL (SELECT record_id FROM read_parquet(?))))+(SELECT count(*) FROM ((SELECT record_id FROM read_parquet(?)) EXCEPT ALL (SELECT record_id FROM read_parquet(?))))`, payloadPath, analyticsPath, payloadPath, payloadPath, analyticsPath).Scan(&payloadRows, &mismatches)
-	if err != nil || payloadRows != stats.RowCount || mismatches != 0 {
+	payloadIdentity, payloadRows, err := identityAndCountForQuery(ctx, db, `SELECT record_id FROM read_parquet(?) ORDER BY record_id`, []any{payloadPath})
+	if err != nil || payloadRows != stats.RowCount || payloadIdentity != identity {
 		return result, errors.Join(errors.New("analytics and payload record sets differ"), err)
 	}
-	result.RowCount = stats.RowCount
-	result.IdentitySHA256, err = identityForQuery(ctx, db, `SELECT record_id FROM read_parquet(?) ORDER BY record_id`, []any{analyticsPath})
-	if err != nil {
-		return result, err
-	}
-	rows, err := db.QueryContext(ctx, `SELECT DISTINCT project_id FROM read_parquet(?) ORDER BY project_id`, analyticsPath)
-	if err != nil {
-		return result, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var projectID int64
-		if err := rows.Scan(&projectID); err != nil {
-			return result, err
-		}
-		result.ProjectIDs = append(result.ProjectIDs, projectID)
-	}
-	return result, rows.Err()
+	result.RowCount, result.IdentitySHA256, result.ProjectIDs = stats.RowCount, identity, projects
+	return result, nil
 }
 
-func identityForQuery(ctx context.Context, db *sql.DB, query string, arguments []any) (string, error) {
-	rows, err := db.QueryContext(ctx, query, arguments...)
+func inspectAnalyticsRows(ctx context.Context, db *sql.DB, path string, stats *ConvertedFile) (string, []int64, error) {
+	rows, err := db.QueryContext(ctx, `SELECT record_id,project_id,event_time_us,received_time_us,batch_seq FROM read_parquet(?) ORDER BY record_id`, path)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer rows.Close()
 	hash := sha256.New()
 	previous := ""
+	projects := make(map[int64]struct{})
+	for rows.Next() {
+		var recordID string
+		var projectID, eventTime, receivedTime, batchSeq int64
+		if err := rows.Scan(&recordID, &projectID, &eventTime, &receivedTime, &batchSeq); err != nil {
+			return "", nil, err
+		}
+		if err := appendRecordIdentity(hash, recordID, previous); err != nil || projectID <= 0 || batchSeq <= 0 {
+			return "", nil, errors.Join(errors.New("invalid analytics output row"), err)
+		}
+		previous = recordID
+		if stats.RowCount == 0 {
+			stats.MinEventTimeUS, stats.MaxEventTimeUS = eventTime, eventTime
+			stats.MinReceivedTimeUS, stats.MaxReceivedTimeUS = receivedTime, receivedTime
+			stats.MinBatchSeq, stats.MaxBatchSeq = batchSeq, batchSeq
+		} else {
+			stats.MinEventTimeUS, stats.MaxEventTimeUS = min(stats.MinEventTimeUS, eventTime), max(stats.MaxEventTimeUS, eventTime)
+			stats.MinReceivedTimeUS, stats.MaxReceivedTimeUS = min(stats.MinReceivedTimeUS, receivedTime), max(stats.MaxReceivedTimeUS, receivedTime)
+			stats.MinBatchSeq, stats.MaxBatchSeq = min(stats.MinBatchSeq, batchSeq), max(stats.MaxBatchSeq, batchSeq)
+		}
+		stats.RowCount++
+		projects[projectID] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return "", nil, err
+	}
+	if stats.RowCount <= 0 {
+		return "", nil, errors.New("invalid analytics output stats")
+	}
+	projectIDs := make([]int64, 0, len(projects))
+	for projectID := range projects {
+		projectIDs = append(projectIDs, projectID)
+	}
+	sort.Slice(projectIDs, func(i, j int) bool { return projectIDs[i] < projectIDs[j] })
+	return hex.EncodeToString(hash.Sum(nil)), projectIDs, nil
+}
+
+func identityForQuery(ctx context.Context, db *sql.DB, query string, arguments []any) (string, error) {
+	identity, _, err := identityAndCountForQuery(ctx, db, query, arguments)
+	return identity, err
+}
+
+func identityAndCountForQuery(ctx context.Context, db *sql.DB, query string, arguments []any) (string, int64, error) {
+	rows, err := db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return "", 0, err
+	}
+	defer rows.Close()
+	hash := sha256.New()
+	previous := ""
+	var count int64
 	for rows.Next() {
 		var recordID string
 		if err := rows.Scan(&recordID); err != nil {
-			return "", err
+			return "", 0, err
 		}
-		if recordID <= previous || len(recordID) != 64 || recordID != strings.ToLower(recordID) {
-			return "", errors.New("output record identities are invalid or duplicated")
+		if err := appendRecordIdentity(hash, recordID, previous); err != nil {
+			return "", 0, err
 		}
-		if _, err := hex.DecodeString(recordID); err != nil {
-			return "", err
-		}
-		_, _ = io.WriteString(hash, recordID)
-		_, _ = io.WriteString(hash, "\n")
 		previous = recordID
+		count++
 	}
 	if err := rows.Err(); err != nil {
-		return "", err
+		return "", 0, err
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	return hex.EncodeToString(hash.Sum(nil)), count, nil
+}
+
+func appendRecordIdentity(hash io.Writer, recordID, previous string) error {
+	if recordID <= previous || len(recordID) != 64 || recordID != strings.ToLower(recordID) {
+		return errors.New("output record identities are invalid or duplicated")
+	}
+	if _, err := hex.DecodeString(recordID); err != nil {
+		return err
+	}
+	_, _ = io.WriteString(hash, recordID)
+	_, _ = io.WriteString(hash, "\n")
+	return nil
 }
 
 func strictJSON(data []byte, target any) error {

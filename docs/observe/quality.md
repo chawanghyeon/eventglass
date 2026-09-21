@@ -167,6 +167,31 @@ tax, cross-region transfer, and multi-AZ premium are explicit exclusions. This
 is measured failure evidence, not a cost or performance claim. R3 remains
 incomplete and R4 cannot start as a completed dependent gate.
 
+On 2026-09-21, further R3 diagnostics separated response latency from the
+server's durable query-job elapsed time. Under a 20s/60s/90s one-worker profile,
+the prior image measured rows/histogram p95 890/1,150ms, of which 798/1,052ms
+were durable job time; the difference was 92/93ms. A bounded eight-task worker
+round-robin and one-pass Parquet output inspection (analytics stats/identity/
+projects together, payload count/identity together) retain per-file block and
+whole SHA-256 evidence plus S3 full readback. The comparable quick candidate
+measured rows/histogram p95 498/449ms, visibility p95 878ms, peak conversion
+backlog 20 versus 68 and drain 2.007s versus 6.013s; ACK p95 was 375ms versus
+372ms. S3 requests (PUT/HEAD/GET/Range) changed from 1,497/2,478/3,752/191
+to 1,494/2,607/3,649/197; bytes are retained in the local report. Image reuse
+is explicitly diagnostic and reports its supplied revision; official R3 still
+builds fresh ARM64 images. This short result does not prove a 30-minute SLO or
+isolate conversion-only attribution from schedule effects. The longer
+20s/300s/90s candidate showed slope -2.27 jobs/min, peak backlog 33, 2.012s
+drain, ACK p95 373ms and visibility p95 2.040s, but only four successful
+queries, 18 failures and rows/histogram p95 640/744ms. In the latest short run,
+two failed HTTP responses were 503 dependency_unavailable and only four durable
+jobs existed, all succeeded; this disproves the hypothesis that those failures
+were expired query-task leases. Their pre-job cause still needs diagnosis. R3
+remains incomplete and no release claim follows. Paired-file concurrent upload
+and two native children per CPU1 worker were rejected; the latter doubled
+average conversion duration and missed throughput/latency targets. No relaxed
+verification or GC override was retained.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

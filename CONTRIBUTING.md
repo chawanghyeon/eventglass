@@ -58,6 +58,14 @@ backlog, whole-installation RSS, PG/WAL, S3 request/transfer, and dated cost
 report under `.tools/`. `EVENTGLASS_COMPARISON_QUICK=1` permits shorter local
 diagnostics but cannot complete R3. A generated report whose target map contains
 `false` remains a failed gate; do not relabel the measurement as a pass.
+For diagnostic iteration only, combine `EVENTGLASS_COMPARISON_QUICK=1` with
+`EVENTGLASS_COMPARISON_REUSE_IMAGES=1` to reuse pre-existing ARM64 build/runtime
+images. Optional `EVENTGLASS_COMPARISON_BUILD_IMAGE` and
+`EVENTGLASS_COMPARISON_RUNTIME_IMAGE` select named local candidates; set
+`EVENTGLASS_COMPARISON_REUSE_REVISION` to their actual source revision or the
+report says `unverified-reused-image`. The runner mounts current comparison
+test sources but does not rebuild the reused product binary. Never use this mode
+to claim official completion; the full command always builds fresh images.
 
 Complete and verify one gate at a time, then commit directly to `main` and run `git push origin main`. Use commit subjects such as `feat: 한국어 변경 요약`, selecting `fix`, `perf`, `test`, `docs`, or `chore` as appropriate. Do not bypass hooks or rewrite published history merely to normalize messages.
 
