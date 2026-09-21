@@ -228,6 +228,15 @@ for workers in $profiles; do
     report_status=$?
     set -e
     if [ "$status" -eq 0 ] && [ "$report_status" -ne 0 ]; then status=$report_status; fi
+    # Keep each run's evidence; the latest-run files below are overwritten.
+    evidence_dir=$(mktemp -d "$ROOT/.tools/comparison-report-${workers}.XXXXXX")
+    cp "$artifacts_dir/report.json" "$evidence_dir/report.json"
+    cp "$stats_file" "$evidence_dir/docker-stats.jsonl"
+    cp "$oom_file" "$evidence_dir/docker-oom.tsv"
+    for container in $app_containers; do
+      docker logs "$container" >"$evidence_dir/$container.log" 2>&1 || true
+    done
+    echo "R3 retained evidence: $evidence_dir"
   fi
   if [ "$status" -ne 0 ]; then
     if [ -f "$artifacts_dir/report.json" ]; then

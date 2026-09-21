@@ -231,6 +231,47 @@ object count646 versus340), so this is an end-to-end same-workload comparison,
 not isolated attribution to scan partition size. Query, visibility and
 load-backlog targets still fail; R3 remains incomplete.
 
+A subsequent paired 20s/300s/90s diagnostic used the same ARM64 CPU1/512MiB
+profile, 33,600 accepted records and dataset SHA, comparing `fc16e34` with
+empty-query-claim suppression. Both completed59 searches without query failure,
+conflict or cgroup OOM. Ready queries retain their eight-slot bounded burst;
+an empty query claim runs once rather than eight times per scheduling sweep.
+
+| Measurement | Baseline | Empty-claim suppression |
+|---|---:|---:|
+| ACK p95 ms | 375 | 374 |
+| Rows / histogram p95 ms | 1,580 / 1,834 | 766 / 789 |
+| Visibility p95 ms | 9,953 | 6,022 |
+| Load backlog slope jobs/min | +14.35 | +9.66 |
+| Maximum backlog / drain ms | 163 / 12,016 | 68 / 6,020 |
+| S3 PUT / HEAD / GET / Range requests | 6,096 / 63,549 / 13,521 / 2,148 | 6,183 / 29,956 / 15,500 / 2,045 |
+| S3 PUT / GET / Range bytes | 34,365,078 / 76,385,151 / 19,126,566 | 42,211,488 / 102,270,091 / 21,318,441 |
+| PG WAL bytes | 86,789,104 | 81,562,688 |
+| Whole installation / worker peak sampled bytes | 798,894,324 / 75,895,930 | 814,722,579 / 82,124,472 |
+
+Compaction trajectories again differ (last query planned1,063 versus260 files),
+so the latency delta is not isolated attribution. Transfer bytes and sampled
+memory increased; no blanket cost or memory improvement is claimed. Private
+operation counters now survive report aggregation across the injected restart;
+the candidate recorded2,257 query calls/179 claimed attempts and264.673s of
+conversion work. The interrupted query attempt contributes one operation failure
+but no public-query failure. These are short diagnostics, not the official
+R3 pass: query latency, visibility and load-backlog growth remain out of target.
+
+Real PostgreSQL regression tests also reproduced recovery writes rolling back
+when a claim found no next task: the third expired attempt remained `running`,
+and query-specific help lost another task's requeue. Control now commits these
+recovery updates on benign no-work/capacity returns; stale heartbeat and late
+completion remain fenced and a fourth attempt is never admitted.
+
+`BenchmarkOpenThreadConfiguration` checks one suspected native startup cost
+without changing production initialization. Five2s Linux ARM64 CPU1/512MiB
+samples gave median12.567ms,5,963 Go B/op,170 allocs/op for setting threads
+after open versus12.226ms,6,359 B/op,173 allocs/op for `threads=1` in the DSN.
+This small startup-only difference does not explain the141ms mean conversion
+work time; it was not promoted as an end-to-end optimization. Go allocations
+exclude native memory, and this local benchmark performs no S3 requests.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

@@ -105,6 +105,14 @@ scan preserved the byte/manifest/child limits and completed all 59 searches;
 rows/histogram p95 changed from 1,750/1,951ms to 854/1,068ms, while
 visibility p95 was 13.605s and backlog still grew +27.34 jobs/min. This is
 diagnostic evidence with different compaction trajectories, not a G07 pass.
+The next same-profile pair suppressed repeated empty query claims in app's
+bounded worker sweep: rows/histogram p95 changed1,580/1,834ms to766/789ms,
+visibility9.953s to6.022s, and backlog slope+14.35 to+9.66 jobs/min. All59 queries
+completed, but query/visibility/backlog targets still miss. Request bytes and
+sampled memory increased; full metrics and limitations are in quality.md.
+PostgreSQL regression coverage additionally exposed and fixed recovery rollback
+on a no-work claim, including retry exhaustion and query-specific help; this
+transaction policy stays in control, separate from app scheduling.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

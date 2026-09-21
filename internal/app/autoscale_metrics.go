@@ -50,4 +50,5 @@ func (runtime *Runtime) serveAutoscaleMetrics(writer http.ResponseWriter, reques
 	_, _ = fmt.Fprintf(writer, "eventglass_s3_transfer_bytes_total{direction=\"put\"} %d\n", operations.PutBytes)
 	_, _ = fmt.Fprintf(writer, "eventglass_s3_transfer_bytes_total{direction=\"get\"} %d\n", operations.FullGetBytes)
 	_, _ = fmt.Fprintf(writer, "eventglass_s3_transfer_bytes_total{direction=\"range_get\"} %d\n", operations.RangeBytes)
+	runtime.stats.writeMetrics(writer)
 }

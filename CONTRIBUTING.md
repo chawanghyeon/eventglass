@@ -55,7 +55,12 @@ PostgreSQL and MinIO installations with 1, 2, and 4 ARM64 workers. The official
 profile uses a five-minute warmup, 30-minute load, and ten-minute drain for each
 worker count, exercises a real worker restart, and writes its measured latency,
 backlog, whole-installation RSS, PG/WAL, S3 request/transfer, and dated cost
-report under `.tools/`. `EVENTGLASS_COMPARISON_QUICK=1` permits shorter local
+report under `.tools/`. Each completed measurement retains its report, cgroup
+samples and runtime logs in a unique `.tools/comparison-report-N.*` directory;
+the convenience `comparison-workers-N*.json` files represent only the latest
+run. Reports also accumulate private role-operation counters across the worker
+restart to distinguish empty claims from work time.
+`EVENTGLASS_COMPARISON_QUICK=1` permits shorter local
 diagnostics but cannot complete R3. A generated report whose target map contains
 `false` remains a failed gate; do not relabel the measurement as a pass.
 For diagnostic iteration only, combine `EVENTGLASS_COMPARISON_QUICK=1` with

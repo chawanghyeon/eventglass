@@ -25,4 +25,14 @@ func TestOperationStatsSanitizesAndBoundsRepeatedFailures(t *testing.T) {
 	if stats.entries["query"].failures != 20 {
 		t.Fatal("lost operation counters")
 	}
+	stats.record(context.Background(), "query", time.Now().Add(-time.Second), false, nil)
+	var metrics bytes.Buffer
+	stats.writeMetrics(&metrics)
+	if strings.Contains(metrics.String(), "private-secret") ||
+		!strings.Contains(metrics.String(), `eventglass_operation_calls_total{operation="query"} 21`) ||
+		!strings.Contains(metrics.String(), `eventglass_operation_work_total{operation="query"} 20`) ||
+		!strings.Contains(metrics.String(), `eventglass_operation_failures_total{operation="query"} 20`) ||
+		stats.entries["query"].elapsed-stats.entries["query"].busy < time.Second {
+		t.Fatalf("idle/work accounting or redaction failed: %s", metrics.String())
+	}
 }

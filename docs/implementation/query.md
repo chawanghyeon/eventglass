@@ -171,6 +171,9 @@ Retry transient native crash at most2 retries (3 total), with unchanged partitio
 identity. Deterministic resource-limit failure is terminal. Adaptive splitting
 is outside v1; explicit failure is safer than double-counting an old partition
 and its replacements. Do not add superseded states or partial success to v1.
+Lease recovery and retry-exhaustion failure must commit even when the same
+claim finds no runnable task (including query-specific help and admission
+limits); absence of new work does not roll back already-performed recovery.
 
 Coordinator takeover increments its fence, reads the existing manifest and
 winning task refs, resumes merge, never replans a different snapshot. Cancellation

@@ -145,6 +145,11 @@ Publication and delivery/GC have joined loops separate from native work, so a
 long query cannot block their dispatch. This is not a claim of tenant fairness
 or the 20% maintenance-time policy: those remain measured R1/R2 work. Bounded
 operation logs report counts, failures and duration without raw error text.
+The same fixed role labels expose call/work/failure and elapsed/work-time
+counters on the private metrics endpoint. A bounded native query burst keeps
+its ready-work slots, but an empty claim is checked only once per scheduling
+sweep; other progress or the idle interval starts a fresh sweep. These are app
+dispatch rules, not replacements for control's durable claims or query's work.
 Query and maintenance reserve input/output/spill against the shared disk budget
 and release only after child completion and successful scratch removal. This
 conservative reservation is not a proof of filesystem hard limits or RSS.

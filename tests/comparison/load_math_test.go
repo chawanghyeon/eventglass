@@ -34,6 +34,16 @@ func TestAddS3MetricsAccumulatesRestartedWorker(t *testing.T) {
 	}
 }
 
+func TestComparisonOperationMetricsAccumulateRestartedProcess(t *testing.T) {
+	var report comparisonReport
+	metrics := []byte("eventglass_operation_calls_total{operation=\"query\"} 12\neventglass_operation_work_total{operation=\"query\"} 3\neventglass_operation_failures_total{operation=\"query\"} 1\neventglass_operation_elapsed_ms_total{operation=\"query\"} 55\neventglass_operation_work_ms_total{operation=\"query\"} 40\n")
+	addS3Metrics(metrics, &report)
+	addS3Metrics(metrics, &report)
+	if got := report.Operations["query"]; got != (comparisonOperation{Calls: 24, Work: 6, Failures: 2, ElapsedMS: 110, WorkMS: 80}) {
+		t.Fatalf("restart operation counters=%+v", got)
+	}
+}
+
 func TestWorkloadTargetsRequireLatencySamples(t *testing.T) {
 	report := comparisonReport{ACKP95MS: 0, VisibilityP95MS: 0, Targets: make(map[string]bool)}
 	setWorkloadTargets(&report, 0)

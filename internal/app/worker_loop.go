@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/chawanghyeon/eventglass/internal/control"
@@ -60,11 +61,22 @@ type workerOperation struct {
 
 func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperation) error {
 	next := 0
+	idle := make([]string, 0, len(work))
 	for ctx.Err() == nil {
+		idle = idle[:0]
 		var progressed bool
 		var err error
 		for offset := range work {
+			if ctx.Err() != nil {
+				break
+			}
 			index := (next + offset) % len(work)
+			// Repeated slots give ready queries a bounded burst. Once a claim
+			// finds no work, do not repeat its database transaction in this
+			// sweep. Recheck after other progress or the normal idle interval.
+			if slices.Contains(idle, work[index].name) {
+				continue
+			}
 			started := time.Now()
 			progressed, err = work[index].run(ctx)
 			runtime.stats.record(ctx, work[index].name, started, progressed, err)
@@ -72,6 +84,7 @@ func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperati
 				next = (index + 1) % len(work)
 				break
 			}
+			idle = append(idle, work[index].name)
 		}
 		if ctx.Err() != nil {
 			break

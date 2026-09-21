@@ -305,6 +305,98 @@ func TestQueryCoordinatorTakeoverCancellationAndLateResultFence(t *testing.T) {
 	}
 }
 
+func TestExpiredQueryRecoveryCommitsWithoutClaimableTask(t *testing.T) {
+	for _, targeted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("targeted=%t", targeted), func(t *testing.T) {
+			fixture := setupAcceptFixture(t, 974)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			operations, tokenHash := setupQueryPrincipal(t, fixture)
+			snapshot, err := operations.CreateSnapshot(ctx, snapshotCommand(t, fixture, tokenHash, 1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			operation := []byte(`{"kind":"search"}`)
+			digest := sha256.Sum256(operation)
+			queryID := snapshotUUID(fixture.tenantID, 900)
+			job, err := operations.CreateQuery(ctx, control.CreateQueryCommand{
+				QueryID: queryID, SessionTokenHash: tokenHash, TenantID: fixture.tenantID, SnapshotID: snapshot.SnapshotID,
+				OperationKind: "search", OperationHash: hex.EncodeToString(digest[:]), OperationBytes: operation, Owner: "coordinator", Timeout: time.Minute,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := query.BuildExecutionPlan(query.PlanScope{
+				QueryID: queryID, TenantID: fixture.tenantID, SnapshotID: snapshot.SnapshotID, Generation: 1,
+				OperationHash: hex.EncodeToString(digest[:]), Operation: operation, DeadlineUS: job.Deadline.UnixMicro(),
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := operations.SealQueryPlan(ctx, control.SealQueryPlanCommand{
+				Authority: job.Authority, PlanSHA256: plan.SHA256, Tasks: plan.Tasks, ScanCount: plan.ScanCount, ManifestBytes: plan.ManifestBytes,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var last *control.QueryTask
+			var completion control.CompleteQueryTaskCommand
+			for attempt := 1; attempt <= 3; attempt++ {
+				task, err := operations.ClaimQueryTask(ctx, acceptInstallationID, 1, "worker")
+				if err != nil || task == nil || task.Authority.Attempt != attempt {
+					t.Fatalf("attempt=%d task=%#v err=%v", attempt, task, err)
+				}
+				if last != nil && task.Authority.Fence != last.Authority.Fence+1 {
+					t.Fatalf("replacement fence=%d previous=%d", task.Authority.Fence, last.Authority.Fence)
+				}
+				last = task
+				if attempt == 3 {
+					completion = registerUploadedQueryIntentFixture(t, ctx, operations, task, 11)
+				}
+				if _, err := fixture.pool.Exec(ctx, `UPDATE query_tasks SET lease_until=clock_timestamp()-interval '1 second' WHERE query_id=$1`, queryID); err != nil {
+					t.Fatal(err)
+				}
+				if targeted && attempt < 3 {
+					// Helping a different query must still persist lease recovery.
+					got, err := operations.ClaimQueryTaskForQuery(ctx, acceptInstallationID, 1, "helper", snapshotUUID(fixture.tenantID, 901))
+					if err != nil || got != nil {
+						t.Fatalf("unrelated claim=%#v err=%v", got, err)
+					}
+					var state string
+					if err := fixture.pool.QueryRow(ctx, `SELECT state FROM query_tasks WHERE query_id=$1`, queryID).Scan(&state); err != nil || state != "queued" {
+						t.Fatalf("recovered state=%s err=%v", state, err)
+					}
+				}
+			}
+			for range 2 {
+				var got *control.QueryTask
+				if targeted {
+					got, err = operations.ClaimQueryTaskForQuery(ctx, acceptInstallationID, 1, "helper", queryID)
+				} else {
+					got, err = operations.ClaimQueryTask(ctx, acceptInstallationID, 1, "worker")
+				}
+				if err != nil || got != nil {
+					t.Fatalf("exhausted claim=%#v err=%v", got, err)
+				}
+				status, err := operations.GetQueryStatus(ctx, tokenHash, fixture.tenantID, queryID)
+				if err != nil || status.State != "failed" || status.ErrorCode != "query_worker_failed" {
+					t.Fatalf("exhausted status=%#v err=%v", status, err)
+				}
+			}
+			var state string
+			var attempt int
+			if err := fixture.pool.QueryRow(ctx, `SELECT state,attempt FROM query_tasks WHERE query_id=$1`, queryID).Scan(&state, &attempt); err != nil || state != "canceled" || attempt != 3 {
+				t.Fatalf("task state=%s attempt=%d err=%v", state, attempt, err)
+			}
+			if _, err := operations.HeartbeatQueryTask(ctx, last.Authority); !errors.Is(err, control.ErrQueryFenceStale) {
+				t.Fatalf("exhausted authority heartbeat=%v", err)
+			}
+			if err := operations.CompleteQueryTask(ctx, completion); !errors.Is(err, control.ErrQueryTerminal) {
+				t.Fatalf("late exhausted completion=%v", err)
+			}
+		})
+	}
+}
+
 func TestConcurrentQueryAdmissionUsesSharedPostgresCap(t *testing.T) {
 	fixture := setupAcceptFixture(t, 972)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

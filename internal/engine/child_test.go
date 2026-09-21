@@ -43,3 +43,25 @@ func TestDuckDBCancellation(t *testing.T) {
 		t.Fatalf("expected a context cancellation, got %v", err)
 	}
 }
+
+// Compare identical setup while varying only whether the thread bound is
+// supplied before DuckDB creates its database and scheduler.
+func BenchmarkOpenThreadConfiguration(b *testing.B) {
+	for _, candidate := range []struct{ name, dsn string }{
+		{"default_then_set", ""},
+		{"bound_at_open", ":memory:?threads=1"},
+	} {
+		b.Run(candidate.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				db, err := Open(context.Background(), candidate.dsn)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if err := db.Close(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

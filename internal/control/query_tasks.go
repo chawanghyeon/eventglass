@@ -145,7 +145,9 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 		ORDER BY (SELECT count(*) FROM query_tasks active WHERE active.tenant_id=q.tenant_id AND active.state='running' AND active.lease_until>clock_timestamp()),q.deadline,q.query_id
 		FOR UPDATE OF q SKIP LOCKED LIMIT 1`, target).Scan(&queryID, &tenantID, &snapshotID, &deadline)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		// Recovery is durable work even when admission finds no next task.
+		// Rolling back here would resurrect an exhausted or expired attempt.
+		return nil, tx.Commit(ctx)
 	}
 	if err != nil {
 		return nil, err
@@ -155,7 +157,7 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 		return nil, err
 	}
 	if running >= MaxRunningQueryTasks {
-		return nil, nil
+		return nil, tx.Commit(ctx)
 	}
 	var task QueryTask
 	task.Authority = QueryTaskAuthority{InstallationID: installationID, StorageGeneration: generation, TenantID: tenantID, QueryID: queryID, Owner: owner}
@@ -170,7 +172,7 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 		ORDER BY level,partition_id FOR UPDATE SKIP LOCKED LIMIT 1`, tenantID, queryID).Scan(
 		&task.Authority.Key.Stage, &task.Authority.Key.Level, &task.Authority.Key.PartitionID, &task.Authority.Attempt, &previousFence, &task.Manifest)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, tx.Commit(ctx)
 	}
 	if err != nil {
 		return nil, err

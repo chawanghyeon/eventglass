@@ -37,6 +37,7 @@ type comparisonState struct {
 }
 
 type comparisonReport struct {
+	Operations                                map[string]comparisonOperation
 	Revision, Architecture, DatasetSHA256     string
 	Workers                                   int
 	WarmupSeconds, LoadSeconds                int64
@@ -70,6 +71,11 @@ type comparisonReport struct {
 	S3PutBytes, S3GetBytes, S3RangeBytes      uint64
 	StartedAt, FinishedAt                     time.Time
 	Targets                                   map[string]bool
+}
+
+type comparisonOperation struct {
+	Calls, Work, Failures uint64
+	ElapsedMS, WorkMS     uint64
 }
 
 type sessionWire struct {
@@ -724,6 +730,29 @@ func addS3Metrics(data []byte, report *comparisonReport) {
 		}
 		value, parseErr := strconv.ParseUint(fields[1], 10, 64)
 		if parseErr != nil {
+			continue
+		}
+		if metric, label, ok := strings.Cut(fields[0], `{operation="`); ok && strings.HasPrefix(metric, "eventglass_operation_") && strings.HasSuffix(label, `"}`) {
+			name := strings.TrimSuffix(label, `"}`)
+			if report.Operations == nil {
+				report.Operations = make(map[string]comparisonOperation)
+			}
+			entry := report.Operations[name]
+			switch metric {
+			case "eventglass_operation_calls_total":
+				entry.Calls += value
+			case "eventglass_operation_work_total":
+				entry.Work += value
+			case "eventglass_operation_failures_total":
+				entry.Failures += value
+			case "eventglass_operation_elapsed_ms_total":
+				entry.ElapsedMS += value
+			case "eventglass_operation_work_ms_total":
+				entry.WorkMS += value
+			default:
+				continue
+			}
+			report.Operations[name] = entry
 			continue
 		}
 		switch fields[0] {
