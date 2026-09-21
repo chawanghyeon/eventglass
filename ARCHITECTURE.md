@@ -151,15 +151,36 @@ app injects the budget and API maps local admission failure to retryable429/503.
 The16MiB catalog serialization ceiling is checked page-by-page before HEADs,
 in addition to the final exact plan/manifest ceilings. The64MiB reservation is
 a conservative admission estimate, not a measured worst-case RSS guarantee.
-Publication and delivery/GC have joined loops separate from native work, so a
-long query cannot block their dispatch. This is not a claim of tenant fairness
-or the 20% maintenance-time policy: those remain measured R1/R2 work. Bounded
-operation logs report counts, failures and duration without raw error text.
+Publication and delivery have joined loops separate from native work, so a
+long query cannot block their dispatch. App dispatches retention, compaction and
+GC only after an empty foreground sweep and through one measured spare-time
+budget. A fixed61-bucket rolling60s history credits actual idle intervals, not
+startup age, dependency-error backoff or a shared native helper's occupied time.
+Maintenance debits all claim/execution/join time, including failures; admission
+requires M<=I/4, equivalent to20% of spare lane wall time I+M. This is measured
+dispatch capacity, not a claim about native CPU utilization or tenant fairness.
+Credit expiring during a granted slice is excluded, cancellation reserves100ms for
+join, and an overrun remains charged and explicitly fails comparison evidence.
+Foreground work is rechecked before another maintenance step; maintenance
+backoff never sleeps ready foreground work. Control rechecks foreground pressure
+inside each compaction/retention claim, without consuming a denied claim's
+fence/attempt or releasing its reserved inputs. GC's backup/snapshot interlocks
+are unchanged. Candidate selection excludes lanes with active maintenance so
+an unreservable lane cannot hide other eligible work; reservation still resolves
+concurrent schedulers through the existing lane lock and unique constraint.
+Bounded operation logs report counts, failures and duration
+without raw error text.
 The same fixed role labels expose call/work/failure and elapsed/work-time
 counters on the private metrics endpoint. A bounded native query burst keeps
 its ready-work slots, but an empty claim is checked only once per scheduling
 sweep; other progress or the idle interval starts a fresh sweep. These are app
 dispatch rules, not replacements for control's durable claims or query's work.
+App also owns native process groups: TERM, escalation to KILL after100ms, leader
+join and descendant reaping precede permit/scratch release. Linux uses a
+subreaper and waits only on the task's private group, never another command's
+children; Darwin waits for the terminated group to disappear while init reaps
+orphan PIDs. A successful leader which
+leaves descendants is a failed child contract, not successful engine output.
 Query and maintenance reserve input/output/spill against the shared disk budget
 and release only after child completion and successful scratch removal. This
 conservative reservation is not a proof of filesystem hard limits or RSS.

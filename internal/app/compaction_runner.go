@@ -42,11 +42,11 @@ func (runner ProcessCompactionRunner) Run(ctx context.Context, request engine.Co
 		return engine.CompactionResult{}, err
 	}
 	defer func() { response.Close(); os.Remove(response.Name()) }()
-	command := exec.CommandContext(ctx, binary, "engine-child")
+	command := exec.Command(binary, "engine-child")
 	command.Stdin, command.Stdout = bytes.NewReader(input), response
 	var stderr boundedBuffer
 	command.Stderr, command.Env = &stderr, childEnvironment(os.Environ())
-	if err := command.Run(); err != nil {
+	if err := runNativeChild(ctx, command); err != nil {
 		cleanupChildOutputs(request.OutputDirectory)
 		if ctx.Err() != nil {
 			return engine.CompactionResult{}, ctx.Err()

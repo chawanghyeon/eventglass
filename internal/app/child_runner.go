@@ -52,13 +52,13 @@ func (runner ProcessConversionRunner) Run(ctx context.Context, request engine.Co
 	if err != nil {
 		return engine.ConversionSummary{}, err
 	}
-	command := exec.CommandContext(ctx, binary, "engine-child")
+	command := exec.Command(binary, "engine-child")
 	command.Stdin = bytes.NewReader(input)
 	command.Stdout = response
 	var stderr boundedBuffer
 	command.Stderr = &stderr
 	command.Env = childEnvironment(os.Environ())
-	if err := command.Run(); err != nil {
+	if err := runNativeChild(ctx, command); err != nil {
 		cleanupChildOutputs(request.OutputDirectory)
 		if ctx.Err() != nil {
 			return engine.ConversionSummary{}, ctx.Err()

@@ -112,7 +112,9 @@ autoload/network install. Use deployment network policy plus restricted child
 environment; loopback gateway alone is not a general filesystem/network sandbox.
 
 One child owns one task; context cancellation interrupts native call, SIGTERM,
-then SIGKILL after2s and wait/reap before reclaiming permits. Process-group
+then SIGKILL after100ms and wait/reap before reclaiming permits. Native children
+produce only private scratch, not durable publication; this bounded cooperative
+exit avoids reserving unusable multi-second credits in a busy worker. Process-group
 termination kills descendants. cgroup OOM tests must verify the supervisor/API
 survive; use separately bounded child cgroup/container if needed in deployment.
 If combined-role512MiB cannot isolate survival, fail G07 combined profile instead
@@ -127,6 +129,29 @@ compressed/128 bundles/task and estimated scratch allowance. Maximum one active
 maintenance task/lane. Small quiet datasets need not be rewritten forever.
 Scheduler pauses maintenance if ingest oldest>5s or query queue>0.5s; at most20%
 of measured spare worker time per rolling60s, no stealing reserved ingest slots.
+Both compaction and retention selectors exclude lanes already holding a queued,
+running or prepared maintenance task. The reservation transaction remains the
+authority if another scheduler races the candidate read; it never steals work.
+
+App owns this dispatch budget, not a new maintenance service. A complete empty
+foreground sweep earns credit only for the subsequent measured idle wait. A
+delayed timer earns at most its requested100ms, not unobserved descheduled time. A
+shared native helper starting during that wait invalidates the sample. Retention,
+compaction and GC share61 fixed one-second buckets; partial oldest idle buckets
+are discarded and partial oldest work buckets are fully charged. Work allowance
+is I/4-M (20% of I+M), forecasting idle-credit expiry through the end of the
+grant. There is no initial free burst. Foreground claims always run first.
+The task deadline leaves100ms of the grant for cancellation/join; actual time until
+return, including no-work/failed claims and cleanup, is charged. Aging credit or
+a slow join can create debt: it denies further admission, never releases a live
+permit or retrospectively erases work. A join overrun is observable and fails
+comparison verification. This wall-time admission policy is not a hard CPU-time
+ratio for every retrospective sample. Budget cancellation leaves the durable
+lease to expire/recover with its existing fence rules; it cannot abandon live
+native work or adopt an unfinished result. Workers recheck the pressure predicate
+in the transaction claiming queued/prepared/expired compaction and retention
+work, since pressure can start after reservation. Publication/delivery keep
+their separate joined loops; GC's fresh-backup interlock remains mandatory.
 
 Reserve transaction locks lane then task and inputs: record selected bundle IDs,
 their exact valid_from and input identity hashes, set reserved_by; do not close

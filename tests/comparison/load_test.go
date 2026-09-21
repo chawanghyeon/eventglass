@@ -280,6 +280,10 @@ func TestSustainedComparison(t *testing.T) {
 }
 
 func setWorkloadTargets(report *comparisonReport, expectedAccepted int64) {
+	report.Targets["measured_ack_samples"] = report.LoadSeconds > 0 && int64(report.ACKSamples) == report.LoadSeconds*(1+errorsPerSecond)
+	report.Targets["maintenance_time_accounted"] = maintenanceTimeAccounted(report.Operations)
+	compaction := report.Operations["compaction"]
+	report.Targets["maintenance_progress"] = compaction.Work > compaction.Failures
 	report.Targets["ack_p95_le_500ms"] = report.ACKSamples > 0 && report.ACKP95MS <= 500
 	report.Targets["visibility_p95_le_5s"] = report.VisibilitySamples > 0 && report.VisibilityP95MS <= 5_000
 	report.Targets["warm_rows_p95_le_500ms"] = report.RowsQuerySamples > 0 && report.RowsQueryP95MS <= 500
@@ -294,6 +298,25 @@ func setWorkloadTargets(report *comparisonReport, expectedAccepted int64) {
 		report.PublishedCounts["log"] == cycles*logsPerSecond && report.PublishedCounts["error"] == cycles*errorsPerSecond && cycles > 0
 	report.Targets["submitted_input_provenance"] = report.SubmittedInput.Envelopes >= cycles*(1+errorsPerSecond)+cycles/60 &&
 		report.SubmittedInput.Bytes > 0 && len(report.SubmittedInput.SHA256) == 64
+}
+
+func maintenanceTimeAccounted(operations map[string]comparisonOperation) bool {
+	spare := operations["maintenance_spare"]
+	if spare.Calls == 0 || spare.WorkMS == 0 || operations["maintenance_budget_overrun"].Calls != 0 {
+		return false
+	}
+	var spent uint64
+	for _, name := range []string{"retention", "compaction", "gc"} {
+		elapsed := operations[name].ElapsedMS
+		if elapsed > ^uint64(0)-spent {
+			return false
+		}
+		spent += elapsed
+	}
+	// Include failed/no-work claims and cancellation joins, not only completed
+	// native tasks. This run-wide check supplements the rolling admission tests;
+	// it is not a retrospective claim about every sliding-window CPU sample.
+	return spent <= spare.WorkMS/4
 }
 
 func runIngestPhase(client *http.Client, baseURL string, state comparisonState, duration time.Duration, measured bool, sequence *int64, latencies *[]time.Duration, report *comparisonReport, input *inputEvidence) error {
@@ -326,7 +349,9 @@ func runIngestPhase(client *http.Client, baseURL string, state comparisonState, 
 					firstErr = fmt.Errorf("ingest sequence %d status=%d body=%s err=%v", *sequence, answer.status, answer.response, answer.err)
 				}
 			}
-			*latencies = append(*latencies, answer.latency)
+			if measured {
+				*latencies = append(*latencies, answer.latency)
+			}
 		}
 		if firstErr != nil {
 			return firstErr

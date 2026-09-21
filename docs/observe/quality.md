@@ -752,6 +752,137 @@ host(10.944s) and the native ARM64 query/Live paths(24.456s); Chromium's actual
 SDK-to-Issue flow passed in2.7s. No API/schema changed, so generated contracts and
 capability gate status remain unchanged. The frozen source-design hash matches.
 
+### Official-duration baseline and maintenance/measurement audit
+
+The clean `f415e55` run completed all1/2/4-worker profiles with5min warmup,
+30min offered load and a bounded10min drain. Its native10k/100k/1m/10m oracle
+also passed (`.tools/native-oracle.15JVAC`). The pinned Go1.27.1/DuckDB2.0
+ARM64 environment used Colima4CPU/8,308,363,264bytes RAM; each Go role had
+CPU1/512MiB/swap0. No heavy checks ran alongside these measurements. Retained
+raw reports are `.tools/comparison-report-1.CXtyDe`,
+`.tools/comparison-report-2.m9Qt6Y` and `.tools/comparison-report-4.QTUXw9`.
+
+| Workers | Legacy ACK p95 ms | Rows / histogram p95 ms | Visibility p95 ms | Load backlog slope/min | Whole-installation sampled peak bytes |
+|---|---:|---:|---:|---:|---:|
+|1|369|378 /451|1,470|+0.03113|2,382,721,186|
+|2|373|331 /414|734|−0.00338|2,644,322,023|
+|4|373|327 /404|624|−0.00282|3,030,690,822|
+
+Every run accepted220,500 and passed the complete public count oracle with
+zero final backlog, conflicts and cgroup OOM/kills. All **former** target maps
+are true. The ACK values above include warmup:12,600 samples, not the10,800
+load-only samples required for a30min run. They are not corrected ACK SLO
+evidence. Constant105records/s offered load does not measure maximum capacity
+or scaling efficiency. Runtime scratch and these disposable PG/S3 stores were
+tmpfs-backed; these results do not establish larger disk-backed capacity.
+
+| Workers | Full GET requests /bytes | Range requests /bytes | HEAD | PUT requests /bytes | PG WAL bytes | S3 retained bytes |
+|---|---:|---:|---:|---:|---:|---:|
+|1|105,534 /1,491,102,540|10,546 /255,685,959|139,467|40,554 /676,078,332|653,293,808|676,231,097|
+|2|105,406 /1,486,680,994|16,785 /457,723,656|140,585|40,513 /673,990,517|661,884,816|674,148,727|
+|4|105,361 /1,472,676,348|24,287 /757,257,100|140,709|40,501 /667,130,415|688,209,712|667,130,248|
+
+Post-load same-snapshot cold/warm regex times were299/303,287/219 and283/202ms;
+Range requests119/0,116/0 and137/0; Range bytes11,207,030/0,
+11,201,221/0 and11,380,129/0. Only Eventglass block caches were reset, not
+provider/OS caches. Each60s idle check saw no new query work. These are scoped
+observations, not a claim of end-to-end or competitor superiority.
+
+Audit found that the worker ran maintenance without measured spare capacity,
+and a queued/prepared/expired maintenance claim could bypass pressure that
+arrived after reservation. Regression-only tests on old code actually failed:
+four maintenance attempts with continuously ready foreground work;12 warmup
+ACK samples in a2s fake-clock test; all12 real PostgreSQL compact/retain ×
+queued/prepared/expired × ingest/query-pressure cases claimed work improperly.
+The isolated PG cases use metadata fixtures, not physical GC/backup evidence.
+
+App now owns a bounded61-bucket spare-lane admission budget. Only observed
+idle waits earn credit; maintenance attempt time includes failures and actual
+joined cleanup. Admission reserves100ms for termination, predicts credit expiry,
+records overruns and blocks subsequent work while in debt. This is wall-time
+admission accounting, not a hard retrospective CPU percentage guarantee.
+Control rechecks pressure in the claim transaction without another round trip.
+Native runners retain permits/files until their private process group has
+terminated and been reaped. Linux adopts orphan descendants as a subreaper but
+waits only on the owned group. The harness excludes warmup ACK latency and
+requires exact measured sample count, maintenance accounting/progress and zero
+budget overruns. Physical GC's real backup interlock is unchanged.
+
+An identical20s/300s/90s one-worker diagnostic compared the preservedf415e55
+images with the first budget candidate (2s cancellation reserve). The baseline
+`.tools/comparison-report-1.UqIPaJ` passed latency/completeness targets but
+failed the new maintenance-accounting target. The candidate
+`.tools/comparison-report-1.N3cvhL` passed accounting but **failed** both query
+latency targets: rows/histogram p95 increased336/388→1,686/2,047ms. It spent
+only2,979ms on maintenance despite54,400ms measured idle; its last query scanned
+1,729 objects versus128 before. Both accepted33,600, measured1,800 load-only
+ACKs, returned exact32,000 logs/1,600 errors and ended with zero backlog/OOM.
+ACK p95 was369→368ms. No heavy checks ran during the sequential pair. The
+failure is retained, not relabeled a pass or a performance improvement.
+
+The2s reserve starved short spare intervals: a deterministic700ms foreground/
+second fixture could not run even100ms maintenance within10s. The corrected
+100ms TERM grace preserves unconditional KILL/join/reaping and passes that
+progress-within-budget regression. Darwin can remove a terminated process from
+its group before init removes its orphan PID; its test requires immediate group
+absence and bounded eventual PID reaping, while Linux requires immediate reaped
+PID absence. EPERM during Darwin group observation is not treated as exit.
+Twenty repeated host process-group tests and app/control race tests passed.
+Actual PG tests also reproduced three queued/running/prepared active-lane
+starvation cases for compaction and both retention selectors: each repeatedly
+selected an unreservable lane0 despite eligible lane1. Candidate selection now
+excludes active lanes using the existing partial unique index, while reservation
+still owns the transactional race/fence checks. No index/schema change is needed.
+
+The subsequent100ms-grace/active-lane-fix candidate was measured under the
+same20s/300s/90s one-worker profile, again with no concurrent heavy checks.
+`.tools/comparison-report-1.xeG5dP` remains a **failed** diagnostic: rows/
+histogram p95=1,441/1,856ms, ACK p95=369ms, visibility p95=1,947ms and
+five maintenance budget overruns. Actual maintenance elapsed9,641ms is below
+56,800/4ms total idle credit, but the per-attempt overruns correctly fail the
+gate instead of being hidden by aggregate accounting. Load-backlog slope also
+fails at+0.64474/min; final backlog nevertheless drains to0. All33,600 accepted records pass
+the exact public count oracle; OOM/conflicts0 and measured ACK samples1,800.
+
+| Diagnostic | Whole-installation sampled peak bytes | Worker observed cgroup peak bytes | Full GET requests /bytes | Range requests /bytes | HEAD | PUT requests /bytes |
+|---|---:|---:|---:|---:|---:|---:|
+|f415e55 baseline|860,230,776|76,742,656|15,770 /106,912,656|1,846 /20,689,654|23,294|6,129 /43,560,831|
+|2s-reserve candidate|878,423,571|71,446,528|11,871 /62,929,187|2,237 /19,007,575|121,900|5,943 /31,414,429|
+|100ms-grace/lane fix|841,878,599|71,532,544|12,646 /67,558,548|2,208 /19,011,180|104,873|5,972 /31,743,611|
+
+These are cgroup/installation observations, not separate native RSS or Go
+allocation measurements. The105records/s offered rate is fixed, not independent
+capacity. Actual request-byte hashes differ because installations/times/retries
+differ; the logical fixture definition and limits are unchanged. Fewer rewrites
+reduce some S3 transfers but grow query HEAD/read work; do not label the combined
+result a speedup or lower total production cost. Compaction's per-input control
+queries, native inspection cost, cancellation/join slack and maximum-size
+rewrite progress remain to be measured and resolved. Corrected official-duration
+runs and independent capacity/efficiency still cannot be closed.
+
+Executed verification for this fix: host ARM64 unit/vet, architecture/layout,
+generated-contract equality, app/control race checks and comparison regression
+tests passed. Final disposable PostgreSQL/MinIO integration passed in13.548s;
+Linux ARM64 native query/Live integration passed in24.497s. Pinned native
+contracts/vet passed, including the new Linux process-group tests. A separate
+non-root/read-only CPU1/512MiB/swap0 run repeated20 times also killed and reaped stubborn
+descendants, rejected a zero-exit leader leaving an orphan, and preserved an
+unrelated command's child. The default2min resource profile passed with24
+cycles/12,600 records,251ms worst cycle,141,873,152-byte cgroup peak, zero
+OOM and no leftover scratch; native OOM/cancel and permit-drain checks passed.
+These are containment observations, not end-to-end throughput. Actual
+pgBackRest2.59.1 base+WAL restore into two private PGDATA volumes passed with
+the signed verification import, generation bump and missing-S3-object
+fail-closed check. The fixture's18-byte object is not a backup capacity test.
+Frontend29 tests and production typecheck/build passed; Chromium's actual
+SDK-to-Issue production-image flow passed in2.7s. Raw logs are retained
+under `.tools/maintenance-after-*` and `.tools/maintenance-final-*`; no external
+alerts or deployment occurred. Colima disk exhaustion initially interrupted
+image export and a test-binary link. Fourteen obsolete Eventglass experimental
+images were removed, preserving all raw reports, current before/after images,
+the pinned native cache and unrelated containers/volumes. Repeated integration,
+contract image export and the non-root lifetime tests then completed.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

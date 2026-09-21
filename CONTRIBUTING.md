@@ -81,6 +81,15 @@ samples and runtime logs in a unique `.tools/comparison-report-N.*` directory;
 the convenience `comparison-workers-N*.json` files represent only the latest
 run. Reports also accumulate private role-operation counters across the worker
 restart to distinguish empty claims from work time.
+ACK latency samples exclude the five-minute warmup; the gate requires exactly
+six measured original requests per load second. Warmup and duplicate/retry
+traffic still contribute to actual input provenance and storage costs. Legacy
+reports with12,600 ACK samples for a30-minute load included warmup and are not
+load-only ACK SLO evidence. Maintenance evidence requires measured spare time,
+all retention/compaction/GC attempt time (not only successful work), actual
+compaction progress and zero cancellation-budget overruns. The aggregate check
+supplements the rolling admission/cancellation tests; it does not assert a hard
+CPU ratio for every retrospective sliding window.
 Reports distinguish the fixed fixture-definition checksum from a streaming
 checksum of actual envelope bodies submitted to HTTP (including retries and
 duplicates, length-framed in submission order, not TCP arrival/ACK order).

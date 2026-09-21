@@ -22,6 +22,13 @@ const (
 	SmallCompactionFile     = int64(8 << 20)
 )
 
+// Recheck at claim time as well as candidate selection: foreground pressure
+// may begin after reservation, before a prepared swap, or during lease recovery.
+// This is admission only; running work retains its fencing/heartbeat contract.
+const maintenancePressureSQL = `(
+	EXISTS(SELECT 1 FROM jobs WHERE state IN ('queued','running') AND created_at < clock_timestamp()-interval '5 seconds')
+	OR EXISTS(SELECT 1 FROM query_jobs WHERE state IN ('planning','queued','running') AND created_at < clock_timestamp()-interval '500 milliseconds'))`
+
 var (
 	ErrMaintenanceBusy   = errors.New("maintenance lane is busy")
 	ErrMaintenanceFence  = errors.New("maintenance fence is stale")
@@ -102,9 +109,7 @@ type CompactionWork struct {
 
 func (operations *MaintenanceOperations) FindCompactionCandidate(ctx context.Context) (CompactionCandidate, error) {
 	var pressured bool
-	if err := operations.pool.QueryRow(ctx, `SELECT
-		EXISTS(SELECT 1 FROM jobs WHERE state IN ('queued','running') AND created_at < clock_timestamp()-interval '5 seconds')
-		OR EXISTS(SELECT 1 FROM query_jobs WHERE state IN ('planning','queued','running') AND created_at < clock_timestamp()-interval '500 milliseconds')`).Scan(&pressured); err != nil {
+	if err := operations.pool.QueryRow(ctx, `SELECT `+maintenancePressureSQL).Scan(&pressured); err != nil {
 		return CompactionCandidate{}, err
 	}
 	if pressured {
@@ -113,6 +118,7 @@ func (operations *MaintenanceOperations) FindCompactionCandidate(ctx context.Con
 	rows, err := operations.pool.Query(ctx, `SELECT b.tenant_id,b.lane_id,b.schema_version,b.grouping_version,b.event_day::text,b.kind,b.bundle_id::text,sum(f.bytes)
 		FROM bundles b JOIN files f ON f.tenant_id=b.tenant_id AND f.bundle_id=b.bundle_id
 		WHERE b.valid_to_generation IS NULL AND b.reserved_by IS NULL
+		AND NOT EXISTS(SELECT 1 FROM maintenance_tasks m WHERE m.tenant_id=b.tenant_id AND m.lane_id=b.lane_id AND m.state IN ('queued','running','prepared'))
 		GROUP BY b.bundle_id HAVING max(f.bytes)<$1 ORDER BY b.tenant_id,b.lane_id,b.schema_version,b.grouping_version,b.event_day,b.kind,b.valid_from_generation,b.bundle_id`, SmallCompactionFile)
 	if err != nil {
 		return CompactionCandidate{}, err
@@ -270,6 +276,7 @@ func (operations *MaintenanceOperations) ClaimCompaction(ctx context.Context, in
 		b.schema_version,b.grouping_version,b.event_day::text,b.kind
 		FROM maintenance_tasks m JOIN maintenance_inputs mi ON mi.task_id=m.task_id AND mi.tenant_id=m.tenant_id JOIN bundles b ON b.tenant_id=mi.tenant_id AND b.bundle_id=mi.bundle_id
 		WHERE m.kind='compact' AND m.retry_at<=clock_timestamp() AND (m.state IN ('queued','prepared') OR (m.state='running' AND m.lease_until<=clock_timestamp()))
+		AND NOT `+maintenancePressureSQL+`
 		ORDER BY m.created_at,m.task_id LIMIT 1 FOR UPDATE OF m SKIP LOCKED`,
 	).Scan(&task.Authority.TaskID, &task.Authority.TenantID, &task.Authority.LaneID, &task.Authority.StorageGeneration, &task.Authority.Fence, &state, &task.Partition.SchemaVersion, &task.Partition.GroupingVersion, &task.Partition.EventDay, &task.Partition.Kind)
 	if errors.Is(err, pgx.ErrNoRows) {

@@ -26,7 +26,7 @@ func (runtime *Runtime) runWorker(ctx context.Context) error {
 	defer cancel()
 	groups := [][]workerOperation{
 		{{"publication", runtime.runOnePublication}},
-		{{"delivery", runtime.runOneDelivery}, {"gc", runtime.runOneGC}},
+		{{"delivery", runtime.runOneDelivery}},
 		runtime.nativeWorkerOperations(),
 	}
 	results := make(chan error, len(groups))
@@ -51,7 +51,9 @@ func (runtime *Runtime) nativeWorkerOperations() []workerOperation {
 	for range queryTaskBurst {
 		work = append(work, workerOperation{"query", runtime.runOneQuery})
 	}
-	return append(work, workerOperation{"retention", runtime.runOneRetention}, workerOperation{"compaction", runtime.runOneCompaction})
+	// All background maintenance shares this lane's spare-time budget. GC still
+	// owns its backup/snapshot interlocks; moving its dispatch does not relax them.
+	return append(work, workerOperation{"retention", runtime.runOneRetention}, workerOperation{"compaction", runtime.runOneCompaction}, workerOperation{"gc", runtime.runOneGC})
 }
 
 type workerOperation struct {
@@ -62,6 +64,9 @@ type workerOperation struct {
 func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperation) error {
 	next := 0
 	idle := make([]string, 0, len(work))
+	budget := maintenanceTimeBudget{origin: time.Now()}
+	hasMaintenance := slices.ContainsFunc(work, func(operation workerOperation) bool { return maintenanceOperation(operation.name) })
+	var maintenanceRetryAt time.Time
 	for ctx.Err() == nil {
 		idle = idle[:0]
 		var progressed bool
@@ -71,6 +76,11 @@ func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperati
 				break
 			}
 			index := (next + offset) % len(work)
+			// Check every foreground slot before considering maintenance, even
+			// if the rotation cursor currently points at a maintenance slot.
+			if maintenanceOperation(work[index].name) {
+				continue
+			}
 			// Repeated slots give ready queries a bounded burst. Once a claim
 			// finds no work, do not repeat its database transaction in this
 			// sweep. Recheck after other progress or the normal idle interval.
@@ -86,8 +96,46 @@ func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperati
 			}
 			idle = append(idle, work[index].name)
 		}
+		maintenanceFailed := false
+		if !progressed && err == nil && hasMaintenance && ctx.Err() == nil && !time.Now().Before(maintenanceRetryAt) {
+			for offset := range work {
+				index := (next + offset) % len(work)
+				if !maintenanceOperation(work[index].name) {
+					continue
+				}
+				started := time.Now()
+				allowance := budget.allowance(started)
+				if allowance < maintenanceJoinAllowance+maintenanceMinWorkSlice || ctx.Err() != nil {
+					break
+				}
+				taskContext, cancel := context.WithTimeout(ctx, allowance-maintenanceJoinAllowance)
+				// run joins native/IO work and cleanup before it returns. A
+				// deadline requests cancellation; it never releases ownership.
+				progressed, err = work[index].run(taskContext)
+				cancel()
+				finished := time.Now()
+				budget.record(started, finished, true)
+				runtime.stats.recordInterval(ctx, work[index].name, started, finished, progressed, err)
+				if finished.Sub(started) > allowance {
+					runtime.stats.record(ctx, "maintenance_budget_overrun", started, true, context.DeadlineExceeded)
+				}
+				if err != nil {
+					// A frozen GC interlock or a maintenance retry must not
+					// put ready foreground work to sleep with this attempt.
+					maintenanceRetryAt = finished.Add(250 * time.Millisecond)
+					maintenanceFailed = true
+				}
+				if err != nil || progressed {
+					next = (index + 1) % len(work)
+					break
+				}
+			}
+		}
 		if ctx.Err() != nil {
 			break
+		}
+		if maintenanceFailed {
+			continue
 		}
 		delay := workerIdle
 		if err != nil {
@@ -96,6 +144,8 @@ func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperati
 		if progressed && err == nil {
 			continue
 		}
+		idleStarted := time.Now()
+		nativeSequence, nativeBusy := runtime.nativeTasks.activity()
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -103,9 +153,18 @@ func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperati
 				<-timer.C
 			}
 		case <-timer.C:
+			sequence, busy := runtime.nativeTasks.activity()
+			if hasMaintenance && err == nil && !nativeBusy && !busy && sequence == nativeSequence && ctx.Err() == nil {
+				idleFinished := budget.recordIdleWait(idleStarted, time.Now())
+				runtime.stats.recordInterval(ctx, "maintenance_spare", idleStarted, idleFinished, true, nil)
+			}
 		}
 	}
 	return nil
+}
+
+func maintenanceOperation(name string) bool {
+	return name == "retention" || name == "compaction" || name == "gc"
 }
 
 func (runtime *Runtime) runOneRetention(ctx context.Context) (bool, error) {

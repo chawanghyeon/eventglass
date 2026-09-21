@@ -45,10 +45,10 @@ func (runner ProcessQueryExportRunner) Export(ctx context.Context, request engin
 		return engine.QueryExportSummary{}, errors.Join(errors.New("query export request is too large"), err)
 	}
 	var stdout, stderr boundedBuffer
-	command := exec.CommandContext(ctx, binary, "engine-child")
+	command := exec.Command(binary, "engine-child")
 	command.Stdin, command.Stdout, command.Stderr = bytes.NewReader(input), &stdout, &stderr
 	command.Env = childEnvironment(os.Environ())
-	if err := command.Run(); err != nil {
+	if err := runNativeChild(ctx, command); err != nil {
 		_ = os.Remove(request.OutputPath)
 		if ctx.Err() != nil {
 			return engine.QueryExportSummary{}, ctx.Err()
@@ -89,11 +89,11 @@ func (runner ProcessQueryRunner) Run(ctx context.Context, request engine.QueryRe
 		return engine.QuerySummary{}, errors.Join(errors.New("query child request is too large"), err)
 	}
 	var stdout, stderr boundedBuffer
-	command := exec.CommandContext(ctx, binary, "engine-child")
+	command := exec.Command(binary, "engine-child")
 	command.Stdin = bytes.NewReader(input)
 	command.Stdout, command.Stderr = &stdout, &stderr
 	command.Env = childEnvironment(os.Environ())
-	if err := command.Run(); err != nil {
+	if err := runNativeChild(ctx, command); err != nil {
 		_ = os.Remove(request.OutputPath)
 		_ = os.RemoveAll(request.SpillDirectory)
 		if ctx.Err() != nil {

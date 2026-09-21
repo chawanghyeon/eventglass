@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/chawanghyeon/eventglass/internal/resource"
 )
@@ -14,6 +15,7 @@ type NativeTaskGate struct {
 	working     *resource.Budget
 	reservation int64
 	memory      int64
+	started     atomic.Uint64
 }
 
 func NewNativeTaskGate() *NativeTaskGate {
@@ -33,6 +35,7 @@ func (gate *NativeTaskGate) acquire(ctx context.Context) (func(), error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-gate.slot:
+		gate.started.Add(1)
 		var permit *resource.Permit
 		if gate.working != nil {
 			var err error
@@ -52,6 +55,15 @@ func (gate *NativeTaskGate) acquire(ctx context.Context) (func(), error) {
 			})
 		}, nil
 	}
+}
+
+// An idle sample is usable only if no shared native task started during it.
+// Checking occupancy at its two endpoints alone would miss a short API helper.
+func (gate *NativeTaskGate) activity() (uint64, bool) {
+	if gate == nil {
+		return 0, false
+	}
+	return gate.started.Load(), gate.used() != 0
 }
 
 func (gate *NativeTaskGate) memoryLimit(requested int64) int64 {

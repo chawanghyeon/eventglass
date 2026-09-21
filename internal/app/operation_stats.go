@@ -29,17 +29,22 @@ type operationSample struct {
 // Names are fixed at role assembly, never tenant IDs or user-supplied labels.
 // Do not log err.Error(): drivers may include SQL, object URLs or credentials.
 func (stats *operationStats) record(ctx context.Context, name string, started time.Time, completed bool, err error) {
+	stats.recordInterval(ctx, name, started, time.Now(), completed, err)
+}
+
+func (stats *operationStats) recordInterval(ctx context.Context, name string, started, finished time.Time, completed bool, err error) {
 	now := time.Now()
+	duration := max(time.Duration(0), finished.Sub(started))
 	stats.mu.Lock()
 	if stats.entries == nil {
 		stats.entries = make(map[string]operationSample)
 	}
 	sample := stats.entries[name]
 	sample.calls++
-	sample.elapsed += now.Sub(started)
+	sample.elapsed += duration
 	if completed {
 		sample.completed++
-		sample.busy += now.Sub(started)
+		sample.busy += duration
 	}
 	if err != nil {
 		sample.failures++
@@ -57,7 +62,7 @@ func (stats *operationStats) record(ctx context.Context, name string, started ti
 	if err != nil {
 		level = slog.LevelWarn
 	}
-	slog.Log(ctx, level, "runtime operation", "operation", name, "calls", sample.calls, "completed", sample.completed, "failures", sample.failures, "busy_ms", sample.busy.Milliseconds(), "last_duration_ms", now.Sub(started).Milliseconds(), "code", operationErrorCode(err))
+	slog.Log(ctx, level, "runtime operation", "operation", name, "calls", sample.calls, "completed", sample.completed, "failures", sample.failures, "busy_ms", sample.busy.Milliseconds(), "last_duration_ms", duration.Milliseconds(), "code", operationErrorCode(err))
 }
 
 // Export the same fixed role-operation labels used by the logs. Copy under the

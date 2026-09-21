@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1–R2 have implementations and scoped tests. R3 has executable evidence but remains the first incomplete packet because its official one-worker targets miss.
+G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1–R2 have implementations and scoped tests. R3 remains the first incomplete packet: its latest1/2/4-worker official-duration runs pass the former targets, but corrected ACK/maintenance evidence and independent capacity/efficiency are still required.
 M2 physical GC stays frozen whenever M4's signed coordinated backup attestation is absent or older than 24 hours.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
@@ -95,7 +95,7 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 |---|---|---|
 | R1 / M4 — complete | tests/resource Linux cgroup harness; scripts/check resource | CPU1/512MiB/swap0 profile verifies maximum input, two-minute 100 logs/s+5 errors/s logical mix through normalization and actual conversion/query children, no growing cycle backlog, cgroup OOM=0, bounded child OOM/cancel/join, exact permit drain and zero scratch residue. This is containment evidence, not R3's 30-minute end-to-end SLO. |
 | R2 / R1 — complete | app autoscale metrics/control; deploy/kubernetes/KEDA; scripts/check scale | Private fixed-label backlog metrics and storage availability, EWMA prior, two-sample scale-out, dependency freeze, 300s stable scale-in capped at25%, warm min1/max20 and PG64 total bound. Conversion/query claims prefer tenants without running work. Linux ARM64 1/2/4 control harness produced the same checksum; manifests enforce non-root/read-only/CPU1/512MiB/bounded scratch and KEDA timing. This is control evidence, not R3 throughput. |
-| R3 / R2 — executable, target miss | tests/comparison independent oracle/load/cost report; scripts/check comparison | Fixed10k/100k/1m/10m seeds,5min warmup/30min load/10min drain, SIGKILL/restart, ARM64 cgroup and whole-installation PG/S3 costs with dated price inputs are implemented. Expired query-task leases are reclaimed with a new fence and exhausted attempts fail closed; nullable visibility estimates fall back to the newest actually returned received time. The 2026-09-21 official one-worker run accepted220,500 with ACK p95=375ms and no conflicts/OOM, but rows/histogram p95=11.812s/11.085s,113 query failures, backlog slope=+474.52 jobs/min and final backlog=13,060 after the ten-minute drain. Bounded query-task bursts and one-pass Parquet output inspection improved a 60-second diagnostic to rows/histogram p95=498/449ms, backlog max20 and drain2.007s. The harness had leaked each fresh search snapshot until the real four-active-snapshots-per-user cap returned 503; its first DELETE attempt lacked the required Origin header. After scoped release with CSRF and Origin, a 20s/120s/90s one-worker diagnostic completed all24 queries with zero failures but rows/histogram p95=573/681ms and load backlog slope=+24.63 jobs/min. **G07 remains incomplete; all targets must pass under the official profile.** |
+| R3 / R2 — executable, audit pending | tests/comparison independent oracle/load/cost report; scripts/check comparison | Actual10k/100k/1m/10m SDK/native oracle,5min warmup/30min load/10min drain, SIGKILL/restart, cold/warm/idle, per-role ARM64 cgroup and whole-installation PG/S3 dated costs are implemented. Cleanf415e55 official-duration1/2/4-worker runs pass the former target map with220,500 accepted each and zero final backlog/conflicts/OOM. However, ACK samples included warmup and no spare-maintenance budget was enforced. Regression tests reproduce these defects, and new app-owned bounded admission, control claim-pressure revalidation and joined process-group cancellation address them. Corrected official runs and independent capacity/efficiency remain required. Historical failed profiles remain in quality.md. **G07 remains incomplete.** |
 | R4 / R3 | deploy backend locks; scripts/check release; operator/upgrade guides; SBOM/notices | Authorized AWS + proven selfhost smoke/restore, ARM64 provenance, secret/license scans, schema/journal compatibility and rollback rehearsal, declared SDK matrix; **G08 complete; only then advertise release** |
 
 R3 remains the first incomplete packet. A further 20s/300s/90s ARM64
@@ -188,8 +188,24 @@ partition identity and equal-time page checks (`.tools/native-oracle.JAxTts`);
 536,879,104bytes (reported8KiB above its configured512MiB maximum),
 including filesystem cache;2,684 memory-limit events were recorded. This is
 functional Mode A evidence, not a worst-case RSS guarantee or official G07 pass.
-Official-duration1/2/4-worker SLOs, independent capacity/efficiency and R4 remain
-outstanding. Preserve the old failed profiles alongside the new evidence.
+The subsequent cleanf415e55 official-duration1/2/4-worker runs completed with
+zero final backlog, conflicts and OOM; rows/histogram p95 were378/451,
+331/414 and327/404ms. Their old target maps pass, but each ACK population has
+12,600 samples instead of10,800 because warmup was included. A maintenance
+audit also found no enforced spare-time budget and stale claim admission.
+New regressions reproduce both defects before the fix, including12 actual PG
+queued/prepared/expired-lease pressure cases. Corrected official measurements,
+independent capacity/efficiency and R4 remain outstanding. Preserve the old
+failed profiles alongside this limited baseline; details are in quality.md.
+
+The initial budget implementation is not a closed gate. A matched20s/300s/90s
+one-worker diagnostic with100ms native TERM grace and active-lane exclusion
+still has rows/histogram p95=1,441/1,856ms, load slope=+0.645/min and five
+maintenance-budget overruns, despite exact33,600 published records, no OOM and
+zero final backlog. Retain `.tools/comparison-report-1.xeG5dP` as failure
+evidence. Next work must address compaction's per-input SQL/native inspection
+cost and cancellation/join allowance, including maximum-sized rewrite progress,
+without raising resource limits or weakening identity/snapshot/GC checks.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

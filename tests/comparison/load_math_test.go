@@ -15,8 +15,75 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
+
+func TestWarmupACKsDoNotEnterMeasuredLatencySamples(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := &http.Client{Transport: comparisonTransport(func(*http.Request) (*http.Response, error) {
+			time.Sleep(time.Millisecond)
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
+		})}
+		state := comparisonState{ProjectID: 1, PublicKey: "local-fixture"}
+		var sequence int64
+		var latencies []time.Duration
+		var report comparisonReport
+		input := newInputEvidence()
+		if err := runIngestPhase(client, "http://127.0.0.1", state, 2*time.Second, false, &sequence, &latencies, &report, input); err != nil {
+			t.Fatal(err)
+		}
+		if len(latencies) != 0 || report.LogicalLogs != 0 || report.LogicalErrors != 0 || input.snapshot().Envelopes != 12 {
+			t.Fatalf("warmup entered measured population or lost provenance: latencies=%d report=%+v input=%+v", len(latencies), report, input.snapshot())
+		}
+		if err := runIngestPhase(client, "http://127.0.0.1", state, time.Second, true, &sequence, &latencies, &report, input); err != nil {
+			t.Fatal(err)
+		}
+		if len(latencies) != 6 || report.LogicalLogs != 100 || report.LogicalErrors != 5 || sequence != 3 || input.snapshot().Envelopes != 18 {
+			t.Fatalf("incorrect measured population: latencies=%d report=%+v sequence=%d input=%+v", len(latencies), report, sequence, input.snapshot())
+		}
+	})
+}
+
+func TestMeasuredACKTargetRejectsWarmupContamination(t *testing.T) {
+	report := comparisonReport{LoadSeconds: 1800, ACKSamples: 12600, Targets: make(map[string]bool)}
+	setWorkloadTargets(&report, 220500)
+	if report.Targets["measured_ack_samples"] {
+		t.Fatal("35-minute population satisfied 30-minute measurement")
+	}
+	report.ACKSamples = 10800
+	setWorkloadTargets(&report, 220500)
+	if !report.Targets["measured_ack_samples"] {
+		t.Fatal("exact measured request population was rejected")
+	}
+}
+
+func TestMaintenanceEvidenceRequiresMeasuredSpareAndAllAttemptTime(t *testing.T) {
+	operations := map[string]comparisonOperation{"compaction": {Calls: 1, Work: 1, ElapsedMS: 100, WorkMS: 100}}
+	if maintenanceTimeAccounted(operations) {
+		t.Fatal("legacy counters without spare-time evidence passed")
+	}
+	operations["maintenance_spare"] = comparisonOperation{Calls: 100, WorkMS: 800}
+	operations["retention"] = comparisonOperation{Calls: 1, ElapsedMS: 50}
+	operations["gc"] = comparisonOperation{Calls: 1, Failures: 1, ElapsedMS: 50}
+	if !maintenanceTimeAccounted(operations) {
+		t.Fatal("exact 20% spare-time boundary rejected")
+	}
+	operations["gc"] = comparisonOperation{Calls: 1, Failures: 1, ElapsedMS: 51}
+	if maintenanceTimeAccounted(operations) {
+		t.Fatal("failed/no-work maintenance time escaped accounting")
+	}
+	operations["gc"] = comparisonOperation{Calls: 1, ElapsedMS: 50}
+	operations["maintenance_budget_overrun"] = comparisonOperation{Calls: 1}
+	if maintenanceTimeAccounted(operations) {
+		t.Fatal("cancellation overrun was hidden by aggregate spare time")
+	}
+	delete(operations, "maintenance_budget_overrun")
+	operations["gc"] = comparisonOperation{ElapsedMS: ^uint64(0)}
+	if maintenanceTimeAccounted(operations) {
+		t.Fatal("overflowed counters passed accounting")
+	}
+}
 
 func TestBacklogSlopePerMinute(t *testing.T) {
 	if slope := backlogSlopePerMinute([]int64{0, 2, 4, 6}, 5*time.Second); math.Abs(slope-24) > .0001 {

@@ -117,3 +117,36 @@ func TestWorkerRechecksEmptyClaimAfterOtherProgress(t *testing.T) {
 		t.Fatalf("query calls=%d, want empty claim then ready claim", calls)
 	}
 }
+
+func TestNativeWorkerDoesNotAdmitMaintenanceWithoutMeasuredSpareTime(t *testing.T) {
+	runtime := &Runtime{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conversions, maintenance := 0, 0
+	work := runtime.nativeWorkerOperations()
+	for index := range work {
+		switch work[index].name {
+		case "conversion":
+			work[index].run = func(context.Context) (bool, error) {
+				conversions++
+				if conversions == 3 {
+					cancel()
+				}
+				return true, nil
+			}
+		case "retention", "compaction":
+			work[index].run = func(context.Context) (bool, error) {
+				maintenance++
+				return true, nil
+			}
+		default:
+			work[index].run = func(context.Context) (bool, error) { return false, nil }
+		}
+	}
+	if err := runtime.runWorkerGroup(ctx, work); err != nil {
+		t.Fatal(err)
+	}
+	if maintenance != 0 {
+		t.Fatalf("maintenance attempts=%d without any observed idle time", maintenance)
+	}
+}

@@ -60,6 +60,7 @@ func (operations *MaintenanceOperations) findRetentionCandidate(ctx context.Cont
 		FROM installations i JOIN bundles b ON b.valid_to_generation IS NULL AND b.reserved_by IS NULL
 		JOIN files f ON f.tenant_id=b.tenant_id AND f.bundle_id=b.bundle_id AND f.role='analytics'
 		WHERE i.singleton AND f.min_received_time_us<i.retention_floor_us AND ($1::bigint=0 OR b.tenant_id=$1)
+		AND NOT EXISTS(SELECT 1 FROM maintenance_tasks m WHERE m.tenant_id=b.tenant_id AND m.lane_id=b.lane_id AND m.state IN ('queued','running','prepared'))
 		AND NOT EXISTS(SELECT 1 FROM jobs WHERE state IN ('queued','running') AND created_at<clock_timestamp()-interval '5 seconds' AND ($1::bigint=0 OR tenant_id=b.tenant_id))
 		AND NOT EXISTS(SELECT 1 FROM query_jobs WHERE state IN ('planning','queued','running') AND created_at<clock_timestamp()-interval '500 milliseconds' AND ($1::bigint=0 OR tenant_id=b.tenant_id))
 		ORDER BY (f.max_received_time_us<i.retention_floor_us) DESC,f.min_received_time_us,b.tenant_id,b.lane_id,b.bundle_id LIMIT 1`, tenantID).Scan(
@@ -139,6 +140,7 @@ func (operations *MaintenanceOperations) ClaimRetention(ctx context.Context, ins
 		FROM maintenance_tasks m JOIN maintenance_inputs mi ON mi.task_id=m.task_id AND mi.tenant_id=m.tenant_id
 		JOIN bundles b ON b.tenant_id=mi.tenant_id AND b.bundle_id=mi.bundle_id
 		WHERE m.kind='retain' AND m.retry_at<=clock_timestamp() AND (m.state IN ('queued','prepared') OR (m.state='running' AND m.lease_until<=clock_timestamp()))
+		AND NOT `+maintenancePressureSQL+`
 		ORDER BY m.created_at,m.task_id LIMIT 1 FOR UPDATE OF m SKIP LOCKED`).Scan(
 		&task.Authority.TaskID, &task.Authority.TenantID, &task.Authority.LaneID, &task.Authority.StorageGeneration,
 		&task.Authority.Fence, &state, &task.RetentionFloor, &task.Partition.SchemaVersion,

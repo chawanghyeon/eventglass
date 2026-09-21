@@ -42,6 +42,7 @@ type Runtime struct {
 	deliveryWorker *alerts.DeliveryWorker
 	queryWorker    *query.Workflow
 	blockCache     *storage.BlockCache
+	nativeTasks    *NativeTaskGate
 	queryPlanner   *query.Coordinator
 	converter      *ingest.DurableConversionWorkflow
 	publisher      *ingest.DurablePublicationWorkflow
@@ -64,6 +65,9 @@ type Runtime struct {
 func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
+	}
+	if err := prepareNativeReaping(); err != nil {
+		return nil, fmt.Errorf("configure native process lifetime: %w", err)
 	}
 	var web http.Handler
 	if config.Roles[RoleAPI] && config.WebDir != "" {
@@ -171,6 +175,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 	}
 	runtime.metricsHandler = http.HandlerFunc(runtime.serveAutoscaleMetrics)
 	nativeTasks := NewNativeTaskGate()
+	runtime.nativeTasks = nativeTasks
 	if len(config.Roles) > 1 {
 		nativeTasks.working, nativeTasks.reservation, nativeTasks.memory = resources.Working, combinedWorkingBytes, combinedWorkingBytes
 	} else if config.Roles[RoleAPI] || config.Roles[RoleScheduler] {
