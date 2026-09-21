@@ -145,10 +145,14 @@ scope checks; never reveal another tenant's existence.
 
 Coordinator seals immutable partitions before dispatch, with planning state,
 catalog paging and metadata quotas specified in [correctness C06](correctness.md#c06--query-planning-and-merging-are-bounded-including-metadata): sorted file_id lists,
-up to32 analytics files or target64MiB compressed; detail remains capped at8
+up to128 analytics files or target64MiB compressed; detail remains capped at8
 analytics/payload pairs. A larger analytics file is its own task. Each
 analytics file belongs to exactly one scan partition. Payload files are excluded
 except detail. Row-group splitting remains disabled unless independently proven.
+The R3 CPU1 small-file experiment raised the file-count bound from32 to128;
+the 64MiB byte, 1MiB per-task manifest, native256MiB and one-child bounds do
+not increase. The native query request cap and planner share this limit, and
+129 inputs fail closed. This is a measured tuning limit, not an R3 SLO pass.
 Plan envelope includes protocol version, query/snapshot/task/fence/generation,
 deadline, operation IR, cut/scope, complete manifests and supervisor capability
 handles. No user S3 credential or URL can create a capability.

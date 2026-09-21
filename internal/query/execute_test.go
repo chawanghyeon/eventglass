@@ -61,8 +61,34 @@ func TestBuildExecutionPlanBatchesTinyRowsButBoundsDetailPayloadFanout(t *testin
 	detailScope := testPlanScope()
 	detailScope.Operation = []byte(`{"kind":"detail"}`)
 	detail, err := BuildExecutionPlan(detailScope, files)
-	if err != nil || detail.ScanCount != 5 {
+	if err != nil || detail.ScanCount != (len(files)+MaxDetailFilesPerScan-1)/MaxDetailFilesPerScan {
 		t.Fatalf("detail scans=%d err=%v", detail.ScanCount, err)
+	}
+}
+
+func TestScanFileLimitKeepsByteAndManifestCaps(t *testing.T) {
+	files := make([]model.CatalogFile, MaxFilesPerScan)
+	for index := range files {
+		files[index] = model.CatalogFile{FileID: fmt.Sprintf("%08x-0000-4000-8000-000000000000", index), ObjectKey: fmt.Sprintf("v1/query/bounded-%d.parquet", index), Bytes: TargetScanBytes / MaxFilesPerScan, SHA256: fmt.Sprintf("%064x", index+1), RowCount: 1}
+	}
+	plan, err := BuildExecutionPlan(testPlanScope(), files)
+	if err != nil || plan.ScanCount != 1 || len(plan.Tasks) != 1 || len(plan.Tasks[0].Manifest) > MaxTaskManifestBytes {
+		t.Fatalf("bounded scan plan=%#v err=%v", plan, err)
+	}
+	files[0].Bytes++
+	plan, err = BuildExecutionPlan(testPlanScope(), files)
+	if err != nil || plan.ScanCount != 2 {
+		t.Fatalf("byte over-limit plan=%#v err=%v", plan, err)
+	}
+	for index := range files {
+		files[index].Bytes = 1
+		files[index].BlockSHA256 = make([]string, 128)
+		for block := range files[index].BlockSHA256 {
+			files[index].BlockSHA256[block] = fmt.Sprintf("%064x", block+1)
+		}
+	}
+	if _, err := BuildExecutionPlan(testPlanScope(), files); !errors.Is(err, ErrQueryLimit) {
+		t.Fatalf("oversized scan manifest accepted: %v", err)
 	}
 }
 

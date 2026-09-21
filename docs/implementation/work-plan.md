@@ -98,6 +98,14 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 | R3 / R2 — executable, target miss | tests/comparison independent oracle/load/cost report; scripts/check comparison | Fixed10k/100k/1m/10m seeds,5min warmup/30min load/10min drain, SIGKILL/restart, ARM64 cgroup and whole-installation PG/S3 costs with dated price inputs are implemented. Expired query-task leases are reclaimed with a new fence and exhausted attempts fail closed; nullable visibility estimates fall back to the newest actually returned received time. The 2026-09-21 official one-worker run accepted220,500 with ACK p95=375ms and no conflicts/OOM, but rows/histogram p95=11.812s/11.085s,113 query failures, backlog slope=+474.52 jobs/min and final backlog=13,060 after the ten-minute drain. Bounded query-task bursts and one-pass Parquet output inspection improved a 60-second diagnostic to rows/histogram p95=498/449ms, backlog max20 and drain2.007s. The harness had leaked each fresh search snapshot until the real four-active-snapshots-per-user cap returned 503; its first DELETE attempt lacked the required Origin header. After scoped release with CSRF and Origin, a 20s/120s/90s one-worker diagnostic completed all24 queries with zero failures but rows/histogram p95=573/681ms and load backlog slope=+24.63 jobs/min. **G07 remains incomplete; all targets must pass under the official profile.** |
 | R4 / R3 | deploy backend locks; scripts/check release; operator/upgrade guides; SBOM/notices | Authorized AWS + proven selfhost smoke/restore, ARM64 provenance, secret/license scans, schema/journal compatibility and rollback rehearsal, declared SDK matrix; **G08 complete; only then advertise release** |
 
+R3 remains the first incomplete packet. A further 20s/300s/90s ARM64
+one-worker diagnostic recorded 646 planned files at the end of its 32-file
+scan-partition run. Aligning the planner and native bounds at 128 files per
+scan preserved the byte/manifest/child limits and completed all 59 searches;
+rows/histogram p95 changed from 1,750/1,951ms to 854/1,068ms, while
+visibility p95 was 13.605s and backlog still grew +27.34 jobs/min. This is
+diagnostic evidence with different compaction trajectories, not a G07 pass.
+
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured
 miss and revise implementation; do not relabel target as achieved by design.

@@ -56,7 +56,7 @@ func (s Submission) Submit(ctx context.Context, token [32]byte, snapshot model.Q
 			size = math.MaxInt64
 		}
 	}
-	sync := mode == ModeSync || mode == ModeAuto && len(files) <= MaxFilesPerScan && size <= TargetScanBytes
+	sync := mode == ModeSync || mode == ModeAuto && len(files) <= MaxSyncFiles && size <= TargetScanBytes
 	timeout := control.QueryMaximumTimeout
 	if sync {
 		timeout = control.QuerySyncTimeout

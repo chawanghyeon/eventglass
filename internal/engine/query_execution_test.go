@@ -76,6 +76,37 @@ func TestExecuteQueryRowsAndReducerKeepGlobalOrder(t *testing.T) {
 	}
 }
 
+func TestExecuteQueryBoundsOneHundredTwentyEightScanFiles(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	first := filepath.Join(root, "input-0.parquet")
+	writeQueryParquet(t, ctx, first, `SELECT 100::BIGINT event_time_us,0::INTEGER event_time_ns_remainder,'`+strings.Repeat("a", 64)+`' record_id`)
+	inputs := []string{first}
+	for index := 1; index <= engine.MaxQueryInputFiles; index++ {
+		path := filepath.Join(root, fmt.Sprintf("input-%d.parquet", index))
+		if err := os.Link(first, path); err != nil {
+			t.Fatal(err)
+		}
+		inputs = append(inputs, path)
+	}
+	operation := engine.QueryOperation{Version: engine.QueryExecutionProtocolVersion, Kind: "rows", MaxRows: 2,
+		Result:  engine.QueryResultPlan{Kind: "rows", Limit: 1, Sort: "event_desc"},
+		ScanSQL: `SELECT * FROM input_rows ORDER BY event_time_us DESC,event_time_ns_remainder DESC,record_id DESC LIMIT 2`}
+	request := engine.QueryRequest{Version: engine.QueryExecutionProtocolVersion, QueryID: "bounded-files",
+		Task: model.QueryTaskKey{Stage: model.QueryTaskScan}, Operation: operation,
+		InputPaths: inputs[:engine.MaxQueryInputFiles], OutputPath: filepath.Join(root, "result.parquet"), SpillDirectory: filepath.Join(root, "spill")}
+	summary, err := engine.ExecuteQuery(ctx, request)
+	if err != nil || summary.Rows != 2 {
+		t.Fatalf("bounded scan summary=%#v err=%v", summary, err)
+	}
+	request.InputPaths = inputs
+	request.OutputPath = filepath.Join(root, "rejected.parquet")
+	request.SpillDirectory = filepath.Join(root, "rejected-spill")
+	if _, err := engine.ExecuteQuery(ctx, request); err == nil {
+		t.Fatal("129 scan inputs were accepted")
+	}
+}
+
 func TestExecuteQueryNativeLimbsSurviveLocalOverflowCancellation(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

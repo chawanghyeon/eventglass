@@ -214,6 +214,23 @@ compaction/object counts (6,765 versus 6,844) and is not proof of proportional
 end-to-end speedup. CPU1 query p95, visibility and growing backlog still miss;
 the official R3 profile has not passed.
 
+On 2026-09-21, the comparison report also began recording the API's actual
+planned-object count and scanned bytes. A 20s/300s/90s one-worker run with
+32-file scan partitions saw planned objects rise from91 to646 and at most
+6,907,548 compressed input bytes; rows/histogram p95 was1,750/1,951ms,
+visibility p95 9.008s and backlog slope +20.59 jobs/min. The first 128-file
+candidate failed every query because the planner limit exceeded the native
+request's still-32-file cap; it was rejected, not treated as a benchmark.
+After binding the planner limit to the native cap and checking a real pinned
+DuckDB 128-file scan plus 129-file rejection, the same-duration candidate
+completed all59 searches with rows/histogram p95 854/1,068ms, ACK p95 375ms,
+visibility p95 13.605s, backlog slope +27.34 jobs/min and no cgroup OOM.
+S3 HEAD/GET/Range counts were 36,121/14,705/2,395 in the 32-file run and
+27,247/15,105/2,027 in the 128-file run. Compaction differed (last planned
+object count646 versus340), so this is an end-to-end same-workload comparison,
+not isolated attribution to scan partition size. Query, visibility and
+load-backlog targets still fail; R3 remains incomplete.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	MaxQueryInputFiles  = 32
+	MaxQueryInputFiles  = 128
 	MaxDetailInputFiles = 8
 	MaxQueryOutputBytes = int64(64 << 20)
 	MaxQueryOutputRows  = int64(20000)

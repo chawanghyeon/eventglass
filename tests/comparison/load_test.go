@@ -46,6 +46,8 @@ type comparisonReport struct {
 	VisibilitySamples                         int
 	RowsQuerySamples, HistogramQuerySamples   int
 	QueryFailures                             int
+	QueryObjectsFirst, QueryObjectsLast       int64
+	QueryObjectsMax, QueryScannedBytesMax     int64
 	QueryFailureCodes                         map[string]int
 	QueryJobStates                            map[string]int
 	ACKP50MS, ACKP95MS, ACKP99MS              int64
@@ -152,7 +154,7 @@ func TestSustainedComparison(t *testing.T) {
 	go runMixedQueries(queryContext, client, baseURL, state, session.CSRFToken, warmup, &latencyMu,
 		&queryLatencies, &rowsQueryLatencies, &histogramQueryLatencies,
 		&rowsServerLatencies, &histogramServerLatencies, &rowsOverheadLatencies, &histogramOverheadLatencies,
-		&visibilityLatencies, &report.QueryFailures, report.QueryFailureCodes, queryErrors)
+		&visibilityLatencies, &report, queryErrors)
 
 	sequence := int64(0)
 	if err := runIngestPhase(client, baseURL, state, warmup, false, &sequence, &ackLatencies, &report); err != nil {
@@ -365,7 +367,7 @@ func postEnvelopeWithAdmissionRetry(client *http.Client, baseURL string, state c
 
 func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, state comparisonState, csrf string, delay time.Duration, mu *sync.Mutex,
 	latencies, rows, histograms, rowsServer, histogramsServer, rowsOverhead, histogramsOverhead, visibility *[]time.Duration,
-	failures *int, failureCodes map[string]int, result chan<- error,
+	report *comparisonReport, result chan<- error,
 ) {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -393,12 +395,18 @@ func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, s
 					return
 				}
 				mu.Lock()
-				(*failures)++
-				failureCodes[searchFailureCode(err)]++
+				report.QueryFailures++
+				report.QueryFailureCodes[searchFailureCode(err)]++
 				mu.Unlock()
 				continue
 			}
 			mu.Lock()
+			if len(*latencies) == 0 {
+				report.QueryObjectsFirst = measurement.Objects
+			}
+			report.QueryObjectsLast = measurement.Objects
+			report.QueryObjectsMax = max(report.QueryObjectsMax, measurement.Objects)
+			report.QueryScannedBytesMax = max(report.QueryScannedBytesMax, measurement.ScannedBytes)
 			*latencies = append(*latencies, measurement.Total)
 			if histogram {
 				*histograms = append(*histograms, measurement.Total)
@@ -443,9 +451,11 @@ func searchFailureCode(err error) string {
 }
 
 type searchMeasurement struct {
-	Total      time.Duration
-	Server     time.Duration
-	Visibility time.Duration
+	Total        time.Duration
+	Server       time.Duration
+	Visibility   time.Duration
+	Objects      int64
+	ScannedBytes int64
 }
 
 func (measurement searchMeasurement) Overhead() time.Duration {
@@ -510,6 +520,8 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		Stats struct {
 			VisibilityLagMS *string `json:"visibility_lag_ms"`
 			ElapsedMS       string  `json:"elapsed_ms"`
+			Objects         string  `json:"objects"`
+			ScannedBytes    string  `json:"scanned_bytes"`
 		} `json:"stats"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -525,6 +537,14 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 	serverMS, err := strconv.ParseInt(wire.Stats.ElapsedMS, 10, 64)
 	if err != nil || serverMS < 0 {
 		return searchMeasurement{}, fmt.Errorf("invalid query elapsed_ms %q", wire.Stats.ElapsedMS)
+	}
+	objects, err := strconv.ParseInt(wire.Stats.Objects, 10, 64)
+	if err != nil || objects < 0 {
+		return searchMeasurement{}, fmt.Errorf("invalid query objects %q", wire.Stats.Objects)
+	}
+	scannedBytes, err := strconv.ParseInt(wire.Stats.ScannedBytes, 10, 64)
+	if err != nil || scannedBytes < 0 {
+		return searchMeasurement{}, fmt.Errorf("invalid query scanned_bytes %q", wire.Stats.ScannedBytes)
 	}
 	visible := time.Duration(-1)
 	if wire.Stats.VisibilityLagMS != nil {
@@ -551,7 +571,7 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		}
 		visible = lag
 	}
-	return searchMeasurement{Total: queryLatency, Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible}, nil
+	return searchMeasurement{Total: queryLatency, Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible, Objects: objects, ScannedBytes: scannedBytes}, nil
 }
 
 func releaseComparisonSnapshot(ctx context.Context, client *http.Client, baseURL string, tenantID int64, snapshotID, csrf string) error {

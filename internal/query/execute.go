@@ -8,6 +8,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/google/uuid"
 )
@@ -18,7 +19,8 @@ const (
 	MaxScanPartitions     = 4096
 	MaxPlanBytes          = 16 << 20
 	MaxTaskManifestBytes  = 1 << 20
-	MaxFilesPerScan       = 32
+	MaxFilesPerScan       = engine.MaxQueryInputFiles
+	MaxSyncFiles          = 32
 	MaxDetailFilesPerScan = 8
 	TargetScanBytes       = int64(64 << 20)
 	MaxTaskOutputBytes    = int64(64 << 20)
