@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -51,7 +52,7 @@ func Compact(ctx context.Context, request CompactionRequest) (CompactionResult, 
 		analyticsPaths[index], payloadPaths[index] = input.AnalyticsPath, input.PayloadPath
 	}
 	if err := verifyCompactionInputs(ctx, db, request, analyticsPaths, payloadPaths); err != nil {
-		return CompactionResult{}, err
+		return CompactionResult{}, fmt.Errorf("verify compaction inputs: %w", err)
 	}
 	analyticsPath := filepath.Join(request.OutputDirectory, "compact.analytics.parquet")
 	payloadPath := filepath.Join(request.OutputDirectory, "compact.payload.parquet")
@@ -59,12 +60,15 @@ func Compact(ctx context.Context, request CompactionRequest) (CompactionResult, 
 	if request.MinReceivedTimeUS > 0 {
 		retained += ` WHERE received_time_us>=` + strconv.FormatInt(request.MinReceivedTimeUS, 10)
 	}
-	analyticsSQL := `COPY (` + retained + ` ORDER BY received_time_us,lane_id,batch_seq,record_ordinal,record_id) TO '` + quoteSQLString(analyticsPath) + `' (FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,ROW_GROUP_SIZE 16384)`
-	payloadSQL := `COPY (SELECT p.* FROM read_parquet(` + parquetPathList(payloadPaths) + `) p SEMI JOIN (` + retained + `) a USING(record_id) ORDER BY p.record_id) TO '` + quoteSQLString(payloadPath) + `' (FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,ROW_GROUP_SIZE 16384)`
-	for _, statement := range []string{analyticsSQL, payloadSQL} {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			return CompactionResult{}, err
-		}
+	if err := copyCompactionRole(ctx, db, request, retained, "received_time_us,lane_id,batch_seq,record_ordinal,record_id", analyticsPath, analyticsPaths, false); err != nil {
+		return CompactionResult{}, fmt.Errorf("rewrite analytics parquet: %w", err)
+	}
+	payload := `SELECT p.* FROM read_parquet(` + parquetPathList(payloadPaths) + `) p`
+	if request.MinReceivedTimeUS > 0 {
+		payload += ` SEMI JOIN (` + retained + `) a USING(record_id)`
+	}
+	if err := copyCompactionRole(ctx, db, request, payload, "record_id", payloadPath, payloadPaths, true); err != nil {
+		return CompactionResult{}, fmt.Errorf("rewrite payload parquet: %w", err)
 	}
 	bundle, err := inspectPartition(ctx, db, 0, partition{day: request.EventDay, kind: request.Kind}, analyticsPath, payloadPath)
 	if err != nil {

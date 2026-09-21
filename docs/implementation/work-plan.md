@@ -231,9 +231,14 @@ fragments from scope JSON, sharing canonical metadata, and normalizing byte-size
 chunks now lets that legal batch convert at both192/256MiB without raising
 limits; original engine JSON byte/NULL semantics are explicitly compared.
 The integration fixture is strengthened from16 batches of16 to4 batches of64.
-The32-batch/512-event compaction child failure and maximum-size maintenance
-progress still need bounded-memory fixes and verification; do not replace them
-with raw-object download success. R3 remains first incomplete.
+The32-batch/512-event compaction failure is now addressed by bounded, ordered
+native partition writes and concatenation within the existing spill budget.
+A stronger56-input/896-event regression uses266,090,129 actual compressed bytes
+and passes at192/256MiB native memory, with complete column hashes and physical
+ordering checked. It does not establish spare cgroup memory, official-duration
+maintenance-budget progress or the service SLOs. See quality.md for matched
+latency/allocation/RSS costs and the executed integration/resource checks.
+R3 remains first incomplete; raw-object download success is not a substitute.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

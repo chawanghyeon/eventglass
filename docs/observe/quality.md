@@ -1173,6 +1173,114 @@ checks passed too. Final-image Chromium passed in2.6s. Execution logs use
 `.tools/wide-conversion-chunked-source-sha256.txt`. The source-design checksum
 is unchanged. R3/R4 gates remain incomplete.
 
+### Wide native compaction and ordered byte-bounded output
+
+The previous512-record failure was reproduced with32 actual native input pairs,
+152,053,783 compressed bytes, CPU1/512MiB/swap0,256MiB native memory and256MiB
+spill. Verification and a separate sorted-table materialization succeeded, but
+the analytics COPY failed at255.8/256MiB. Merely lowering the row-group byte
+target, lowering page sizes, changing COPY ordering, disabling external-file
+cache or reducing read-ahead did not fix it. No pinned dependency was changed.
+
+The engine now uses Parquet uncompressed metadata to retain a direct COPY path
+for small inputs. Wide inputs materialize scalar keys and actual byte sizes,
+then write ordered4MiB ranges, at most eight ranges per invocation, and concatenate
+the private native Parquet files in numeric range order. A4KiB minimum row charge,
+1,024-partition cap, conservative byte reservation and actual manifest checks
+bound intermediate work. Reserved intermediate space is subtracted from the
+request's existing spill budget, not added to it. Payload sizing uses existing
+string lengths rather than re-serializing JSON. Ordinary full-pair compaction
+does not repeat a payload semi-join after exact per-input identity verification;
+retention still filters payload by the exact retained analytics IDs.
+
+This path deliberately repeats some **local** scans to bound native writer
+buffers. It does not introduce additional S3 downloads, parallel writers,
+new storage engines, public formats or transaction authority. All original
+identity/scope checks, final SHA/block/statistics checks, fenced catalog swap,
+snapshot protections and fresh-backup GC interlock remain in place.
+
+The stronger native regression converts56 input pairs/896 actual wide records:
+266,090,129 compressed input bytes, below the256MiB input bound. Both192MiB
+and256MiB native profiles produce exactly896 records and analytics/payload files
+132,977,110/133,052,290bytes, each below128MiB. Every native column is independently
+hashed before/after, and physical analytics/payload ordering is checked by file
+row number. The final large-input fixture uses the existing production2GiB
+spill allowance; this is not a product-limit increase or a claim that its entire
+intermediate set fits256MiB spill. The full-value verifier uses the existing
+192MiB query profile; an earlier64MiB verifier failed on the large result.
+The4106ecd baseline was also rebuilt with this identical56-pair/2GiB-spill
+fixture: it fails at191.9/192MiB and255.9/256MiB respectively, with cgroup
+peak509,136,896bytes and OOM/kill0. Thus extra spill alone does not explain the
+successful rewrite. See `.tools/wide-compaction-matched-regression-before.log`.
+
+Actual mid-partition cancellation joins native work, removes spill and retries
+the unchanged inputs successfully. Separate tests check exact received-time
+retention boundaries, all-retained payload filtering, insufficient intermediate
+spill admission/retry, numeric partition order, extra files, invalid names,
+symlinks and byte/count limits. The two large-profile tests took35.02s including
+fixture construction and independent verification; this is **not** compaction
+latency. Their cgroup observed memory.peak536,875,008bytes and max-events9,390,
+OOM/kill0. The cancellation/retention cgroup reached536,870,912bytes with
+max-events2,300 and OOM/kill0. These runs do not establish spare-memory headroom.
+
+Matched measurements use before4106ecd versus this bounded writer, Go1.27.1,
+the identical pinned static library, CPU1/512MiB/swap0, GOMAXPROCS1,96MiB Go soft
+limit, non-root/read-only root, isolated disk scratch and no network. No builds
+or other heavy checks run during timing. Wide measurements use the same2GiB
+spill allowance on both sides; the existing ordinary-input benchmark keeps its
+256MiB allowance. Each median is five samples of three operations; setup is
+excluded from timed Go allocations but included in process/cgroup peaks.
+
+For16 wide pairs/256 records, latency is515.512→1,025.038ms and throughput
+496.6→249.7records/s. Go bytes/op are2,472,917→2,572,546, allocations/op
+10,244→11,828. Reported process max RSS is542,871,552→272,465,920bytes; fresh
+cgroup peaks are536,870,912→449,191,936bytes, including file cache. The kernel's
+process high-water RSS and charged cgroup counter are different observations;
+neither is Go allocation accounting. Both OOM/kill counts are0; max-events
+13,222→0. S3 requests/transferred bytes and network bytes are0 in both runs.
+This is a memory/progress fix with a **wide-input latency regression**, not a
+throughput improvement, service-SLO result or competitor comparison.
+
+The unchanged ordinary16-record-per-input fixture also measures the metadata
+admission overhead; it is not hidden by the wide-input result:
+
+| Input pairs | Median before → after | Go bytes/op before → after | Go allocations/op before → after |
+| --- | --- | --- | --- |
+|2|69.719→70.842ms|2,164,856→2,169,688|1,813→1,909|
+|8|75.904→79.923ms|2,294,688→2,305,152|5,359→5,467|
+|32|98.715→106.477ms|2,821,392→2,853,989|19,528→19,685|
+|128|186.189→213.294ms|4,913,725→5,033,397|76,172→76,521|
+
+The ordinary cases are slower too. Their full before/after logs are
+`.tools/wide-compaction-small-{before,after}.log`; all S3/network counts are0.
+
+Raw matched logs use `.tools/wide-compaction-benchmark-{before,after}.log`;
+regressions use `.tools/wide-compaction-queryprofile.log` and
+`.tools/wide-compaction-focused.log`; source and binary hashes are recorded in
+`.tools/wide-compaction-source-sha256.txt`.
+
+ARM64 unit/vet/architecture/layout and generated-contract checks pass. Full
+pinned-native contracts/vet pass (engine66.043s), followed by actual PostgreSQL/
+MinIO17.050s and native query/Live/alert/maintenance integration35.960s.
+App/ingest/maintenance race checks pass in4.312/4.171/1.759s.
+The durable wide fixture now uses8 batches of64 records, not the earlier4, so
+these are not matched performance comparisons. Its separate CPU1/512MiB/swap0,
+non-root/read-only-root run passes in11.02s and produces analytics/payload
+76,011,247/76,027,270bytes. Fixture plus verification records28 PUTs /
+377,780,164bytes,28 HEADs,78 full GETs /1,363,406,089bytes and0 Range GETs.
+Together with the actual24/64/128MiB verified-download regressions, its cgroup
+peak is536,870,912bytes, max-events690, OOM/kill0. No physical GC is performed.
+Logs use `.tools/wide-compaction-{contracts,integration,integration-bounded}.log`.
+The default resource gate runs115.465s,24 cycles/12,600 records at logical105/s,
+worst cycle257ms, cgroup peak142,188,544bytes, OOM0 and scratch0. Native OOM,
+cancellation/join and permit-drain checks pass. Final-image Chromium passes in
+2.7s. Resource/browser logs use the same `.tools/wide-compaction-` prefix.
+The source-design file remains byte-identical.
+
+Corrected official-duration service runs,
+maintenance-budget progress and independent capacity/cost evidence still remain;
+R3/R4 are not closed by these local results.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

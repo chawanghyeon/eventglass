@@ -172,6 +172,23 @@ scan provenance must not be replaceable by a Parquet filename column. Input
 full-SHA verification remains at the download boundary; output SHA/block and
 pair evidence remains mandatory before upload/Prepare. Do not recalculate input
 full hashes merely to discard them. File128MiB and total256MiB bounds still apply.
+Wide native rewrites must not keep a full sorted value vector beside the Parquet
+writer. Small inputs retain the direct COPY path, selected by actual Parquet
+uncompressed metadata, not compressed file length. Larger inputs materialize
+only scalar sort keys and byte sizes, partition into4MiB key ranges with a4KiB
+minimum row charge, and write at most eight ranges per native invocation. At
+most1,024 intermediate partitions are admitted. Their conservative byte
+reservation is subtracted from the existing native spill allowance; insufficient
+budget fails before writing partitions. Actual partition counts/bytes and paths
+are checked before numeric-order concatenation into one paired replacement.
+Intermediate canonical columns never round-trip through JSON; analytics JSON
+is used only to measure a row's size, while payload uses its existing string
+byte lengths. Final native scans still prove exact identity, statistics and
+SHA/block evidence. The repeated scans are sequential reads of already verified
+local inputs, not additional S3 downloads; this trades local I/O/latency for
+bounded native buffers and requires matched measurements, not a speedup claim.
+The engine owns these private files and removes them only after the native call
+has joined; app continues to own child lifetime and maintenance admission.
 Swap transaction locks lane/task/intents/bundles, rechecks live tuple and **each
 reserved input still current**; unrelated newer publications may exist. Increment
 current catalog_generation, close only reserved inputs at G, insert replacements

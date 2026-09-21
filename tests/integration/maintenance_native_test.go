@@ -34,9 +34,9 @@ func TestMaintenanceEndToEndRetentionAndPinnedSnapshot(t *testing.T) {
 }
 
 func TestMaintenanceEndToEndLargeBundleRetention(t *testing.T) {
-	// Keep the same256 total rows while exercising the formerly failing
-	// legal64-wide-event conversion before the large-bundle retention path.
-	runNativeRetention(t, 4, 64, true)
+	// Exercise both the formerly failing64-event conversion and512-event
+	// compaction through actual durable ingestion, S3 and joined native children.
+	runNativeRetention(t, 8, 64, true)
 }
 
 func runNativeRetention(t *testing.T, batchCount, perBatch int, large bool) {

@@ -66,7 +66,7 @@ at the exact received-time boundary, fully expired retirement, pinned old
 snapshot reads, authority revocation and retry/cancellation checks. It does not
 enable physical GC without signed backup evidence. Metadata-only maintenance
 fixtures are not a substitute for this end-to-end path.
-The same gate includes a real approximately36MiB-per-file paired bundle,
+The same gate includes a real approximately72MiB-per-file paired bundle,
 operation-specific verified-download limits (journal24MiB, result64MiB,
 bundle128MiB), and actual S3 cancellation/retry. Passing a128MiB raw-object
 download is not evidence that a maximum-size Parquet rewrite fits the worker

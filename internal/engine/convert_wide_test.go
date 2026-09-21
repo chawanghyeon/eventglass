@@ -25,9 +25,14 @@ import (
 // have the same wide-field duplication as the durable integration regression.
 // This isolates native execution; it does not claim to exercise durable ACK.
 func wideConversionRequest(t testing.TB, count int) (engine.ConversionRequest, map[string]string) {
+	return wideConversionBatch(t, count, 0)
+}
+
+func wideConversionBatch(t testing.TB, count, batch int) (engine.ConversionRequest, map[string]string) {
 	t.Helper()
 	root := t.TempDir()
-	random := rand.New(rand.NewSource(1780))
+	random := rand.New(rand.NewSource(1780 + int64(batch)))
+	batchID := fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x222+batch)
 	items := make([]sdk.Item, count)
 	for ordinal := range items {
 		blob := make([]byte, 72<<10)
@@ -35,12 +40,12 @@ func wideConversionRequest(t testing.TB, count int) (engine.ConversionRequest, m
 			t.Fatal(err)
 		}
 		items[ordinal] = sdk.Item{Ordinal: ordinal, Type: "event", Value: map[string]any{
-			"event_id": fmt.Sprintf("%032x", ordinal+1), "message": fmt.Sprintf("wide conversion %d", ordinal),
+			"event_id": fmt.Sprintf("%032x", batch*count+ordinal+1), "message": fmt.Sprintf("wide conversion %d", ordinal),
 			"extra": map[string]any{"blob": base64.StdEncoding.EncodeToString(blob)},
 		}}
 	}
 	normalized, err := ingest.NormalizeEnvelope(sdk.Envelope{Items: items}, ingest.NormalizeOptions{
-		TenantID: 1, ProjectID: 10, AcceptanceID: "00000000-0000-4000-8000-000000000111", ArrivalTime: time.Unix(1, 0)})
+		TenantID: 1, ProjectID: 10, AcceptanceID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x111+batch), ArrivalTime: time.Unix(1, 0)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,8 +59,8 @@ func wideConversionRequest(t testing.TB, count int) (engine.ConversionRequest, m
 	expected := make(map[string]string, count)
 	for ordinal, record := range normalized.Records {
 		staged := engine.StageRecord{Version: 1, GlobalOrdinal: ordinal,
-			BatchID: "00000000-0000-4000-8000-000000000222", LaneID: 3, BatchSeq: 4,
-			ReceivedTimeUS: 2_000_000, GroupingVersion: 1, Record: record,
+			BatchID: batchID, LaneID: 3, BatchSeq: int64(4 + batch),
+			ReceivedTimeUS: 2_000_000 + int64(batch), GroupingVersion: 1, Record: record,
 			IssueID: fmt.Sprintf("%064x", ordinal+1), FingerprintSHA256: fmt.Sprintf("%064x", ordinal+1), IssueTitle: record.Message}
 		if err := encoder.Encode(staged); err != nil {
 			t.Fatal(err)
@@ -67,7 +72,7 @@ func wideConversionRequest(t testing.TB, count int) (engine.ConversionRequest, m
 	}
 	return engine.ConversionRequest{Version: 1, StagePath: stage,
 		OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"),
-		TenantID: 1, LaneID: 3, BatchSeq: 4, BatchID: "00000000-0000-4000-8000-000000000222",
+		TenantID: 1, LaneID: 3, BatchSeq: int64(4 + batch), BatchID: batchID,
 		SelectedRecords: count, SelectedErrors: count, NativeMemoryBytes: 256 << 20, NativeSpillBytes: 256 << 20}, expected
 }
 
