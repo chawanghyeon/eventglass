@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +265,81 @@ func TestConvertTypedStageColumnsPreserveNullsAndIntegerPrecision(t *testing.T) 
 	}
 	if err := rows.Err(); err != nil || count != len(records) {
 		t.Fatalf("rows=%d err=%v", count, err)
+	}
+}
+
+func TestConvertAttributeTypeReusePreservesValuesAndNulls(t *testing.T) {
+	root := t.TempDir()
+	text, integer, unit := "검색 'quoted'", "-99999999999999999999999999999999999999", "millisecond"
+	fraction, flag := 0.125, false
+	records := []StageRecord{
+		conversionRecord("a", model.KindLog, 1_700_000_000_000_000, 0),
+		conversionRecord("b", model.KindLog, 1_700_000_000_000_001, 1),
+		conversionRecord("c", model.KindLog, 1_700_000_000_000_002, 2),
+	}
+	records[0].Record.Attrs = []model.Attribute{
+		{Namespace: "attributes", Path: "/a", ValueType: "string", StringValue: &text},
+		{Namespace: "attributes", Path: "/b", ValueType: "integer", IntegerValue: &integer},
+		{Namespace: "attributes", Path: "/c", ValueType: "double", DoubleValue: &fraction, Unit: &unit},
+		{Namespace: "attributes", Path: "/d", ValueType: "boolean", BooleanValue: &flag},
+		{Namespace: "attributes", Path: "/e", ValueType: "json", JSONValue: json.RawMessage(`{"nested":[1,true,null]}`)},
+		{Namespace: "attributes", Path: "/f", ValueType: "null"},
+	}
+	records[1].Record.Attrs = nil
+	records[2].Record.Attrs = []model.Attribute{}
+	request := ConversionRequest{
+		Version: ConversionProtocolVersion, StagePath: writeConversionStage(t, root, records),
+		OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"),
+		TenantID: 1, LaneID: 3, BatchSeq: 4, BatchID: records[0].BatchID, SelectedRecords: len(records),
+	}
+	var bundle ConvertedBundle
+	if _, err := Convert(context.Background(), request, func(got ConvertedBundle) error { bundle = got; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	// A fresh connection has no conversion-local type alias. Read the persisted
+	// structure, not its in-memory type name, including exact DECIMAL(38,0).
+	db, err := Open(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var decimalType, doubleType, boolType string
+	if err := db.QueryRow(`SELECT typeof(attrs[1].integer_value),typeof(attrs[1].double_value),typeof(attrs[1].boolean_value) FROM read_parquet(?) LIMIT 1`, bundle.Analytics.Path).Scan(&decimalType, &doubleType, &boolType); err != nil {
+		t.Fatal(err)
+	}
+	if decimalType != "DECIMAL(38,0)" || doubleType != "DOUBLE" || boolType != "BOOLEAN" {
+		t.Fatalf("attribute types changed: %s/%s/%s", decimalType, doubleType, boolType)
+	}
+	rows, err := db.Query(`SELECT a.namespace,a.path,a.value_type,a.string_value,a.integer_value::VARCHAR,a.double_value,a.boolean_value,a.json_value,a.unit
+		FROM (SELECT unnest(attrs) AS a FROM read_parquet(?)) ORDER BY a.path`, bundle.Analytics.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := 0
+	for rows.Next() {
+		var got model.Attribute
+		var raw *string
+		if err := rows.Scan(&got.Namespace, &got.Path, &got.ValueType, &got.StringValue, &got.IntegerValue, &got.DoubleValue, &got.BooleanValue, &raw, &got.Unit); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		if raw != nil {
+			got.JSONValue = json.RawMessage(*raw)
+		}
+		if index >= len(records[0].Record.Attrs) || !reflect.DeepEqual(got, records[0].Record.Attrs[index]) {
+			rows.Close()
+			t.Fatalf("attribute %d differs: %+v", index, got)
+		}
+		index++
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || index != len(records[0].Record.Attrs) {
+		t.Fatalf("attributes=%d err=%v", index, err)
+	}
+	var empty int
+	if err := db.QueryRow(`SELECT count(*) FROM read_parquet(?) WHERE array_length(attrs)=0`, bundle.Analytics.Path).Scan(&empty); err != nil || empty != 2 {
+		t.Fatalf("NULL/empty arrays: count=%d err=%v", empty, err)
 	}
 }
 

@@ -306,6 +306,35 @@ took90–95ms in the unchanged baseline. It is a stage diagnostic, not the full
 conversion workflow. This small conversion change does not close R3 or
 replace a new official end-to-end run.
 
+Detailed profiling of the same pinned engine then isolated repeated attribute
+type binding: one analytics COPY spent about27ms preparing and36–40ms executing,
+while paired output inspection took8–12ms. Inlining the partition constants did
+not help and was discarded. The converter now defines the unchanged nine-field
+attribute STRUCT once per private connection and refers to that type from
+`from_json`; no output validation, sorting or JSON missing-field policy is removed.
+Against `9b0ae92`, five2s samples with the identical ARM64 CPU1/512MiB/tmpfs
+limits produced these medians:
+
+| Local native conversion | Baseline | Reused attribute type |
+|---|---:|---:|
+| One-record ms / batches per second | 113.574 / 8.805 | 85.072 / 11.755 |
+| 100-record ms / batches per second | 127.067 / 7.870 | 97.945 / 10.210 |
+| One-record Go B/op / allocs/op | 2,223,966 / 899 | 2,223,358 / 916 |
+| 100-record Go B/op / allocs/op | 3,990,269 / 13,212 | 3,991,281 / 13,234 |
+| Benchmark-container memory.peak bytes | 108,810,240 | 109,760,512 |
+
+This measures approximately25%/23% less local conversion time, not a reduction
+in memory or whole-installation cost. Go allocation counts increase slightly;
+the cgroup peak includes native memory and cache, not isolated process RSS.
+Both local variants issue zero S3 requests and transfer zero S3 bytes. A fresh
+DuckDB connection without the alias checks the resulting Parquet types and
+38-digit negative integers, fractional numbers, false, Unicode, JSON, absent
+optional values and NULL/empty arrays. Temporary profiling code is not retained.
+The updated candidate passed all internal/cmd/architecture tests against the
+pinned Linux ARM64 native library, real isolated PostgreSQL/MinIO integration
+(32.154s), final-image Playwright (2.8s), unit and generated-contract checks.
+The broader R3 targets still require a new end-to-end measurement.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

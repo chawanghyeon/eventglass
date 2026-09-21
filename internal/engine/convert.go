@@ -150,6 +150,10 @@ func configureConversionDB(ctx context.Context, db *sql.DB, request ConversionRe
 		"SET temp_directory = '" + quotedSpill + "'",
 		"SET threads = 1",
 		"SET preserve_insertion_order = false",
+		// Resolve the fixed attribute structure once per conversion connection.
+		// from_json retains its missing-field/NULL semantics without rebinding
+		// all nine type strings for each analytics COPY.
+		"CREATE TYPE eventglass_attribute AS STRUCT(namespace VARCHAR,path VARCHAR,value_type VARCHAR,string_value VARCHAR,integer_value DECIMAL(38,0),double_value DOUBLE,boolean_value BOOLEAN,json_value VARCHAR,unit VARCHAR)",
 		// Appender strings inserted directly into DuckDB's JSON logical type are
 		// represented as JSON string scalars. Keep the verified JSONL bytes as
 		// VARCHAR and let json_extract parse them when materializing the stage.
@@ -388,7 +392,7 @@ func writePartition(ctx context.Context, db *sql.DB, outputDirectory string, ind
 		json_extract_string(stage_json,'$.exception_type') AS exception_type,
 		json_extract_string(stage_json,'$.exception_value') AS exception_value,
 		CAST(json_extract(stage_json,'$.handled') AS BOOLEAN) AS handled,
-		COALESCE(from_json(json_extract(stage_json,'$.record.attrs'), '[{"namespace":"VARCHAR","path":"VARCHAR","value_type":"VARCHAR","string_value":"VARCHAR","integer_value":"DECIMAL(38,0)","double_value":"DOUBLE","boolean_value":"BOOLEAN","json_value":"VARCHAR","unit":"VARCHAR"}]'), []) AS attrs,
+		COALESCE(from_json(json_extract(stage_json,'$.record.attrs'), '["eventglass_attribute"]'), []) AS attrs,
 		COALESCE(from_json(json_extract(stage_json,'$.record.search_values'), '["VARCHAR"]'), []) AS search_values,
 		CAST(json_extract(stage_json,'$.record.schema_version') AS INTEGER) AS schema_version,
 		CAST(json_extract(stage_json,'$.record.normalizer_version') AS INTEGER) AS normalizer_version,

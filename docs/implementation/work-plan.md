@@ -119,6 +119,12 @@ at117.043/132.552ms before and114.337/127.518ms after, but a repeat pair's range
 overlap, so no stable speedup is claimed. A slower broad JSON rewrite was
 rejected. Exact types/NULLs/large integers and real PG/S3/browser flows pass,
 but this is not evidence that the end-to-end R3 targets now pass.
+Detailed pinned-engine profiling subsequently identified repeated attribute-type
+binding. Defining that same STRUCT once per private conversion connection reduced
+local one/100-record median conversion time from113.574/127.067ms to85.072/97.945ms
+under the same CPU1/512MiB limits. Output inspection and JSON semantics remain;
+no memory saving or end-to-end SLO pass is implied. See quality.md for allocations,
+cgroup peaks and scope of the measurement.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured
