@@ -16,6 +16,7 @@ The active product is the root Go module. Use Go 1.27.1 exactly and run commands
 ./scripts/check resource
 ./scripts/check scale
 ./scripts/check comparison
+./scripts/check native-oracle
 ./scripts/check sdk
 ./scripts/check crash
 ./scripts/check web
@@ -100,8 +101,26 @@ backends, previous workers or OOM observations fail resource verification;
 Go cgroups must actually show512MiB memory and zero swap. The observation command
 itself is included in the cgroup; its peak is observed before stop/kill, not a
 promise of a final kernel value after the container has ceased to exist.
-The four-size native fixture oracle, capacity/scaling measurements and all
-phases under the official-duration profile remain required before R3 closure.
+The official comparison command also requires `./scripts/check native-oracle`.
+This Mode A check parses real SDK envelope bytes, normalizes them, writes and
+verifies journals, then uses the pinned native conversion and existing query
+scan/reduce planner for10k/100k/1m/10m records. Independent arithmetic and identity
+oracles check typed filters, null/missing/dotted keys, half-open time bounds,
+every partition's exact record set and equal-time keyset pages. Retry checks
+distinguish occurrence IDs from source-event dedupe keys; they are not PG Accept
+or durable ACK checks. The native-fixture-v1 byte hash is separate from the older
+selector-definition checksum, whose numeric selector did not represent a typed
+query result. All S3/network counts are zero in this network-denied local check;
+Mode B measures actual provider requests, durability and authorization.
+Each size runs in a fresh CPU1/512MiB/no-swap cgroup with96MiB Go soft limit,
+256MiB conversion/192MiB query native limits and256MiB spill. Isolated disk
+volumes, not memory-backed tmpfs, hold at most2GiB retained analytics plus
+bounded stage/journal/output/spill; volumes are removed after child termination.
+Logs, source/image identity, actual input hashes, timings, supervisor allocations
+and cgroup peak/OOM evidence remain in `.tools/native-oracle.*`. Allocation
+counts exclude unmanaged native memory; cgroup peaks include filesystem cache.
+Capacity/scaling measurements and all phases under the official-duration
+profile remain required before R3 closure.
 `EVENTGLASS_COMPARISON_QUICK=1` permits shorter local
 diagnostics but cannot complete R3. A generated report whose target map contains
 `false` remains a failed gate; do not relabel the measurement as a pass.

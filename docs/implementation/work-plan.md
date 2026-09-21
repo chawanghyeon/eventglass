@@ -171,6 +171,21 @@ warm Range117/0, but retained a load-backlog failure(+4.42/min). All three
 worker counts now have actual post-load/resource collector evidence, not a
 complete official R3 result. See quality.md for all successful and failed runs.
 
+Mode A now has an actual SDK-byte → normalization → verified journal replay →
+native Parquet → existing query scan/reduce oracle (`scripts/check native-oracle`),
+required by the official comparison command. It uncovered a reproducible10k-row
+conversion OOM: repeated parsing of the full stage JSON exceeded192MiB. Shared
+path-list extraction fixes that case without changing native/cgroup limits,
+schema, publication ownership or record identity. Exact scalar/NULL and large
+batch regression tests cover the change. Actual10k/100k profiles pass typed
+filters, partition identities and equal-time pagination. The1m profile converts
+all records and passes count/time/row queries, but typed-attribute scans exhaust
+the192MiB query budget;10m has not passed or been executed by this fail-fast run.
+This is the next local R3 capacity limit to investigate, including the separate
+worker's256MiB profile, not an external blocker. Preserve the failed run and
+prove the query change before claiming the four-size oracle or
+G07 complete. Official-duration capacity/efficiency and R4 remain outstanding.
+
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured
 miss and revise implementation; do not relabel target as achieved by design.

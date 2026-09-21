@@ -598,6 +598,77 @@ Final Linux ARM64 race/count2 checks passed for the entire non-load comparison
 and report suites; unit, codegen, architecture, shell syntax and source-design
 hash checks passed. No product API, schema, runtime or UI source changed.
 
+### Actual native fixture oracle and bounded JSON projection
+
+The2026-09-22 Mode A increment uses actual SDK envelopes with20 batched logs
+and one error (the final envelope may be partial), fixed event times and
+native-fixture-v1 payloads. It is distinct from the old selector-definition
+checksum: integer, fractional double and numeric string selectors now have
+actual different typed semantics. Missing takes precedence over null; log
+attribute keys are literal, so `/a.b` does not mean `/a/b`. The independent Go
+oracle calculates exact filter/time counts and length-framed occurrence IDs,
+checks every converted partition's complete sorted identity hash and two
+equal-time keyset pages. The real journal writer/replayer must preserve each
+canonical record exactly. Retry tests cover identical and new acceptances,
+including valid source-event dedupe keys and ID-less records; they do not
+simulate or claim PG Accept/durable ACK behavior.
+
+This exposed real conversion memory failures. A10,000-record regression against
+the previous converter failed at181.7MiB/192MiB with a16MiB allocation request.
+A separate9,996-record SDK-derived stage failed at the worker's256MiB limit,
+and a CPU1/512MiB direct-child attempt was killed after its first partition.
+`materializeStage` and the analytics projection now extract a fixed path list
+once per row into a materialized relation, instead of independently reparsing
+the full canonical JSON for each output column. The original stage table is
+dropped only after its replacement exists. Native limits, output types/order,
+record IDs, payload projection, fences and publication workflow are unchanged.
+The same10,000-record regression then passed at192MiB in0.87s; a further
+three-repeat run passed it and the scalar test with cgroup OOM/kills0. A separate
+all-scalar test checks distinct optional strings, missing/NULL values, escaping,
+Unicode, nanoseconds, severity and exception fields; existing tests cover exact
+DECIMAL(38,0), attributes, payload pairing and cancellation cleanup.
+
+Sequential before/after native conversion benchmarks used the same ARM64 image,
+CPU1/512MiB/swap0,96MiB Go soft limit, isolated disk volume, five iterations per
+sample and three samples. Median1-record time94.194→91.274ms, Go allocations
+2,222,881→2,223,539B/op and918→938allocs/op;100-record time108.519→99.287ms,
+3,992,240→3,991,232B/op and13,241→13,255allocs/op. Combined benchmark cgroup peaks
+were110,993,408→94,494,720bytes, OOM/kills0. S3 requests and network bytes were0.
+Raw samples: `.tools/conversion-paired.IzULuo/{before,after}.log`. These small
+native-conversion samples are not end-to-end throughput or an R3 SLO claim.
+
+Fresh CPU1/512MiB/no-swap containers, Go1.27.1 ARM64 and pinned DuckDB2.0 produced
+the following final fixture evidence (`.tools/native-oracle.dVVCFz`):
+
+| Records | Result | Analytics bytes | Total time | Cgroup peak bytes |
+|---|---|---:|---:|---:|
+|10,000|all count/type/time/identity/page checks pass|540,409|2.279s|292,061,184|
+|100,000|all count/type/time/identity/page checks pass|5,318,576|14.472s|323,973,120|
+|1,000,000|typed-attribute query budget exhausted|52,794,512|108.320s to failure|536,870,912|
+
+The actual10k/100k envelope SHA256 values are respectively
+`0b6690eba56008d7e4b7cffc9741f93c9cb7712b7d6a7ec5159f48b04c9ee7e8` and
+`911c2e3803f3d3bd875cd213101947e75aea162ce8aebfa0ca9b6d4a11520da0`.
+Their journal bytes were683,617/6,814,916; normalization and oracle setup
+148/1,474ms, conversion828/6,893ms, supervisor allocations315,621,112/
+2,805,729,000bytes. Allocation totals exclude native unmanaged memory;
+cgroup peaks include filesystem cache. The1m run converted all records in
+102.363s including normalization/journals, passed overall/error counts,
+half-open time and two row pages, but failed seven attribute-filter scans at
+the192MiB native query budget. Cgroup OOM/kills stayed0. The harness retained
+this failure, did not print a successful oracle result, and did not proceed
+to10m. Four-size completion, capacity/efficiency and official-duration targets
+therefore remain open. This is not a release gate pass or a cloud comparison.
+The failure does not establish behavior at the separate worker's256MiB native
+limit; that profile needs a matched check before choosing a query change.
+Go unit/vet, generated-contract equality, architecture/layout, full pinned ARM64
+native contracts/vet, frontend tests/typecheck/build and the actual browser flow
+passed. Real isolated PostgreSQL/MinIO integration passed, including native
+query/Live resume (25.041s) and Chromium SDK-to-Issue UI (2.8s). The additional
+valid-ID duplicate and partial-envelope checks passed ARM64 race/count3.
+No API/schema changed; capability gates remain incomplete and source-design's
+frozen SHA256 is unchanged.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

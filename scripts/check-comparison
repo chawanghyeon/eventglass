@@ -40,6 +40,10 @@ else
   ./scripts/build-image --target build --load --tag eventglass-go:comparison-build
   ./scripts/build-image --load --tag eventglass-go:comparison-runtime
 fi
+if [ "${EVENTGLASS_COMPARISON_QUICK:-}" != "1" ]; then
+  # Mode A must exercise the actual engine, not only the selector checksums.
+  ./scripts/check-native-oracle
+fi
 run_dir=$(mktemp -d "$ROOT/.tools/eventglass-comparison.XXXXXX")
 active_project=""
 app_containers=""

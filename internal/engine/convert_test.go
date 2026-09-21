@@ -343,6 +343,79 @@ func TestConvertAttributeTypeReusePreservesValuesAndNulls(t *testing.T) {
 	}
 }
 
+func TestConvertSharedJSONProjectionPreservesEveryScalar(t *testing.T) {
+	root := t.TempDir()
+	records := []StageRecord{conversionRecord("a", model.KindError, 1_700_000_000_000_000, 0), conversionRecord("b", model.KindLog, 1_700_000_000_000_001, 1)}
+	populated := &records[0].Record
+	for index, field := range []**string{&populated.SourceEventID, &populated.TraceID, &populated.SpanID, &populated.MessageTemplate, &populated.Service, &populated.Environment, &populated.Release, &populated.Logger, &populated.SDKName, &populated.SDKVersion, &populated.Platform, &populated.ServerName} {
+		value := fmt.Sprintf("field-%d 검색 \"quoted\" \\ newline\n", index)
+		*field = &value
+	}
+	severity := int16(17)
+	populated.SeverityNumber, populated.OriginalLevel = &severity, "critical"
+	populated.Raw = json.RawMessage(`{"exception":{"values":[{"type":"TestError","value":"test value","mechanism":{"handled":false}}]}}`)
+	request := ConversionRequest{Version: 1, StagePath: writeConversionStage(t, root, records), OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"), TenantID: 1, LaneID: 3, BatchSeq: 4, BatchID: records[0].BatchID, SelectedRecords: 2, SelectedErrors: 1, NativeMemoryBytes: 64 << 20, NativeSpillBytes: 64 << 20}
+	var bundles []ConvertedBundle
+	if _, err := Convert(context.Background(), request, func(bundle ConvertedBundle) error { bundles = append(bundles, bundle); return nil }); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for index, bundle := range bundles {
+		var encoded string
+		if err := db.QueryRow(`SELECT to_json(r)::VARCHAR FROM read_parquet(?) r`, bundle.Analytics.Path).Scan(&encoded); err != nil {
+			t.Fatal(err)
+		}
+		var got, want map[string]any
+		if err := json.Unmarshal([]byte(encoded), &got); err != nil {
+			t.Fatal(err)
+		}
+		expected, err := json.Marshal(records[index].Record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(expected, &want); err != nil {
+			t.Fatal(err)
+		}
+		for _, column := range []string{"tenant_id", "project_id", "record_id", "acceptance_id", "kind", "event_time_us", "arrival_time_us", "event_time_ns_remainder", "source_event_id", "trace_id", "span_id", "level", "original_level", "severity_number", "message", "message_template", "service", "environment", "release", "logger", "sdk_name", "sdk_version", "platform", "server_name", "schema_version", "normalizer_version"} {
+			if !reflect.DeepEqual(got[column], want[column]) {
+				t.Errorf("record %d column %s: got=%#v want=%#v", index, column, got[column], want[column])
+			}
+		}
+		for column, value := range map[string]any{"batch_id": request.BatchID, "lane_id": float64(3), "batch_seq": float64(4), "record_ordinal": float64(index), "grouping_version": float64(1), "received_time_us": float64(records[index].ReceivedTimeUS)} {
+			if !reflect.DeepEqual(got[column], value) {
+				t.Errorf("stage column %s: got=%#v want=%#v", column, got[column], value)
+			}
+		}
+		if index == 0 {
+			if got["exception_type"] != "TestError" || got["exception_value"] != "test value" || got["handled"] != false || got["issue_id"] != records[0].IssueID {
+				t.Errorf("error projection=%s", encoded)
+			}
+		} else if got["exception_type"] != nil || got["exception_value"] != nil || got["handled"] != nil || got["issue_id"] != nil {
+			t.Errorf("missing error fields=%s", encoded)
+		}
+	}
+}
+
+func TestConvertTenThousandRecordProjectionWithinNativeLimit(t *testing.T) {
+	root := t.TempDir()
+	records := make([]StageRecord, 10_000)
+	for index := range records {
+		records[index] = conversionRecord("a", model.KindLog, 1_700_000_000_000_000+int64(index), index)
+		records[index].Record.RecordID = fmt.Sprintf("%064x", index+1)
+		records[index].Record.Message = fmt.Sprintf("maximum record-count projection %d", index)
+	}
+	request := ConversionRequest{Version: 1, StagePath: writeConversionStage(t, root, records), OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"), TenantID: 1, LaneID: 3, BatchSeq: 4, BatchID: records[0].BatchID, SelectedRecords: len(records), NativeMemoryBytes: 192 << 20, NativeSpillBytes: 256 << 20}
+	var bundle ConvertedBundle
+	summary, err := Convert(context.Background(), request, func(value ConvertedBundle) error { bundle = value; return nil })
+	if err != nil || summary.SelectedRecordCount != len(records) || bundle.RowCount != int64(len(records)) || summary.BundleCount != 1 {
+		t.Fatalf("summary=%+v bundle_rows=%d err=%v", summary, bundle.RowCount, err)
+	}
+}
+
 func TestConvertCancellationRemovesPartialOutputsAndSpill(t *testing.T) {
 	root := t.TempDir()
 	records := make([]StageRecord, 3000)

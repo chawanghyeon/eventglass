@@ -82,7 +82,7 @@ func Convert(ctx context.Context, request ConversionRequest, emit func(Converted
 		return summary, errors.New("staged selection counts do not match request")
 	}
 	if err := materializeStage(ctx, db); err != nil {
-		return summary, err
+		return summary, fmt.Errorf("materialize conversion stage: %w", err)
 	}
 	version := ""
 	if err := db.QueryRowContext(ctx, "SELECT version()").Scan(&version); err != nil {
@@ -102,7 +102,7 @@ func Convert(ctx context.Context, request ConversionRequest, emit func(Converted
 	for bundleIndex := 0; ; bundleIndex++ {
 		current, found, err := nextPartition(ctx, db, after)
 		if err != nil {
-			return summary, err
+			return summary, fmt.Errorf("find conversion partition: %w", err)
 		}
 		if !found {
 			break
@@ -110,7 +110,7 @@ func Convert(ctx context.Context, request ConversionRequest, emit func(Converted
 		bundle, paths, err := writePartition(ctx, db, request.OutputDirectory, bundleIndex, current)
 		created = append(created, paths...)
 		if err != nil {
-			return summary, err
+			return summary, fmt.Errorf("write conversion partition: %w", err)
 		}
 		if err := emit(bundle); err != nil {
 			return summary, err
@@ -319,18 +319,27 @@ func exceptionProjection(raw json.RawMessage) (*string, *string, *bool) {
 }
 
 func materializeStage(ctx context.Context, db *sql.DB) error {
-	_, err := db.ExecContext(ctx, `CREATE TABLE staged AS SELECT
+	_, err := db.ExecContext(ctx, `CREATE TABLE staged AS WITH extracted AS MATERIALIZED (
+		SELECT stage_json,json_extract(stage_json,[
+			'$.record.tenant_id','$.record.project_id','$.record.record_id','$.record.service',
+			'$.record.kind','$.record.event_time_us','$.received_time_us','$.batch_seq','$.event_day']) AS fields
+		FROM stage_lines)
+	SELECT
 		stage_json,
-		CAST(json_extract(stage_json,'$.record.tenant_id') AS BIGINT) AS tenant_id,
-		CAST(json_extract(stage_json,'$.record.project_id') AS BIGINT) AS project_id,
-		json_extract_string(stage_json,'$.record.record_id') AS record_id,
-		json_extract_string(stage_json,'$.record.service') AS service,
-		json_extract_string(stage_json,'$.record.kind') AS kind,
-		CAST(json_extract(stage_json,'$.record.event_time_us') AS BIGINT) AS event_time_us,
-		CAST(json_extract(stage_json,'$.received_time_us') AS BIGINT) AS received_time_us,
-		CAST(json_extract(stage_json,'$.batch_seq') AS BIGINT) AS batch_seq,
-		CAST(json_extract_string(stage_json,'$.event_day') AS DATE) AS event_day
-	FROM stage_lines`)
+		CAST(fields[1] AS BIGINT) AS tenant_id,
+		CAST(fields[2] AS BIGINT) AS project_id,
+		json_extract_string(fields[3],'$') AS record_id,
+		json_extract_string(fields[4],'$') AS service,
+		json_extract_string(fields[5],'$') AS kind,
+		CAST(fields[6] AS BIGINT) AS event_time_us,
+		CAST(fields[7] AS BIGINT) AS received_time_us,
+		CAST(fields[8] AS BIGINT) AS batch_seq,
+		CAST(json_extract_string(fields[9],'$') AS DATE) AS event_day
+	FROM extracted`)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `DROP TABLE stage_lines`)
 	return err
 }
 
@@ -358,47 +367,64 @@ func writePartition(ctx context.Context, db *sql.DB, outputDirectory string, ind
 	order := ` ORDER BY project_id,service NULLS FIRST,event_time_us,record_id`
 	// These typed stage columns were already decoded with the same types by
 	// materializeStage. Reuse them instead of parsing the full JSON again.
-	analyticsSQL := `COPY (SELECT
+	// Parse the large canonical stage JSON once per row. Independent extracts
+	// retain a separate parsed document per expression/vector: a legal 10k-row
+	// batch can exhaust both the native limit and the worker cgroup. Materialize
+	// only the requested JSON values plus the already typed sort/scope columns.
+	analyticsSQL := `COPY (WITH projected AS MATERIALIZED (
+		SELECT tenant_id,project_id,record_id,batch_seq,kind,event_time_us,received_time_us,service,
+		json_extract(stage_json,[
+			'$.record.acceptance_id','$.batch_id','$.lane_id','$.global_ordinal',
+			'$.record.arrival_time_us','$.record.event_time_ns_remainder','$.record.source_event_id',
+			'$.record.trace_id','$.record.span_id','$.record.level','$.record.original_level',
+			'$.record.severity_number','$.record.message','$.record.message_template',
+			'$.record.environment','$.record.release','$.record.logger','$.record.sdk_name',
+			'$.record.sdk_version','$.record.platform','$.record.server_name','$.issue_id',
+			'$.exception_type','$.exception_value','$.handled','$.record.attrs',
+			'$.record.search_values','$.record.schema_version','$.record.normalizer_version',
+			'$.grouping_version','$.record.warnings']) AS fields
+		FROM staged` + where + `)
+	SELECT
 		tenant_id,
 		project_id,
 		record_id,
-		json_extract_string(stage_json,'$.record.acceptance_id') AS acceptance_id,
-		json_extract_string(stage_json,'$.batch_id') AS batch_id,
-		CAST(json_extract(stage_json,'$.lane_id') AS INTEGER) AS lane_id,
+		json_extract_string(fields[1],'$') AS acceptance_id,
+		json_extract_string(fields[2],'$') AS batch_id,
+		CAST(fields[3] AS INTEGER) AS lane_id,
 		batch_seq,
-		CAST(json_extract(stage_json,'$.global_ordinal') AS INTEGER) AS record_ordinal,
+		CAST(fields[4] AS INTEGER) AS record_ordinal,
 		kind,
 		event_time_us,
-		CAST(json_extract(stage_json,'$.record.arrival_time_us') AS BIGINT) AS arrival_time_us,
+		CAST(fields[5] AS BIGINT) AS arrival_time_us,
 		received_time_us,
-		CAST(json_extract(stage_json,'$.record.event_time_ns_remainder') AS USMALLINT) AS event_time_ns_remainder,
-		json_extract_string(stage_json,'$.record.source_event_id') AS source_event_id,
-		json_extract_string(stage_json,'$.record.trace_id') AS trace_id,
-		json_extract_string(stage_json,'$.record.span_id') AS span_id,
-		json_extract_string(stage_json,'$.record.level') AS level,
-		json_extract_string(stage_json,'$.record.original_level') AS original_level,
-		CAST(json_extract(stage_json,'$.record.severity_number') AS SMALLINT) AS severity_number,
-		json_extract_string(stage_json,'$.record.message') AS message,
-		json_extract_string(stage_json,'$.record.message_template') AS message_template,
+		CAST(fields[6] AS USMALLINT) AS event_time_ns_remainder,
+		json_extract_string(fields[7],'$') AS source_event_id,
+		json_extract_string(fields[8],'$') AS trace_id,
+		json_extract_string(fields[9],'$') AS span_id,
+		json_extract_string(fields[10],'$') AS level,
+		json_extract_string(fields[11],'$') AS original_level,
+		CAST(fields[12] AS SMALLINT) AS severity_number,
+		json_extract_string(fields[13],'$') AS message,
+		json_extract_string(fields[14],'$') AS message_template,
 		service,
-		json_extract_string(stage_json,'$.record.environment') AS environment,
-		json_extract_string(stage_json,'$.record.release') AS release,
-		json_extract_string(stage_json,'$.record.logger') AS logger,
-		json_extract_string(stage_json,'$.record.sdk_name') AS sdk_name,
-		json_extract_string(stage_json,'$.record.sdk_version') AS sdk_version,
-		json_extract_string(stage_json,'$.record.platform') AS platform,
-		json_extract_string(stage_json,'$.record.server_name') AS server_name,
-		json_extract_string(stage_json,'$.issue_id') AS issue_id,
-		json_extract_string(stage_json,'$.exception_type') AS exception_type,
-		json_extract_string(stage_json,'$.exception_value') AS exception_value,
-		CAST(json_extract(stage_json,'$.handled') AS BOOLEAN) AS handled,
-		COALESCE(from_json(json_extract(stage_json,'$.record.attrs'), '["eventglass_attribute"]'), []) AS attrs,
-		COALESCE(from_json(json_extract(stage_json,'$.record.search_values'), '["VARCHAR"]'), []) AS search_values,
-		CAST(json_extract(stage_json,'$.record.schema_version') AS INTEGER) AS schema_version,
-		CAST(json_extract(stage_json,'$.record.normalizer_version') AS INTEGER) AS normalizer_version,
-		CAST(json_extract(stage_json,'$.grouping_version') AS INTEGER) AS grouping_version,
-		COALESCE(from_json(json_extract(stage_json,'$.record.warnings'), '["VARCHAR"]'), []) AS warnings
-	FROM staged` + where + order + `) TO '` + quoteSQLString(analyticsPath) + `' (FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,ROW_GROUP_SIZE 16384)`
+		json_extract_string(fields[15],'$') AS environment,
+		json_extract_string(fields[16],'$') AS release,
+		json_extract_string(fields[17],'$') AS logger,
+		json_extract_string(fields[18],'$') AS sdk_name,
+		json_extract_string(fields[19],'$') AS sdk_version,
+		json_extract_string(fields[20],'$') AS platform,
+		json_extract_string(fields[21],'$') AS server_name,
+		json_extract_string(fields[22],'$') AS issue_id,
+		json_extract_string(fields[23],'$') AS exception_type,
+		json_extract_string(fields[24],'$') AS exception_value,
+		CAST(fields[25] AS BOOLEAN) AS handled,
+		COALESCE(from_json(fields[26], '["eventglass_attribute"]'), []) AS attrs,
+		COALESCE(from_json(fields[27], '["VARCHAR"]'), []) AS search_values,
+		CAST(fields[28] AS INTEGER) AS schema_version,
+		CAST(fields[29] AS INTEGER) AS normalizer_version,
+		CAST(fields[30] AS INTEGER) AS grouping_version,
+		COALESCE(from_json(fields[31], '["VARCHAR"]'), []) AS warnings
+	FROM projected` + order + `) TO '` + quoteSQLString(analyticsPath) + `' (FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,ROW_GROUP_SIZE 16384)`
 	payloadSQL := `COPY (SELECT
 		record_id,
 		json_extract(stage_json,'$.record.raw')::VARCHAR AS raw_json,

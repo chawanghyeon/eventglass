@@ -1,0 +1,58 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+case "$(uname -m)" in arm64|aarch64) ;; *) echo 'native oracle supports ARM64 only' >&2; exit 1 ;; esac
+artifacts=$(mktemp -d "$ROOT/.tools/native-oracle.XXXXXX")
+image=eventglass-go:native-oracle-build
+container=""
+volume=""
+cleanup() {
+  if [ -n "$container" ]; then docker rm -f "$container" >/dev/null 2>&1 || true; fi
+  if [ -n "$volume" ]; then docker volume rm "$volume" >/dev/null 2>&1 || true; fi
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+./scripts/build-image --target build --load --tag "$image"
+docker run --rm --platform linux/arm64 --network none -v "$artifacts:/artifacts" "$image" \
+  go test -tags='duckdb_use_static_lib nativeoracle' -c -o /artifacts/native-oracle.test ./tests/comparison
+{
+  date -u '+started_at=%Y-%m-%dT%H:%M:%SZ'
+  git rev-parse HEAD
+  git status --short
+  docker image inspect --format '{{.Id}} {{.Architecture}}' "$image"
+  docker info --format 'host_arch={{.Architecture}} host_cpus={{.NCPU}} host_memory={{.MemTotal}}'
+  printf '%s\n' 'cpu=1 memory=512MiB swap=0 native_memory=256MiB native_spill=256MiB supervisor_GOMEMLIMIT=96MiB network=none scratch=disk_volume'
+  docker run --rm --platform linux/arm64 --network none "$image" sha256sum \
+    /src/tests/comparison/native_fixture_test.go /src/internal/engine/convert.go \
+    /out/eventglass-go /opt/duckdb/lib/libduckdb_bundle.a
+} >"$artifacts/environment.txt"
+printf 'Native oracle evidence: %s\n' "$artifacts"
+for rows in 10000 100000 1000000 10000000; do
+  candidate="eventglass-native-oracle-${artifacts##*.}-$rows"
+  if docker container inspect "$candidate" >/dev/null 2>&1 || docker volume inspect "$candidate-scratch" >/dev/null 2>&1; then
+    echo "refusing existing native-oracle resources: $candidate" >&2
+    exit 1
+  fi
+  container="$candidate"
+  volume="$candidate-scratch"
+  docker volume create --label eventglass.test=native-oracle "$volume" >/dev/null
+  status=0
+  docker run --name "$container" --platform linux/arm64 --network none \
+    --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 --read-only \
+    --mount "source=$volume,target=/scratch" -v "$artifacts:/artifacts:ro" \
+    -e TMPDIR=/scratch -e GOMEMLIMIT=96MiB -e EVENTGLASS_TEST_BINARY=/out/eventglass-go \
+    -e EVENTGLASS_NATIVE_ORACLE_ROWS="$rows" --entrypoint /artifacts/native-oracle.test "$image" \
+    -test.v -test.count=1 -test.timeout=95m -test.run '^TestNative(DatasetOracle|FixtureBoundaryAndRetryContracts)$' \
+    >"$artifacts/$rows.log" 2>&1 || status=$?
+  docker inspect --format '{{json .State}}' "$container" >"$artifacts/$rows.state.json"
+  cat "$artifacts/$rows.log"
+  docker rm "$container" >/dev/null
+  container=""
+  docker volume rm "$volume" >/dev/null
+  volume=""
+  if [ "$status" -ne 0 ]; then exit "$status"; fi
+done
