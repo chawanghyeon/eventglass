@@ -243,6 +243,12 @@ conversion used project/service/event-time ordering but maintenance used receipt
 or ID order. Both paths now share the canonical physical sort, including null
 service ordering. Payload layout keys are taken once from verified retained
 analytics, not reconstructed from raw JSON or persisted as new payload columns.
+Clean0004b4f's20s/300s/90s diagnostic still fails rows/histogram p95 at1,444/1,750ms
+and backlog slope+0.493072/min; final backlog0 and exact public counts do not
+close those missed targets. The next control increment removes reservation's
+remaining per-input round trips: actual PG checks show14/38/134/518→9 calls for
+2/8/32/128 inputs while preserving sorted identity, complete-set atomicity,
+scope/generation/size rejection and joined cancellation/concurrent retry.
 R3 remains first incomplete; raw-object download success is not a substitute.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped

@@ -195,15 +195,16 @@ func (operations *MaintenanceOperations) ReserveCompaction(ctx context.Context, 
 		}
 		return CompactionTask{}, err
 	}
-	for _, bundleID := range bundleIDs {
-		result, err := tx.Exec(ctx, `UPDATE bundles SET reserved_by=$1 WHERE tenant_id=$2 AND lane_id=$3 AND bundle_id=$4 AND valid_to_generation IS NULL AND reserved_by IS NULL`, command.TaskID, command.TenantID, command.LaneID, bundleID)
-		if err != nil || result.RowsAffected() != 1 {
-			return CompactionTask{}, errors.Join(ErrMaintenanceBusy, err)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO maintenance_inputs(task_id,tenant_id,bundle_id,expected_valid_from_generation,expected_identity_sha256)
-			SELECT $1,tenant_id,bundle_id,valid_from_generation,identity_sha256 FROM bundles WHERE tenant_id=$2 AND bundle_id=$3`, command.TaskID, command.TenantID, bundleID); err != nil {
-			return CompactionTask{}, err
-		}
+	result, err := tx.Exec(ctx, `UPDATE bundles SET reserved_by=$1
+		WHERE tenant_id=$2 AND lane_id=$3 AND bundle_id=ANY($4::uuid[]) AND valid_to_generation IS NULL AND reserved_by IS NULL`, command.TaskID, command.TenantID, command.LaneID, bundleIDs)
+	if err != nil || result.RowsAffected() != int64(len(bundleIDs)) {
+		return CompactionTask{}, errors.Join(ErrMaintenanceBusy, err)
+	}
+	result, err = tx.Exec(ctx, `INSERT INTO maintenance_inputs(task_id,tenant_id,bundle_id,expected_valid_from_generation,expected_identity_sha256)
+		SELECT $1,tenant_id,bundle_id,valid_from_generation,identity_sha256 FROM bundles
+		WHERE tenant_id=$2 AND lane_id=$3 AND bundle_id=ANY($4::uuid[]) AND reserved_by=$1`, command.TaskID, command.TenantID, command.LaneID, bundleIDs)
+	if err != nil || result.RowsAffected() != int64(len(bundleIDs)) {
+		return CompactionTask{}, errors.Join(ErrMaintenanceBusy, err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return CompactionTask{}, err
@@ -227,19 +228,33 @@ func validateReserveCompaction(command ReserveCompactionCommand) error {
 
 func lockCompactionInputs(ctx context.Context, tx pgx.Tx, tenantID int64, laneID int, bundleIDs []string) (CompactionPartition, string, error) {
 	var partition CompactionPartition
+	// Callers already hold the lane lock. Lock all requested current bundles in
+	// the same caller-sorted order as before, with a bounded aggregate of their
+	// immutable paired file sizes. Ordinality preserves the exact old hash input
+	// (including request spelling) and detects a missing/foreign/reserved input.
+	rows, err := tx.Query(ctx, `SELECT requested.ordinal,b.schema_version,b.grouping_version,b.event_day::text,b.kind,
+		b.valid_from_generation,b.identity_sha256,COALESCE(f.bytes,0)
+		FROM unnest($3::uuid[]) WITH ORDINALITY requested(bundle_id,ordinal)
+		JOIN bundles b ON b.bundle_id=requested.bundle_id AND b.tenant_id=$1 AND b.lane_id=$2
+		LEFT JOIN (SELECT bundle_id,sum(bytes) AS bytes FROM files WHERE tenant_id=$1 AND bundle_id=ANY($3::uuid[]) GROUP BY bundle_id) f ON f.bundle_id=b.bundle_id
+		WHERE b.valid_to_generation IS NULL AND b.reserved_by IS NULL
+		ORDER BY requested.ordinal FOR UPDATE OF b`, tenantID, laneID, bundleIDs)
+	if err != nil {
+		return partition, "", errors.Join(ErrMaintenanceBusy, err)
+	}
+	defer rows.Close()
 	hash := sha256.New()
 	var total int64
-	for index, bundleID := range bundleIDs {
+	index := 0
+	for rows.Next() {
 		var candidate CompactionPartition
-		var validFrom, bytes int64
+		var ordinal, validFrom, bytes int64
 		var identity string
-		err := tx.QueryRow(ctx, `SELECT schema_version,grouping_version,event_day::text,kind,valid_from_generation,identity_sha256
-			FROM bundles WHERE tenant_id=$1 AND lane_id=$2 AND bundle_id=$3 AND valid_to_generation IS NULL AND reserved_by IS NULL FOR UPDATE`, tenantID, laneID, bundleID).Scan(&candidate.SchemaVersion, &candidate.GroupingVersion, &candidate.EventDay, &candidate.Kind, &validFrom, &identity)
-		if err != nil {
+		if err := rows.Scan(&ordinal, &candidate.SchemaVersion, &candidate.GroupingVersion, &candidate.EventDay, &candidate.Kind, &validFrom, &identity, &bytes); err != nil {
 			return partition, "", errors.Join(ErrMaintenanceBusy, err)
 		}
-		if err := tx.QueryRow(ctx, `SELECT sum(bytes) FROM files WHERE tenant_id=$1 AND bundle_id=$2`, tenantID, bundleID).Scan(&bytes); err != nil {
-			return partition, "", err
+		if index >= len(bundleIDs) || ordinal != int64(index+1) {
+			return partition, "", ErrMaintenanceBusy
 		}
 		if index == 0 {
 			partition = candidate
@@ -254,9 +269,16 @@ func lockCompactionInputs(ctx context.Context, tx pgx.Tx, tenantID int64, laneID
 			BundleID  string `json:"bundle_id"`
 			ValidFrom int64  `json:"valid_from"`
 			Identity  string `json:"identity"`
-		}{bundleID, validFrom, identity})
+		}{bundleIDs[index], validFrom, identity})
 		hash.Write(encoded)
 		hash.Write([]byte{'\n'})
+		index++
+	}
+	if err := rows.Err(); err != nil {
+		return partition, "", errors.Join(ErrMaintenanceBusy, err)
+	}
+	if index != len(bundleIDs) {
+		return partition, "", ErrMaintenanceBusy
 	}
 	return partition, hex.EncodeToString(hash.Sum(nil)), nil
 }

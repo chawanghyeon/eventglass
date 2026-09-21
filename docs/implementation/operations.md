@@ -156,6 +156,11 @@ their separate joined loops; GC's fresh-backup interlock remains mandatory.
 Reserve transaction locks lane then task and inputs: record selected bundle IDs,
 their exact valid_from and input identity hashes, set reserved_by; do not close
 catalog intervals yet. Read inputs with a maintenance pin and verify pairs.
+Input metadata/file sizes are loaded with one bounded, caller-ordered locking
+query; reservation updates and input insertion each use one set operation whose
+affected count must equal the full request. Missing, foreign, closed or already
+reserved inputs roll back the whole transaction. The existing sorted JSON identity
+hash is byte-identical; neither batching nor a partial success may change it.
 The fenced control loader permits exactly one retention input and two to128
 compaction inputs. It reads ordered project associations with the reserved
 metadata and all referenced analytics/payload pairs in one bounded file query;

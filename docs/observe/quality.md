@@ -1355,6 +1355,82 @@ not corrected official-duration R3 capacity or release evidence. Logs use
 Fresh uncached host ARM64 race checks pass app4.289s, ingest4.061s and
 maintenance1.754s. The frozen source-design SHA256 remains unchanged.
 
+A fresh service diagnostic on clean0004b4f uses20s warmup/300s load/90s drain,
+one ARM64 worker and the existing CPU1/512MiB/no-swap role profiles. It **fails**
+rows/histogram p95 (1,444/1,750ms) and load-backlog slope (+0.493072/min, max21).
+ACK p95 is372ms with exactly1,800 load-only samples, visibility p952,012ms,
+59 completed mixed queries and final backlog0. The public oracle sees exactly
+32,000 logs/1,600 errors. Last/max planned objects reach1,324; conversion has
+1,864 progress calls/233,469ms, compaction100 progress calls/6,697ms total attempt
+time with no failures, observed spare48,300ms and no budget overruns. Progress
+calls are not completed merge counts. Whole-installation sampled peak854,045,227
+bytes includes PG/S3; worker cgroup peak65,536,000bytes and all cgroup OOM/kill0.
+Measured S3 full GET12,922/69,386,905bytes, Range2,196/19,076,892bytes, HEAD93,292,
+PUT5,973/31,939,373bytes and PG WAL91,804,264bytes include setup/query verification.
+Independent empty-worker-cache cold/warm regex is1,658/1,212ms with identical
+snapshot/rows, Range1,165/5 (11,356,845/42,538bytes). Ten-second idle creates no
+query work but does710 full GETs for maintenance, so it is not zero-I/O idle.
+Evidence: `.tools/comparison-report-1.OqImKB` and
+`.tools/compaction-order-comparison.log`. This is neither a matched comparison
+against earlier product revisions nor the required official-duration R3 pass.
+
+### Bounded reservation round trips
+
+The R3 audit also found a remaining N+1 path in `ReserveCompaction`: each input
+added two metadata reads and two reservation writes. A real PostgreSQL query
+tracer reproduces14/38/134/518 calls for2/8/32/128 inputs, including transaction
+boundaries. Control now locks the caller-sorted input set in one bounded read,
+aggregates the requested files' sizes, and performs one checked set update and
+one checked `INSERT SELECT`. Every count must match the complete requested set;
+lane locking, runtime generation, partition/256MiB/128-input limits and the exact
+sorted newline-framed identity hash remain authoritative. The shared single-input
+retention validator uses the same lock/read path. No HTTP/domain ownership,
+schema, public API, native codec, S3 access or GC attestation policy changes.
+
+The unchanged regression fails before on query count and passes after at9 calls
+for every size. Independent expected hashes and exact per-input generation/hash
+associations match. Actual PG negative tests pass missing/foreign-tenant/wrong-lane/
+closed/cross-partition/oversize/stale-generation/duplicate-UUID-alias rejection,
+zero partial rows, cancellation while an input is locked, and a joined retry
+race with exactly one winning complete reservation. An initial test fixture
+omitted the required `retired_at` when closing a bundle; that fixture was repaired
+without weakening the database constraint, then both revisions were rerun.
+
+Matched five-sample measurements use0004b4f versus the control-only correction,
+the same Go1.27.1 Linux ARM64 build/dependencies and disposable PostgreSQL, fresh
+CPU1/512MiB/no-swap non-root/read-only test cgroups, Go96MiB/GOMAXPROCS1, identical
+fixtures and one warmup per size. Each sample has an unmeasured150ms pause so
+fixture/reset CPU throttling does not carry into the short reservation. Builds
+and other heavy checks do not overlap timing. Medians follow:
+
+| Inputs | Calls before → after | Time before → after | Go bytes before → after | Go allocations before → after |
+| --- | --- | --- | --- | --- |
+|2|14→9|1.493→1.391ms|6,368→6,848|168→200|
+|8|38→9|3.296→1.596ms|20,576→17,216|528→405|
+|32|134→9|9.975→2.789ms|80,760→67,208|1,977→1,216|
+|128|518→9|49.882→16.013ms|318,344→267,416|7,741→4,400|
+
+Reservation rates computed from these medians are670→719,303→627,100→359 and
+20.0→62.5reservations/s respectively; these are not end-to-end ingestion or
+completed-compaction throughput. Tiny-input allocations increase. Process max
+RSS35,008,512→35,086,336bytes and cgroup peaks34,684,928→34,148,352bytes include
+fixture setup; max/OOM/kill0 on both sides. Different RSS/cgroup accounting is
+not a memory-saving claim. S3 requests and bytes are0 (PG network is real).
+Source/library hashes, binaries and raw logs remain in
+`.tools/reservation-roundtrips.V3jMBy`; final aggregate log is
+`.tools/reservation-roundtrips-final.log`. R3 service SLO/capacity remains open.
+
+Final validation passes unit/vet/architecture/layout/codegen, real PostgreSQL/
+MinIO integration23.057s, pinned-native query/Live/maintenance integration36.571s
+(including the512-record large paired bundle/retention path), and Chromium2.8s.
+Actual pgBackRest2.59.1 base backup plus WAL/S3 recovery passes: backup1s, two
+restored clusters2s, target LSN0/5022540, verified old-generation read0.010s,
+newer unreferenced object excluded, generation activation/session invalidation,
+and missing referenced object fails closed. This remains isolated MinIO recovery,
+not authorized AWS or selfhost-provider release evidence. Host ARM64 uncached
+race checks pass control1.360s/app4.243s/maintenance1.651s; frozen source-design
+hash is unchanged. Logs use `.tools/reservation-{unit,codegen,integration,recovery,browser}.log`.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency
