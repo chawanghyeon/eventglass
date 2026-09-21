@@ -207,9 +207,22 @@ evidence. The bounded control loader now removes per-input SQL round trips
 (128 inputs:260→5 queries, matched median95.982→13.730ms). This audit also
 reproduced and fixed retention's incorrect two-input minimum; a real
 ingest→publication→compaction→mixed/full-expiry native test supplements the
-earlier synthetic manifest coverage. Next work must address native inspection
-cost and cancellation/join allowance, including maximum-sized rewrite progress,
+earlier synthetic manifest coverage. Native input verification now uses two
+bounded ordered scans with per-input identity/scope checks, replacing three
+queries per input and discarded input full-hash calculations. The matched
+128-small-input native microbenchmark improved from1,509.122 to184.480ms,
+but does not prove service SLOs or maximum-byte rewrite progress. Next work
+must address cancellation/join allowance, including maximum-sized rewrite progress,
 without raising resource limits or weakening identity/snapshot/GC checks.
+
+The subsequent native/control candidate's same-profile diagnostic records
+rows/histogram p95=864/1,053ms and load slope=+0.11549/min: both remain failures.
+Maintenance overruns/compaction failures are0 in this run, exact33,600 public
+records and final backlog0 pass, and last planned files are761. Preserve
+`.tools/comparison-report-1.HMaw0M`; this is not official-duration or independent
+capacity evidence. The shared download path's24MiB journal cap also needs a
+real larger-bundle reproduction and correction before maximum-size maintenance
+progress can be claimed. R3 remains first incomplete.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

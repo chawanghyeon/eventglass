@@ -164,6 +164,14 @@ duplicate or unknown file role fails closed. This is a control transaction,
 not a new workflow/repository layer; native pair verification remains required.
 Native merge preserves canonical values, IDs/seq/received time and grouping
 version, changes physical layout only. Upload outputs with fenced intents.
+Native input verification scans analytics and payload roles in two ordered
+queries, validating each input's exact identity/count separately (not only the
+union) and every analytics row's scope. Go retains at most128 counters and one
+streaming hash; native sorting uses the existing memory/spill limits. Explicit
+scan provenance must not be replaceable by a Parquet filename column. Input
+full-SHA verification remains at the download boundary; output SHA/block and
+pair evidence remains mandatory before upload/Prepare. Do not recalculate input
+full hashes merely to discard them. File128MiB and total256MiB bounds still apply.
 Swap transaction locks lane/task/intents/bundles, rechecks live tuple and **each
 reserved input still current**; unrelated newer publications may exist. Increment
 current catalog_generation, close only reserved inputs at G, insert replacements

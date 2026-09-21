@@ -938,6 +938,102 @@ These functional timings are not paired performance measurements. Logs:
 The freshly built ARM64 production image also passed Chromium's actual
 SDK-to-Issue UI flow(2.7s); no external alert or deployment occurred.
 
+### Batched native compaction input verification
+
+The remaining native hotspot issued three input queries per bundle and computed
+full-file/block hashes which were never compared or consumed. Inputs had already
+been downloaded with exact full-SHA verification. The engine now checks all
+analytics inputs in one ordered scan and all payload inputs in another. Each
+individual input must have a nonempty, strictly ordered, valid record-ID set
+with its expected SHA and matching role counts; analytics scope is checked for
+every row, not filtered before verification. The union of swapped file pairs is
+not sufficient. Output inspection and its full/block SHA evidence are unchanged.
+Input file128MiB and combined256MiB checks occur before opening the engine.
+Native sorting remains subject to the existing task memory/spill limits; the
+Go verifier keeps at most128 counters and one streaming hash, not all rows.
+
+The pinned engine's scan provenance was tested with real Parquet files that
+swap record sets and forge a physical filename column to impersonate the other
+input. Neither role can bypass per-input checks. The initial test incorrectly
+expected an extra filename column alone to be rejected; the actual engine uses
+its scan provenance, so the final test asserts the meaningful anti-spoofing
+property. Scope, NULL/zero project/batch, out-of-day bounds, malformed/duplicate
+IDs, missing/empty role, swapped pairs, repeated files and canceled work all
+fail closed in the focused native tests. These use real conversion outputs and
+real Parquet mutations; no S3/PG mock is involved in this native-only boundary.
+
+`BenchmarkCompactionPairedInputs` compares the unchanged01a8430 native code and
+the candidate using16 canonical records per input,2/8/32/128 inputs, five samples
+of three operations each. Both use Go1.27.1 Linux ARM64, the same pinned DuckDB
+library, CPU1/512MiB/swap0, non-root/read-only root,256MiB private tmpfs,
+GOMEMLIMIT96MiB/GOMAXPROCS1, native256MiB/spill256MiB and no network. Fixture
+construction is excluded from operation timing; output cleanup is included.
+No other heavy checks/builds ran during either measurement. Median results:
+
+| Inputs / records | Before/after ms per operation | Before/after records/s | Before/after Go allocated bytes | Before/after allocations |
+|---|---:|---:|---:|---:|
+|2 /32|74.321 /71.144|430.6 /449.8|6,367,629 /2,164,677|1,932 /1,814|
+|8 /128|140.433 /76.469|911.5 /1,674|19,096,189 /2,294,589|6,205 /5,359|
+|32 /512|415.440 /98.451|1,232 /5,201|70,011,061 /2,816,757|23,296 /19,528|
+|128 /2,048|1,509.122 /184.480|1,357 /11,101|273,667,941 /4,904,568|91,648 /76,172|
+
+The largest observed process maxRSS was98,267,136 versus97,914,880bytes. This
+includes fixture construction and prior samples, is not isolated task RSS or
+cgroup peak, and does not establish a significant RSS reduction. Go allocations
+exclude unmanaged native memory. S3 requests and network bytes were0 in both
+runs. These are small-input local native rewrite measurements, not the previous
+catalog-HEAD measurement, whole-service throughput, provider cost, independent
+capacity, or a maximum256MiB-input proof. R3 remains incomplete, including its
+maintenance cancellation/join overruns and corrected official-duration runs.
+Raw samples and focused regressions: `.tools/native-compaction-before.log`,
+`.tools/native-compaction-after.log`, `.tools/native-compaction-focused-final.log`.
+
+Host ARM64 unit/vet, architecture/layout, generated-contract equality and
+app/maintenance race checks passed. Real PG/MinIO integration passed(14.751s),
+including the actual native query/Live/retention paths(25.251s). Full pinned
+ARM64 native contracts/vet and image export passed; the additional sparse-file
+boundary test passed separately and proves admission arithmetic only, not
+maximum-byte Parquet execution. The default2min resource configuration completed
+24 cycles/12,600 records in115.467s, worst cycle272ms, cgroup peak142,065,664bytes,
+OOM0 and scratch0; native OOM/cancel/join and permit drain checks passed.
+Chromium's real SDK-to-Issue production-image flow passed(2.7s). The unchanged
+DuckDB dependency cache was reused. Logs: `.tools/native-compaction-unit.log`,
+`integration.log`, `contracts.log`, `byte-bounds.log`, `resource.log` and
+`browser.log` under the same `.tools/native-compaction-` prefix.
+
+The next actual one-worker20s/300s/90s service diagnostic completed all post-load
+phases but **failed** the rows/histogram and load-backlog targets. Compared with
+the prior3bdd56e-policy run(`comparison-report-1.xeG5dP`), this candidate includes
+both the bounded control-loader and native-inspection changes. Rows/histogram
+p95 were864/1,053ms(previous1,441/1,856ms), ACK369ms, visibility1,248ms and
+load-backlog slope+0.11549/min(previous+0.64474/min). Final backlog0 is not a
+substitute for the failed load-growth target. All33,600 accepted records matched
+public counts(32,000 logs/1,600 errors), measured ACK samples1,800, query samples59,
+conflicts/OOM0; one phase-boundary query was canceled. Last planned files fell
+from1,496 to761. Compaction recorded185 progressed calls(including prepare/swap,
+not185 completed merges), no failed calls and10.966s total time; observed spare
+time69.400s. There were no maintenance-budget overruns in this run, but this
+does not prove all cancellation schedules or maximum-byte tasks fit the budget.
+
+Whole-installation sampled peak was922,679,769bytes(previous841,878,599), worker
+observed cgroup peak72,822,784bytes, PG WAL86,626,088bytes. S3 full GET14,194 /
+78,939,273bytes, Range2,181 /19,689,492bytes, HEAD66,973, PUT6,006 /
+33,415,988bytes. More rewrites reduced HEAD/query work but increased full GET/
+PUT traffic compared with the previous candidate; no overall cost/RSS reduction
+is claimed. Cold/warm all-run regex939/685ms, Range610/3, same snapshot/rows;
+10s idle had no query work but470 full GETs from maintenance. The provider/OS
+cache was not cleared. Both diagnostics use the same logical fixture/limits,
+not identical submitted bytes(installation/time/retry identities differ), and
+fixed105records/s is offered load, not independent capacity.
+
+Retained failure evidence: `.tools/comparison-report-1.HMaw0M`, log
+`.tools/native-compaction-comparison.log`, exact candidate code checksums
+`.tools/native-compaction-source-sha256.txt`. The next checks must cover larger
+maintenance inputs, including the shared downloader's currently journal-sized
+24MiB cap, and improve query latency/maintenance progress under the unchanged
+spare-time policy. Corrected official-duration1/2/4 runs, independent capacity
+and R4 provider/release evidence remain open.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

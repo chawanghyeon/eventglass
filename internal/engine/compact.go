@@ -46,20 +46,12 @@ func Compact(ctx context.Context, request CompactionRequest) (CompactionResult, 
 			return CompactionResult{}, err
 		}
 	}
-	day, _ := time.Parse("2006-01-02", request.EventDay)
-	startUS, endUS := day.UnixMicro(), day.Add(24*time.Hour).UnixMicro()
 	analyticsPaths, payloadPaths := make([]string, len(request.Inputs)), make([]string, len(request.Inputs))
 	for index, input := range request.Inputs {
 		analyticsPaths[index], payloadPaths[index] = input.AnalyticsPath, input.PayloadPath
-		inspected, err := inspectPartition(ctx, db, index, partition{day: request.EventDay, kind: request.Kind}, input.AnalyticsPath, input.PayloadPath)
-		if err != nil || inspected.IdentitySHA256 != input.IdentitySHA256 {
-			return CompactionResult{}, errors.Join(errors.New("compaction input pair identity mismatch"), err)
-		}
-		var rows, scoped int64
-		err = db.QueryRowContext(ctx, `SELECT count(*),count(*) FILTER (WHERE tenant_id=? AND lane_id=? AND kind=? AND schema_version=? AND grouping_version=? AND event_time_us>=? AND event_time_us<?) FROM read_parquet(?)`, request.TenantID, request.LaneID, request.Kind, request.SchemaVersion, request.GroupingVersion, startUS, endUS, input.AnalyticsPath).Scan(&rows, &scoped)
-		if err != nil || rows == 0 || rows != scoped {
-			return CompactionResult{}, errors.Join(errors.New("compaction input scope mismatch"), err)
-		}
+	}
+	if err := verifyCompactionInputs(ctx, db, request, analyticsPaths, payloadPaths); err != nil {
+		return CompactionResult{}, err
 	}
 	analyticsPath := filepath.Join(request.OutputDirectory, "compact.analytics.parquet")
 	payloadPath := filepath.Join(request.OutputDirectory, "compact.payload.parquet")
@@ -99,6 +91,7 @@ func validateCompactionRequest(request CompactionRequest) error {
 		return errors.New("invalid compaction paths or native limits")
 	}
 	seen := make(map[string]bool, len(request.Inputs))
+	paths := make(map[string]bool, 2*len(request.Inputs))
 	var total int64
 	for _, input := range request.Inputs {
 		if input.BundleID == "" || seen[input.BundleID] || !filepath.IsAbs(input.AnalyticsPath) || !filepath.IsAbs(input.PayloadPath) || input.AnalyticsPath == input.PayloadPath || !validEngineSHA(input.IdentitySHA256) {
@@ -106,8 +99,12 @@ func validateCompactionRequest(request CompactionRequest) error {
 		}
 		seen[input.BundleID] = true
 		for _, path := range []string{input.AnalyticsPath, input.PayloadPath} {
+			if paths[filepath.Clean(path)] {
+				return errors.New("compaction input file is repeated")
+			}
+			paths[filepath.Clean(path)] = true
 			info, err := os.Stat(path)
-			if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || total > (256<<20)-info.Size() {
+			if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > MaxBundleFileBytes || total > (256<<20)-info.Size() {
 				return errors.Join(errors.New("compaction input budget exceeded"), err)
 			}
 			total += info.Size()
