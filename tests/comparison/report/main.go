@@ -1,0 +1,226 @@
+package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+const gib = 1 << 30
+
+type prices struct {
+	AsOf            string            `json:"as_of"`
+	Region          string            `json:"region"`
+	Currency        string            `json:"currency"`
+	MonthSeconds    float64           `json:"month_seconds"`
+	PITRDays        float64           `json:"pitr_days"`
+	FargateCPU      float64           `json:"fargate_arm_vcpu_second"`
+	FargateMemory   float64           `json:"fargate_arm_gb_second"`
+	FargateMemoryGB float64           `json:"fargate_billed_memory_gb_per_1_vcpu"`
+	RDSHour         float64           `json:"rds_postgresql_t4g_micro_single_az_hour"`
+	RDSStorage      float64           `json:"rds_gp3_gb_month"`
+	RDSBackup       float64           `json:"rds_backup_gb_month"`
+	RDSMinGB        float64           `json:"rds_min_storage_gb"`
+	S3Storage       float64           `json:"s3_standard_gb_month"`
+	S3PUT           float64           `json:"s3_put_per_1000"`
+	S3GET           float64           `json:"s3_get_per_1000"`
+	Sources         map[string]string `json:"sources"`
+	Assumptions     []string          `json:"assumptions"`
+	Exclusions      []string          `json:"exclusions"`
+}
+
+type stat struct {
+	Sample   int64  `json:"sample"`
+	Name     string `json:"name"`
+	MemUsage string `json:"mem_usage"`
+}
+
+type resourceReport struct {
+	PeakWholeInstallationBytes int64            `json:"peak_whole_installation_bytes"`
+	PeakByContainerBytes       map[string]int64 `json:"peak_by_container_bytes"`
+	OOMKilled                  []string         `json:"oom_killed"`
+	GoUnitsWithin512MiB        bool             `json:"go_units_within_512_mib"`
+}
+
+type costReport struct {
+	AsOf                         string            `json:"as_of"`
+	Region                       string            `json:"region"`
+	Currency                     string            `json:"currency"`
+	MeasurementSeconds           float64           `json:"measurement_seconds"`
+	MonthlyProjectionFactor      float64           `json:"monthly_projection_factor"`
+	FargateTasks                 int               `json:"fargate_tasks"`
+	FargateBilledMemoryGBPerTask float64           `json:"fargate_billed_memory_gb_per_task"`
+	ProjectedPGStorageGB         float64           `json:"projected_pg_storage_gb"`
+	BackupWindowGB               float64           `json:"backup_window_gb"`
+	ChargedBackupGB              float64           `json:"charged_backup_gb"`
+	ProjectedS3StorageGB         float64           `json:"projected_s3_storage_gb"`
+	ProjectedS3PUT               float64           `json:"projected_s3_put"`
+	ProjectedS3GET               float64           `json:"projected_s3_get"`
+	FargateUSD                   float64           `json:"fargate_usd"`
+	RDSComputeUSD                float64           `json:"rds_compute_usd"`
+	RDSStorageUSD                float64           `json:"rds_storage_usd"`
+	RDSBackupUSD                 float64           `json:"rds_backup_usd"`
+	S3StorageUSD                 float64           `json:"s3_storage_usd"`
+	S3RequestsUSD                float64           `json:"s3_requests_usd"`
+	TotalUSD                     float64           `json:"total_usd"`
+	Sources                      map[string]string `json:"sources"`
+	Assumptions                  []string          `json:"assumptions"`
+	Exclusions                   []string          `json:"exclusions"`
+}
+
+func main() {
+	if len(os.Args) != 5 {
+		fatal("usage: comparison-report report.json stats.jsonl oom.tsv pricing.json")
+	}
+	report := readObject(os.Args[1])
+	var price prices
+	readJSON(os.Args[4], &price)
+	resource := readResources(os.Args[2], os.Args[3])
+	cost := calculateCost(report, price)
+	report["Resources"], report["Cost"] = resource, cost
+	targets, _ := report["Targets"].(map[string]any)
+	if targets == nil {
+		targets = make(map[string]any)
+		report["Targets"] = targets
+	}
+	targets["no_cgroup_oom"] = len(resource.OOMKilled) == 0
+	targets["go_units_within_512mib"] = resource.GoUnitsWithin512MiB
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		fatal(err.Error())
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(os.Args[1], data, 0o600); err != nil {
+		fatal(err.Error())
+	}
+	if len(resource.OOMKilled) != 0 || !resource.GoUnitsWithin512MiB {
+		fatal("comparison resource target failed")
+	}
+}
+
+func readObject(path string) map[string]any {
+	var value map[string]any
+	readJSON(path, &value)
+	return value
+}
+
+func readJSON(path string, value any) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fatal(err.Error())
+	}
+	if err := json.Unmarshal(data, value); err != nil {
+		fatal(err.Error())
+	}
+}
+
+func readResources(statsPath, oomPath string) resourceReport {
+	result := resourceReport{PeakByContainerBytes: make(map[string]int64), OOMKilled: []string{}, GoUnitsWithin512MiB: true}
+	file, err := os.Open(statsPath)
+	if err != nil {
+		fatal(err.Error())
+	}
+	defer file.Close()
+	sums := make(map[int64]int64)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		var sample stat
+		if json.Unmarshal(scanner.Bytes(), &sample) != nil || sample.Sample <= 0 || sample.Name == "" {
+			continue
+		}
+		bytes, err := parseBytes(strings.TrimSpace(strings.Split(sample.MemUsage, "/")[0]))
+		if err != nil {
+			fatal(err.Error())
+		}
+		sums[sample.Sample] += bytes
+		result.PeakByContainerBytes[sample.Name] = max(result.PeakByContainerBytes[sample.Name], bytes)
+		if isGoUnit(sample.Name) && bytes > 512<<20 {
+			result.GoUnitsWithin512MiB = false
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		fatal(err.Error())
+	}
+	for _, bytes := range sums {
+		result.PeakWholeInstallationBytes = max(result.PeakWholeInstallationBytes, bytes)
+	}
+	oom, err := os.ReadFile(oomPath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		fatal(err.Error())
+	}
+	for _, line := range strings.Split(string(oom), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == "true" {
+			result.OOMKilled = append(result.OOMKilled, strings.TrimPrefix(fields[0], "/"))
+		}
+	}
+	sort.Strings(result.OOMKilled)
+	return result
+}
+
+func calculateCost(report map[string]any, price prices) costReport {
+	seconds := number(report, "WarmupSeconds") + number(report, "LoadSeconds")
+	if seconds <= 0 || price.MonthSeconds <= 0 {
+		fatal("invalid comparison duration or pricing month")
+	}
+	factor := price.MonthSeconds / seconds
+	workers := int(number(report, "Workers"))
+	pgGrowth := math.Max(0, number(report, "PGDatabaseEndBytes")-number(report, "PGDatabaseStartBytes"))
+	pgGB := math.Max(price.RDSMinGB, pgGrowth*factor/gib)
+	backupGB := (number(report, "PGDatabaseEndBytes") + number(report, "PGWALBytes")/seconds*(price.PITRDays*86400)) / gib
+	chargedBackupGB := math.Max(0, backupGB-pgGB)
+	s3GB := number(report, "S3StoredBytes") * factor / gib
+	puts := number(report, "S3PutRequests") * factor
+	gets := (number(report, "S3GetRequests") + number(report, "S3HeadRequests") + number(report, "S3RangeRequests")) * factor
+	tasks := workers + 2
+	fargate := float64(tasks) * price.MonthSeconds * (price.FargateCPU + price.FargateMemoryGB*price.FargateMemory)
+	rdsCompute := price.RDSHour * price.MonthSeconds / 3600
+	rdsStorage, rdsBackup := pgGB*price.RDSStorage, chargedBackupGB*price.RDSBackup
+	s3Storage, s3Requests := s3GB*price.S3Storage, puts/1000*price.S3PUT+gets/1000*price.S3GET
+	return costReport{
+		AsOf: price.AsOf, Region: price.Region, Currency: price.Currency, MeasurementSeconds: seconds, MonthlyProjectionFactor: factor,
+		FargateTasks: tasks, FargateBilledMemoryGBPerTask: price.FargateMemoryGB, ProjectedPGStorageGB: pgGB,
+		BackupWindowGB: backupGB, ChargedBackupGB: chargedBackupGB, ProjectedS3StorageGB: s3GB,
+		ProjectedS3PUT: puts, ProjectedS3GET: gets, FargateUSD: fargate, RDSComputeUSD: rdsCompute,
+		RDSStorageUSD: rdsStorage, RDSBackupUSD: rdsBackup, S3StorageUSD: s3Storage, S3RequestsUSD: s3Requests,
+		TotalUSD: fargate + rdsCompute + rdsStorage + rdsBackup + s3Storage + s3Requests,
+		Sources:  price.Sources, Assumptions: price.Assumptions, Exclusions: price.Exclusions,
+	}
+}
+
+func number(object map[string]any, key string) float64 {
+	value, ok := object[key].(float64)
+	if !ok {
+		fatal("missing numeric report field " + key)
+	}
+	return value
+}
+
+func parseBytes(raw string) (int64, error) {
+	units := []struct {
+		suffix string
+		factor float64
+	}{{"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10}, {"GB", 1e9}, {"MB", 1e6}, {"kB", 1e3}, {"B", 1}}
+	for _, unit := range units {
+		if strings.HasSuffix(raw, unit.suffix) {
+			value, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(raw, unit.suffix)), 64)
+			return int64(value * unit.factor), err
+		}
+	}
+	return 0, fmt.Errorf("unknown docker byte value %q", raw)
+}
+
+func isGoUnit(name string) bool {
+	return strings.Contains(name, "-api") || strings.Contains(name, "-scheduler") || strings.Contains(name, "-worker-")
+}
+
+func fatal(message string) {
+	fmt.Fprintln(os.Stderr, message)
+	os.Exit(1)
+}

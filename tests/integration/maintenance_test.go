@@ -110,6 +110,26 @@ func TestCompactionReservationRecoveryAndGenerationSwap(t *testing.T) {
 	}
 }
 
+func TestCompactionCandidateFillsTinyPartitionInsteadOfStoppingAtMinimum(t *testing.T) {
+	fixture := setupAcceptFixture(t, 1702)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := fixture.pool.Exec(ctx, `UPDATE lanes SET accepted_seq=12,published_seq=12,catalog_generation=1 WHERE tenant_id=$1 AND lane_id=0`, fixture.tenantID); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 12 {
+		insertMaintenanceBundle(t, ctx, fixture, 1, int64(index+1), fmt.Sprintf("tiny-%d", index))
+	}
+	operations, err := control.NewMaintenanceOperations(fixture.pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := operations.FindCompactionCandidate(ctx)
+	if err != nil || candidate.TenantID != fixture.tenantID || candidate.LaneID != 0 || len(candidate.BundleIDs) != 12 {
+		t.Fatalf("candidate=%#v err=%v", candidate, err)
+	}
+}
+
 func sameMaintenanceBundleSet(inputs []control.CompactionWorkInput, expected []string) bool {
 	seen := make(map[string]bool, len(inputs))
 	for _, input := range inputs {

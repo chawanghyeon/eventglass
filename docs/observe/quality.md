@@ -141,6 +141,25 @@ exports only three fixed pool labels and gates KEDA demand on the PostgreSQL/S3
 marker check. The manifests are a bounded deployment baseline, not a deployed or
 proven autoscaling cluster.
 
+R3's `./scripts/check comparison` is now executable against fresh PostgreSQL and
+MinIO installations and final non-root ARM64 images. It fixes independent
+10k/100k/1m/10m oracle hashes, sends the real Sentry HTTP mix, samples Docker
+resources, performs a worker SIGKILL/restart, and prices measured PG/WAL and S3
+requests/bytes from the dated 2026-09-21 us-east-1 fixture. The official
+one-worker run used five minutes warmup, 30 minutes load, and ten minutes drain.
+It accepted 220,500 records plus 35 duplicate retries with zero conflicts; ACK
+p95 was 375 ms. All Go units stayed below 512 MiB with no OOM, while peak whole
+installation RSS was 1,257,012,985 bytes. Rows/histogram p95 was 11,812/11,085
+ms, 113 queries failed, the load backlog slope was +474.52 jobs/min, maximum
+backlog was 13,310, and 13,060 remained after a 600,759 ms drain. Query responses
+provided zero usable visibility-lag samples, which the harness now fails closed
+instead of treating as zero latency. The measured local rates project to
+$384.01/month under the fixture's stated Fargate/RDS/S3 assumptions, including
+$265.54/month of S3 requests; EKS, load balancer, NAT, CloudWatch, DNS, support,
+tax, cross-region transfer, and multi-AZ premium are explicit exclusions. This
+is measured failure evidence, not a cost or performance claim. R3 remains
+incomplete and R4 cannot start as a completed dependent gate.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

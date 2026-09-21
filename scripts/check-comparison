@@ -1,0 +1,226 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) echo "comparison verification supports ARM64 only" >&2; exit 1 ;;
+esac
+
+revision=$(git rev-parse HEAD)
+if [ -n "$(git status --porcelain)" ]; then
+  revision="${revision}-dirty"
+fi
+run_dir=$(mktemp -d "$ROOT/.tools/eventglass-comparison.XXXXXX")
+active_project=""
+app_containers=""
+cleanup_profile() {
+  for container in $app_containers; do docker rm -f "$container" >/dev/null 2>&1 || true; done
+  if [ -n "$active_project" ]; then
+    docker compose -p "$active_project" -f deploy/compose.yaml down --volumes --remove-orphans >/dev/null 2>&1 || true
+  fi
+  app_containers=""
+  active_project=""
+}
+cleanup() {
+  cleanup_profile
+  rm -rf "$run_dir"
+}
+trap cleanup EXIT INT TERM
+
+docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:comparison-build .
+docker buildx build --platform linux/arm64 --load --tag eventglass-go:comparison-runtime .
+
+if [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then
+  profiles="${EVENTGLASS_COMPARISON_WORKERS:-1}"
+  warmup=${EVENTGLASS_COMPARISON_WARMUP:-20s}
+  load=${EVENTGLASS_COMPARISON_LOAD:-60s}
+  drain=${EVENTGLASS_COMPARISON_DRAIN:-30s}
+  test_timeout=10m
+else
+  profiles="1 2 4"
+  warmup=5m
+  load=30m
+  drain=10m
+  test_timeout=1h
+fi
+
+start_runtime() {
+  name=$1
+  role=$2
+  prefix=$3
+  docker run -d --name "$name" --platform linux/arm64 --network "${active_project}_default" \
+    --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,size=4g -v "$secrets_dir:/run/eventglass:ro" \
+    -e EVENTGLASS_DATABASE_URL="$database_url" \
+    -e EVENTGLASS_PUBLIC_URL="$public_url" \
+    -e EVENTGLASS_ROLES="$role" \
+    -e EVENTGLASS_HTTP_ADDR=:8080 \
+    -e EVENTGLASS_METRICS_ADDR=:9090 \
+    -e EVENTGLASS_SCRATCH_DIR=/tmp/eventglass \
+    -e EVENTGLASS_S3_ENDPOINT=http://minio:9000 \
+    -e EVENTGLASS_S3_REGION=us-east-1 \
+    -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
+    -e EVENTGLASS_S3_PREFIX="$prefix" \
+    -e AWS_ACCESS_KEY_ID=eventglass-local \
+    -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+    -e EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE=/run/eventglass/alert.hex \
+    eventglass-go:comparison-runtime run >/dev/null
+}
+
+for workers in $profiles; do
+  active_project="eventglass-go-comparison-${workers}-$$"
+  profile_dir="$run_dir/workers-$workers"
+  secrets_dir="$profile_dir/secrets"
+  artifacts_dir="$profile_dir/artifacts"
+  mkdir -p "$secrets_dir" "$artifacts_dir"
+  for name in bootstrap auth token alert; do
+    openssl rand -hex 32 >"$secrets_dir/$name.hex"
+    chmod 600 "$secrets_dir/$name.hex"
+  done
+  bootstrap_token=$(tr -d '\n' <"$secrets_dir/bootstrap.hex")
+  database_url="postgres://eventglass:local-test-only@postgres:5432/eventglass?sslmode=disable" # pragma: allowlist secret -- disposable fixture
+  public_url=https://eventglass.invalid
+  prefix="comparison-$workers"
+
+  docker compose -p "$active_project" -f deploy/compose.yaml up -d postgres minio
+  docker compose -p "$active_project" -f deploy/compose.yaml run --rm minio-init
+  attempt=0
+  until docker compose -p "$active_project" -f deploy/compose.yaml exec -T postgres pg_isready -U eventglass -d eventglass >/dev/null 2>&1; do
+    attempt=$((attempt + 1))
+    if [ "$attempt" -ge 60 ]; then echo "comparison PostgreSQL did not become ready" >&2; exit 1; fi
+    sleep 1
+  done
+  migration_attempt=0
+  until docker run --rm --platform linux/arm64 --network "${active_project}_default" \
+    -e EVENTGLASS_DATABASE_URL="$database_url" eventglass-go:comparison-runtime migrate; do
+    migration_attempt=$((migration_attempt + 1))
+    if [ "$migration_attempt" -ge 30 ]; then echo "comparison migration did not become ready" >&2; exit 1; fi
+    sleep 1
+  done
+
+  api_container="${active_project}-api"
+  public_url=http://127.0.0.1:8080
+  docker run -d --name "$api_container" --platform linux/arm64 --network "${active_project}_default" \
+    --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 --read-only \
+    --tmpfs /tmp:rw,nosuid,nodev,size=4g -v "$secrets_dir:/run/eventglass:ro" \
+    -e EVENTGLASS_DATABASE_URL="$database_url" \
+    -e EVENTGLASS_PUBLIC_URL="$public_url" \
+    -e EVENTGLASS_ROLES=api \
+    -e EVENTGLASS_HTTP_ADDR=:8080 \
+    -e EVENTGLASS_METRICS_ADDR=:9090 \
+    -e EVENTGLASS_SCRATCH_DIR=/tmp/eventglass \
+    -e EVENTGLASS_S3_ENDPOINT=http://minio:9000 \
+    -e EVENTGLASS_S3_REGION=us-east-1 \
+    -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
+    -e EVENTGLASS_S3_PREFIX="$prefix" \
+    -e EVENTGLASS_INSECURE_COOKIE=true \
+    -e EVENTGLASS_BOOTSTRAP_TOKEN_FILE=/run/eventglass/bootstrap.hex \
+    -e EVENTGLASS_AUTH_HASH_KEY_FILE=/run/eventglass/auth.hex \
+    -e EVENTGLASS_TOKEN_KEY_FILE=/run/eventglass/token.hex \
+    -e EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE=/run/eventglass/alert.hex \
+    -e AWS_ACCESS_KEY_ID=eventglass-local \
+    -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+    eventglass-go:comparison-runtime run >/dev/null
+  app_containers="$api_container"
+
+  docker run --rm --platform linux/arm64 --network "${active_project}_default" \
+    -v "$artifacts_dir:/comparison" -w /src \
+    -e EVENTGLASS_COMPARISON_BASE_URL="http://${api_container}:8080" \
+    -e EVENTGLASS_COMPARISON_STATE=/comparison/state.json \
+    -e EVENTGLASS_COMPARISON_BOOTSTRAP_TOKEN="$bootstrap_token" \
+    --entrypoint go eventglass-go:comparison-build \
+    test -tags comparison -count=1 -run '^TestPrepareComparisonInstallation$' -v ./tests/comparison
+
+  public_url=https://eventglass.invalid
+  scheduler_container="${active_project}-scheduler"
+  start_runtime "$scheduler_container" scheduler "$prefix"
+  app_containers="$app_containers $scheduler_container"
+  worker_metrics=""
+  index=1
+  while [ "$index" -le "$workers" ]; do
+    worker_container="${active_project}-worker-$index"
+    start_runtime "$worker_container" worker "$prefix"
+    app_containers="$app_containers $worker_container"
+    worker_metrics="${worker_metrics},http://${worker_container}:9090"
+    index=$((index + 1))
+  done
+  metrics="http://${api_container}:9090,http://${scheduler_container}:9090${worker_metrics}"
+
+  stats_file="$artifacts_dir/docker-stats.jsonl"
+  oom_file="$artifacts_dir/docker-oom.tsv"
+  (
+    while docker inspect "$api_container" >/dev/null 2>&1; do
+      sample=$(date +%s)
+      docker stats --no-stream --format "{\"sample\":$sample,\"name\":\"{{.Name}}\",\"mem_usage\":\"{{.MemUsage}}\",\"cpu_percent\":\"{{.CPUPerc}}\",\"net_io\":\"{{.NetIO}}\",\"block_io\":\"{{.BlockIO}}\",\"pids\":\"{{.PIDs}}\"}" $app_containers \
+        "${active_project}-postgres-1" "${active_project}-minio-1" >>"$stats_file" 2>/dev/null || true
+      sleep 5
+    done
+  ) &
+  stats_pid=$!
+
+  (
+    if [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then sleep 35; else sleep 1200; fi
+    victim="${active_project}-worker-1"
+    docker run --rm --platform linux/arm64 --network "${active_project}_default" \
+      --entrypoint curl eventglass-go:comparison-build -fsS "http://${victim}:9090/metrics" \
+      >"$artifacts_dir/restarted-worker.metrics"
+    docker kill "$victim" >/dev/null
+    docker inspect --format '{{.Name}} {{.State.OOMKilled}}' "$victim" >>"$oom_file"
+    docker rm "$victim" >/dev/null
+    start_runtime "$victim" worker "$prefix"
+  ) &
+  restart_pid=$!
+
+  set +e
+  docker run --rm --platform linux/arm64 --network "${active_project}_default" \
+    -v "$artifacts_dir:/comparison" -w /src \
+    -e EVENTGLASS_DATABASE_URL="$database_url" \
+    -e EVENTGLASS_COMPARISON_BASE_URL="http://${api_container}:8080" \
+    -e EVENTGLASS_COMPARISON_STATE=/comparison/state.json \
+    -e EVENTGLASS_COMPARISON_REPORT="/comparison/report.json" \
+    -e EVENTGLASS_COMPARISON_WORKERS="$workers" \
+    -e EVENTGLASS_COMPARISON_WARMUP="$warmup" \
+    -e EVENTGLASS_COMPARISON_LOAD="$load" \
+    -e EVENTGLASS_COMPARISON_DRAIN="$drain" \
+    -e EVENTGLASS_COMPARISON_QUICK="${EVENTGLASS_COMPARISON_QUICK:-}" \
+    -e EVENTGLASS_COMPARISON_REVISION="$revision" \
+    -e EVENTGLASS_COMPARISON_METRICS="$metrics" \
+    -e EVENTGLASS_COMPARISON_RESTART_METRICS=/comparison/restarted-worker.metrics \
+    --entrypoint go eventglass-go:comparison-build \
+    test -tags comparison -count=1 -timeout "$test_timeout" -run '^TestSustainedComparison$' -v ./tests/comparison
+  status=$?
+  set -e
+  kill "$stats_pid" >/dev/null 2>&1 || true
+  wait "$stats_pid" >/dev/null 2>&1 || true
+  kill "$restart_pid" >/dev/null 2>&1 || true
+  wait "$restart_pid" >/dev/null 2>&1 || true
+  for container in $app_containers; do
+    docker inspect --format '{{.Name}} {{.State.OOMKilled}}' "$container" >>"$oom_file" 2>/dev/null || true
+  done
+  if [ -f "$artifacts_dir/report.json" ]; then
+    set +e
+    GOCACHE="$ROOT/.tools/go-build-cache" go run ./tests/comparison/report \
+      "$artifacts_dir/report.json" "$stats_file" "$oom_file" "$ROOT/tests/comparison/pricing.json"
+    report_status=$?
+    set -e
+    if [ "$status" -eq 0 ] && [ "$report_status" -ne 0 ]; then status=$report_status; fi
+  fi
+  if [ "$status" -ne 0 ]; then
+    if [ -f "$artifacts_dir/report.json" ]; then
+      cp "$artifacts_dir/report.json" "$ROOT/.tools/comparison-workers-$workers-failed.json"
+      cp "$stats_file" "$ROOT/.tools/comparison-workers-$workers-failed-stats.jsonl"
+      echo "R3 failed evidence: $ROOT/.tools/comparison-workers-$workers-failed.json" >&2
+    fi
+    for container in $app_containers; do docker logs "$container" >&2 || true; done
+    exit "$status"
+  fi
+  cp "$artifacts_dir/report.json" "$ROOT/.tools/comparison-workers-$workers.json"
+  cp "$stats_file" "$ROOT/.tools/comparison-workers-$workers-stats.jsonl"
+  echo "R3 comparison evidence: $ROOT/.tools/comparison-workers-$workers.json"
+  cleanup_profile
+done
+
+GOCACHE="$ROOT/.tools/go-build-cache" GOMODCACHE="$ROOT/.tools/go-mod-cache" \
+  go test -count=1 -run '^TestFixedDatasetProfilesMatchIndependentOracle$' -v ./tests/comparison

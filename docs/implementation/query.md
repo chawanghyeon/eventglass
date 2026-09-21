@@ -145,7 +145,8 @@ scope checks; never reveal another tenant's existence.
 
 Coordinator seals immutable partitions before dispatch, with planning state,
 catalog paging and metadata quotas specified in [correctness C06](correctness.md#c06--query-planning-and-merging-are-bounded-including-metadata): sorted file_id lists,
-up to8 files or target64MiB compressed; a larger file is its own task. Each
+up to32 analytics files or target64MiB compressed; detail remains capped at8
+analytics/payload pairs. A larger analytics file is its own task. Each
 analytics file belongs to exactly one scan partition. Payload files are excluded
 except detail. Row-group splitting remains disabled unless independently proven.
 Plan envelope includes protocol version, query/snapshot/task/fence/generation,
@@ -154,7 +155,7 @@ handles. No user S3 credential or URL can create a capability.
 
 Per query max4 running scan tasks; per worker1 native child. Admission limit
 2 active queries/user, 8/tenant initially; queued max32/tenant, deadline starts
-at submission. Auto uses sync if planned analytics bytes<=64MiB and<=8 files
+at submission. Auto uses sync if planned analytics bytes<=64MiB and<=32 files
 and a slot is immediately available, otherwise202. Sync deadline30s, async5min,
 both at most snapshot max lifetime. Plan byte threshold is routing, not a promise
 about scan latency. Empty input executes reducer's empty result without a child.

@@ -81,7 +81,7 @@ func TestPutStreamRejectsCorrectHeadMetadataWithWrongStoredBytes(t *testing.T) {
 		t.Fatalf("wrong stored bytes were accepted: %v", err)
 	}
 	counts := store.OperationCounts()
-	if counts.PutRequests != 1 || counts.HeadRequests != 1 || counts.FullGetRequests != 1 || counts.FullGetBytes != 4 {
+	if counts.PutRequests != 1 || counts.PutBytes != 4 || counts.HeadRequests != 1 || counts.FullGetRequests != 1 || counts.FullGetBytes != 4 {
 		t.Fatalf("readback counts=%#v", counts)
 	}
 }

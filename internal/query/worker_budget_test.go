@@ -19,4 +19,11 @@ func TestQueryDiskReservationStreamsScanInputsFromSharedCache(t *testing.T) {
 	if _, err := queryDiskReservation(control.QueryTask{}, manifest, engine.QueryOperation{Kind: "rows"}); !errors.Is(err, engine.ErrQueryExecutionInvalid) {
 		t.Fatal(err)
 	}
+	manifest.Files = make([]model.CatalogFile, MaxDetailFilesPerScan+1)
+	for index := range manifest.Files {
+		manifest.Files[index] = model.CatalogFile{Bytes: 1, PayloadBytes: 1}
+	}
+	if _, err := queryDiskReservation(control.QueryTask{}, manifest, engine.QueryOperation{Kind: "detail"}); !errors.Is(err, engine.ErrQueryExecutionInvalid) {
+		t.Fatalf("detail file fanout=%v", err)
+	}
 }

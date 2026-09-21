@@ -15,7 +15,9 @@ payload, and reducer child reads. M4 passed an actual pgBackRest base+WAL restor
 into two independent PGDATA volumes, full referenced-object reads, signed report
 import and missing-object failure. R1's CPU1/512MiB/swap0 containment gate also
 passes. R2's autoscale control, fair claims and bounded Kubernetes/KEDA baseline
-also pass; R3 is the next packet. Physical GC remains
+also pass. R3's executable comparison harness is implemented, but the official
+one-worker sustained profile misses the query/backlog targets; R3 remains the
+first incomplete packet and R4 remains dependency-blocked. Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises
 the actual ingest/publication/query runtime. Check `api/implemented-routes.json` before wiring a feature.

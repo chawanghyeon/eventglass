@@ -133,7 +133,7 @@ func (workflow Workflow) Execute(ctx context.Context, task control.QueryTask) (r
 
 func queryDiskReservation(task control.QueryTask, manifest TaskManifest, operation engine.QueryOperation) (int64, error) {
 	bytes := engine.DefaultNativeSpillBytes + engine.MaxQueryOutputBytes
-	if len(manifest.Files) > MaxFilesPerScan || len(task.Inputs) > ReduceFanIn {
+	if len(manifest.Files) > MaxFilesPerScan || operation.Kind == "detail" && len(manifest.Files) > MaxDetailFilesPerScan || len(task.Inputs) > ReduceFanIn {
 		return 0, engine.ErrQueryExecutionInvalid
 	}
 	// Scan inputs are streamed through the bounded range cache. Cache bytes have
@@ -160,7 +160,7 @@ func (workflow Workflow) prepareQueryInputs(ctx context.Context, task control.Qu
 	var payloads []string
 	switch task.Authority.Key.Stage {
 	case model.QueryTaskScan:
-		if len(task.Inputs) != 0 || len(manifest.Files) < 1 || len(manifest.Files) > MaxFilesPerScan {
+		if len(task.Inputs) != 0 || len(manifest.Files) < 1 || len(manifest.Files) > MaxFilesPerScan || operation.Kind == "detail" && len(manifest.Files) > MaxDetailFilesPerScan {
 			return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query scan inputs are invalid"))
 		}
 		inputs = make([]string, len(manifest.Files))

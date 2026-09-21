@@ -53,6 +53,14 @@ class GoLayoutTests(unittest.TestCase):
         self.assertEqual(tool_versions["GO_VERSION"], module_version)
         self.assertIn(f"VERSION={module_version}", (ROOT / "scripts/bootstrap").read_text())
 
+    def test_comparison_runner_outlives_the_official_profile(self):
+        runner = (ROOT / "scripts/check-comparison").read_text()
+        self.assertIn("warmup=5m", runner)
+        self.assertIn("load=30m", runner)
+        self.assertIn("drain=10m", runner)
+        self.assertIn("test_timeout=1h", runner)
+        self.assertIn('-timeout "$test_timeout"', runner)
+
     def test_source_design_is_unchanged(self):
         digest = hashlib.sha256(
             (ROOT / "docs/observe/source-design.md").read_bytes()

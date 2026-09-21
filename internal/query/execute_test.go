@@ -30,7 +30,7 @@ func TestBuildExecutionPlanAssignsFilesOnceAndBuildsFixedFanInTree(t *testing.T)
 		if err := decodeExact(task.Manifest, &manifest); err != nil {
 			t.Fatal(err)
 		}
-		if len(manifest.Files) != MaxFilesPerScan {
+		if len(manifest.Files) != int(TargetScanBytes/(8<<20)) {
 			t.Fatalf("partition %d files=%d", task.Key.PartitionID, len(manifest.Files))
 		}
 		for _, file := range manifest.Files {
@@ -46,6 +46,23 @@ func TestBuildExecutionPlanAssignsFilesOnceAndBuildsFixedFanInTree(t *testing.T)
 	root := plan.Tasks[len(plan.Tasks)-1]
 	if root.Key.Stage != model.QueryTaskReduce || root.Key.Level != 4 || root.Key.PartitionID != 0 || len(root.InputOrdinal) != 8 {
 		t.Fatalf("root=%#v", root)
+	}
+}
+
+func TestBuildExecutionPlanBatchesTinyRowsButBoundsDetailPayloadFanout(t *testing.T) {
+	files := make([]model.CatalogFile, MaxFilesPerScan+1)
+	for index := range files {
+		files[index] = model.CatalogFile{FileID: fmt.Sprintf("%08x-0000-4000-8000-000000000000", index), ObjectKey: fmt.Sprintf("v1/query/tiny-%d.parquet", index), Bytes: 1, SHA256: fmt.Sprintf("%064x", index+1), RowCount: 1}
+	}
+	rows, err := BuildExecutionPlan(testPlanScope(), files)
+	if err != nil || rows.ScanCount != 2 {
+		t.Fatalf("rows scans=%d err=%v", rows.ScanCount, err)
+	}
+	detailScope := testPlanScope()
+	detailScope.Operation = []byte(`{"kind":"detail"}`)
+	detail, err := BuildExecutionPlan(detailScope, files)
+	if err != nil || detail.ScanCount != 5 {
+		t.Fatalf("detail scans=%d err=%v", detail.ScanCount, err)
 	}
 }
 

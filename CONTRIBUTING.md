@@ -15,6 +15,7 @@ The active product is the root Go module. Use Go 1.26.5 exactly and run commands
 ./scripts/check recovery
 ./scripts/check resource
 ./scripts/check scale
+./scripts/check comparison
 ./scripts/check sdk
 ./scripts/check crash
 ./scripts/check web
@@ -48,6 +49,15 @@ cleanup, permit ownership and scratch reclamation. It does not replace R3's
 `./scripts/check scale` verifies autoscale decisions, the PG64 replica budget,
 tenant round-robin dispatch, identical 1/2/4 worker logical results and the
 Kubernetes/KEDA bounds on Linux ARM64. It is not a throughput benchmark.
+
+`./scripts/check comparison` runs the R3 end-to-end comparison against fresh
+PostgreSQL and MinIO installations with 1, 2, and 4 ARM64 workers. The official
+profile uses a five-minute warmup, 30-minute load, and ten-minute drain for each
+worker count, exercises a real worker restart, and writes its measured latency,
+backlog, whole-installation RSS, PG/WAL, S3 request/transfer, and dated cost
+report under `.tools/`. `EVENTGLASS_COMPARISON_QUICK=1` permits shorter local
+diagnostics but cannot complete R3. A generated report whose target map contains
+`false` remains a failed gate; do not relabel the measurement as a pass.
 
 Complete and verify one gate at a time, then commit directly to `main` and run `git push origin main`. Use commit subjects such as `feat: 한국어 변경 요약`, selecting `fix`, `perf`, `test`, `docs`, or `chore` as appropriate. Do not bypass hooks or rewrite published history merely to normalize messages.
 

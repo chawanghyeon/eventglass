@@ -18,6 +18,7 @@ import (
 const (
 	MaxCompactionInputs     = 128
 	MaxCompactionInputBytes = int64(256 << 20)
+	TargetCompactionBytes   = int64(32 << 20)
 	SmallCompactionFile     = int64(8 << 20)
 )
 
@@ -133,6 +134,9 @@ func (operations *MaintenanceOperations) FindCompactionCandidate(ctx context.Con
 			return CompactionCandidate{}, err
 		}
 		if len(selected.BundleIDs) == 0 || key != current {
+			if len(selected.BundleIDs) >= 8 {
+				return selected, nil
+			}
 			current, bytes = key, 0
 			selected = CompactionCandidate{TenantID: key.tenant, LaneID: key.lane, Partition: CompactionPartition{SchemaVersion: key.schema, GroupingVersion: key.grouping, EventDay: key.day, Kind: model.Kind(key.kind)}}
 		}
@@ -140,12 +144,15 @@ func (operations *MaintenanceOperations) FindCompactionCandidate(ctx context.Con
 			selected.BundleIDs = append(selected.BundleIDs, bundleID)
 			bytes += bundleBytes
 		}
-		if len(selected.BundleIDs) >= 8 {
+		if len(selected.BundleIDs) >= 8 && (len(selected.BundleIDs) == MaxCompactionInputs || bytes >= TargetCompactionBytes) {
 			return selected, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return CompactionCandidate{}, err
+	}
+	if len(selected.BundleIDs) >= 8 {
+		return selected, nil
 	}
 	return CompactionCandidate{}, ErrMaintenanceNoWork
 }

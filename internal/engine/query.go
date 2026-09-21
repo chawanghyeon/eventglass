@@ -17,7 +17,8 @@ import (
 )
 
 const (
-	MaxQueryInputFiles  = 8
+	MaxQueryInputFiles  = 32
+	MaxDetailInputFiles = 8
 	MaxQueryOutputBytes = int64(64 << 20)
 	MaxQueryOutputRows  = int64(20000)
 	LiveQueryPageRows   = 100
@@ -195,7 +196,7 @@ func (request QueryRequest) validate() (string, []any, error) {
 		if request.Task.Level != 0 || len(request.InputPaths) < 1 {
 			return "", nil, errors.New("scan task requires inputs at level zero")
 		}
-		if request.Operation.Kind == "detail" && len(request.PayloadPaths) != len(request.InputPaths) || request.Operation.Kind != "detail" && len(request.PayloadPaths) != 0 {
+		if request.Operation.Kind == "detail" && (len(request.InputPaths) > MaxDetailInputFiles || len(request.PayloadPaths) != len(request.InputPaths)) || request.Operation.Kind != "detail" && len(request.PayloadPaths) != 0 {
 			return "", nil, errors.New("query payload inputs do not match operation")
 		}
 		statement = request.Operation.ScanSQL

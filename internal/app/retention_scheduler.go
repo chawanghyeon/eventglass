@@ -9,7 +9,10 @@ import (
 	"github.com/google/uuid"
 )
 
-const retentionTickInterval = 60 * time.Second
+const (
+	retentionTickInterval       = 60 * time.Second
+	maintenanceScheduleInterval = time.Second
+)
 
 func (runtime *Runtime) runRetentionScheduler(ctx context.Context) error {
 	alertDone := make(chan struct{})
@@ -19,24 +22,33 @@ func (runtime *Runtime) runRetentionScheduler(ctx context.Context) error {
 		close(alertDone)
 	}
 	defer func() { <-alertDone }()
-	for {
+	runRetention := func() {
 		started := time.Now()
 		_, _, err := runtime.queryControl.AdvanceRetentionFloor(ctx)
 		runtime.stats.record(ctx, "retention_tick", started, err == nil, err)
 		started = time.Now()
-		progressed, err := runtime.maintenance.RunRetentionCleanup(ctx)
-		runtime.stats.record(ctx, "retention_cleanup", started, progressed, err)
-		started = time.Now()
-		err = runtime.reserveOneCompaction(ctx)
+		progressed, cleanupErr := runtime.maintenance.RunRetentionCleanup(ctx)
+		runtime.stats.record(ctx, "retention_cleanup", started, progressed, cleanupErr)
+	}
+	runSchedule := func() {
+		started := time.Now()
+		err := runtime.reserveOneCompaction(ctx)
 		runtime.stats.record(ctx, "maintenance_schedule", started, err == nil, err)
-		timer := time.NewTimer(retentionTickInterval)
+	}
+	runRetention()
+	runSchedule()
+	retentionTicker := time.NewTicker(retentionTickInterval)
+	maintenanceTicker := time.NewTicker(maintenanceScheduleInterval)
+	defer retentionTicker.Stop()
+	defer maintenanceTicker.Stop()
+	for {
 		select {
 		case <-ctx.Done():
-			if !timer.Stop() {
-				<-timer.C
-			}
 			return nil
-		case <-timer.C:
+		case <-retentionTicker.C:
+			runRetention()
+		case <-maintenanceTicker.C:
+			runSchedule()
 		}
 	}
 }

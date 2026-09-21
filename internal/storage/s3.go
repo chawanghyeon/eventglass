@@ -40,6 +40,7 @@ type S3Store struct {
 	bucket          string
 	prefix          string
 	putRequests     atomic.Uint64
+	putBytes        atomic.Uint64
 	headRequests    atomic.Uint64
 	fullGetRequests atomic.Uint64
 	fullGetBytes    atomic.Uint64
@@ -49,6 +50,7 @@ type S3Store struct {
 
 type OperationCounts struct {
 	PutRequests     uint64
+	PutBytes        uint64
 	HeadRequests    uint64
 	FullGetRequests uint64
 	FullGetBytes    uint64
@@ -58,7 +60,7 @@ type OperationCounts struct {
 
 func (s *S3Store) OperationCounts() OperationCounts {
 	return OperationCounts{
-		PutRequests: s.putRequests.Load(), HeadRequests: s.headRequests.Load(),
+		PutRequests: s.putRequests.Load(), PutBytes: s.putBytes.Load(), HeadRequests: s.headRequests.Load(),
 		FullGetRequests: s.fullGetRequests.Load(), FullGetBytes: s.fullGetBytes.Load(),
 		RangeRequests: s.rangeRequests.Load(), RangeBytes: s.rangeBytes.Load(),
 	}
@@ -158,6 +160,7 @@ func (s *S3Store) PutStream(ctx context.Context, key string, body io.ReadSeeker,
 	if err != nil {
 		return ObjectInfo{}, fmt.Errorf("put S3 object: %w", err)
 	}
+	s.putBytes.Add(uint64(size))
 	info, err := s.Head(ctx, key)
 	if err != nil {
 		return ObjectInfo{}, err

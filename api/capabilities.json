@@ -357,7 +357,7 @@
     {
       "id": "sustained-performance",
       "packet": "R3",
-      "description": "End-to-end 30-minute p95/p99 and whole-installation PG/S3 cost evidence; R1 containment and R2 scaling control pass."
+      "description": "Executable ARM64 30-minute PostgreSQL/MinIO load, restart, oracle, p95/p99, resource and dated-cost evidence exists; the official one-worker query/backlog targets miss, so R3 remains incomplete."
     },
     {
       "id": "release",

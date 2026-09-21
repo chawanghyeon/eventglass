@@ -13,15 +13,16 @@ import (
 )
 
 const (
-	QueryProtocolVersion = 1
-	MaxPlanFiles         = 32768
-	MaxScanPartitions    = 4096
-	MaxPlanBytes         = 16 << 20
-	MaxTaskManifestBytes = 1 << 20
-	MaxFilesPerScan      = 8
-	TargetScanBytes      = int64(64 << 20)
-	MaxTaskOutputBytes   = int64(64 << 20)
-	ReduceFanIn          = 8
+	QueryProtocolVersion  = 1
+	MaxPlanFiles          = 32768
+	MaxScanPartitions     = 4096
+	MaxPlanBytes          = 16 << 20
+	MaxTaskManifestBytes  = 1 << 20
+	MaxFilesPerScan       = 32
+	MaxDetailFilesPerScan = 8
+	TargetScanBytes       = int64(64 << 20)
+	MaxTaskOutputBytes    = int64(64 << 20)
+	ReduceFanIn           = 8
 )
 
 var ErrQueryLimit = errors.New("query limit exceeded")
@@ -62,7 +63,7 @@ func BuildExecutionPlan(scope PlanScope, files []model.CatalogFile) (ExecutionPl
 	if err := validatePlanScope(scope); err != nil {
 		return ExecutionPlan{}, err
 	}
-	partitions, err := partitionCatalog(files)
+	partitions, err := partitionCatalog(files, scanFileLimit(scope.Operation))
 	if err != nil {
 		return ExecutionPlan{}, err
 	}
@@ -122,9 +123,12 @@ func BuildExecutionPlan(scope PlanScope, files []model.CatalogFile) (ExecutionPl
 	return plan, nil
 }
 
-func partitionCatalog(files []model.CatalogFile) ([][]model.CatalogFile, error) {
+func partitionCatalog(files []model.CatalogFile, maxFiles int) ([][]model.CatalogFile, error) {
 	if len(files) > MaxPlanFiles {
 		return nil, ErrQueryLimit
+	}
+	if maxFiles < 1 || maxFiles > MaxFilesPerScan {
+		return nil, errors.New("invalid scan file limit")
 	}
 	partitions := make([][]model.CatalogFile, 0)
 	var current []model.CatalogFile
@@ -133,7 +137,7 @@ func partitionCatalog(files []model.CatalogFile) ([][]model.CatalogFile, error) 
 		if file.FileID == "" || file.Bytes <= 0 || index > 0 && files[index-1].FileID >= file.FileID {
 			return nil, errors.New("catalog files must be valid, sorted and unique")
 		}
-		if len(current) > 0 && (len(current) == MaxFilesPerScan || file.Bytes > math.MaxInt64-currentBytes || currentBytes+file.Bytes > TargetScanBytes) {
+		if len(current) > 0 && (len(current) == maxFiles || file.Bytes > math.MaxInt64-currentBytes || currentBytes+file.Bytes > TargetScanBytes) {
 			partitions = append(partitions, current)
 			current, currentBytes = nil, 0
 		}
@@ -147,6 +151,16 @@ func partitionCatalog(files []model.CatalogFile) ([][]model.CatalogFile, error) 
 		return nil, ErrQueryLimit
 	}
 	return partitions, nil
+}
+
+func scanFileLimit(operation []byte) int {
+	var value struct {
+		Kind string `json:"kind"`
+	}
+	if json.Unmarshal(operation, &value) == nil && value.Kind == "detail" {
+		return MaxDetailFilesPerScan
+	}
+	return MaxFilesPerScan
 }
 
 func makePlannedTask(scope PlanScope, key model.QueryTaskKey, files []model.CatalogFile, inputs []model.QueryTaskInput) (model.QueryPlannedTask, error) {

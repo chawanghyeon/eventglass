@@ -1,0 +1,33 @@
+{
+  "as_of": "2026-09-21",
+  "region": "us-east-1",
+  "currency": "USD",
+  "month_seconds": 2592000,
+  "pitr_days": 7,
+  "fargate_arm_vcpu_second": 0.0000089944,
+  "fargate_arm_gb_second": 0.0000009889,
+  "fargate_billed_memory_gb_per_1_vcpu": 2,
+  "rds_postgresql_t4g_micro_single_az_hour": 0.016,
+  "rds_gp3_gb_month": 0.115,
+  "rds_backup_gb_month": 0.095,
+  "rds_min_storage_gb": 20,
+  "s3_standard_gb_month": 0.023,
+  "s3_put_per_1000": 0.005,
+  "s3_get_per_1000": 0.0004,
+  "sources": {
+    "fargate": "https://aws.amazon.com/fargate/pricing/",
+    "rds": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonRDS/current/us-east-1/index.csv",
+    "s3": "https://aws.amazon.com/s3/pricing/"
+  },
+  "source_evidence": {
+    "rds_last_modified": "2026-09-17T23:45:43Z",
+    "rds_etag": "84fdfb486c47b8e96e29c63119ef52e7-3"
+  },
+  "assumptions": [
+    "The local API, scheduler, and each worker are priced as continuously running Linux/ARM Fargate tasks; Fargate bills the supported 2 GiB minimum for a 1 vCPU task even though the measured Eventglass cgroup limit is 512 MiB.",
+    "PostgreSQL is priced as one on-demand Single-AZ db.t4g.micro with gp3 storage; this matches the one-node fixture and is not a production HA claim.",
+    "Measured database, WAL, object bytes, and request rates are projected linearly to a 30-day month at the measured workload. S3 transfer is reported but same-region transfer is priced at zero.",
+    "RDS backup bytes include the ending database plus seven days of measured WAL; only bytes above provisioned database storage are charged in this estimate. Free tiers, taxes, support, EKS, NAT, load balancers, logs, and discounts are excluded and listed as exclusions rather than silently treated as zero."
+  ],
+  "exclusions": ["EKS control plane", "load balancer", "NAT gateway", "CloudWatch", "DNS", "support", "tax", "cross-region transfer", "multi-AZ premium"]
+}
