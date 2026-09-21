@@ -189,6 +189,14 @@ local inputs, not additional S3 downloads; this trades local I/O/latency for
 bounded native buffers and requires matched measurements, not a speedup claim.
 The engine owns these private files and removes them only after the native call
 has joined; app continues to own child lifetime and maintenance admission.
+Conversion and maintenance share physical order `(project_id, service NULLS
+FIRST, event_time_us, record_id)` for both files. Receipt/lane order remains
+authoritative for publication and retention boundaries, not physical layout.
+Payload does not persist these extra layout columns: the engine materializes
+only retained analytics IDs/project/service/event-time keys once, reuses that
+bounded native table during payload output, and projects the original five
+payload columns at final COPY. Never reconstruct sort keys from raw JSON or
+today's normalizer. Exact per-input and final pair verification still applies.
 Swap transaction locks lane/task/intents/bundles, rechecks live tuple and **each
 reserved input still current**; unrelated newer publications may exist. Increment
 current catalog_generation, close only reserved inputs at G, insert replacements

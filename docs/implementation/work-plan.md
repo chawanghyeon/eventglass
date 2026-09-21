@@ -238,6 +238,11 @@ and passes at192/256MiB native memory, with complete column hashes and physical
 ordering checked. It does not establish spare cgroup memory, official-duration
 maintenance-budget progress or the service SLOs. See quality.md for matched
 latency/allocation/RSS costs and the executed integration/resource checks.
+An additional layout audit reproduced a pre-existing mismatch with DESIGN5.2:
+conversion used project/service/event-time ordering but maintenance used receipt
+or ID order. Both paths now share the canonical physical sort, including null
+service ordering. Payload layout keys are taken once from verified retained
+analytics, not reconstructed from raw JSON or persisted as new payload columns.
 R3 remains first incomplete; raw-object download success is not a substitute.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped

@@ -19,13 +19,20 @@ const compactCopyOptions = "FORMAT PARQUET,COMPRESSION ZSTD,COMPRESSION_LEVEL 3,
 // Parquet writer's buffers and exhaust the native limit even when sorting alone
 // succeeds. The wide path sorts only keys, writes bounded ordered partitions,
 // then concatenates them in that exact order with the same native writer.
-func copyCompactionRole(ctx context.Context, db *sql.DB, request CompactionRequest, source, order, output string, paths []string, payload bool) error {
+func copyCompactionRole(ctx context.Context, db *sql.DB, request CompactionRequest, source, output string, paths []string, payload bool) error {
+	order := bundlePhysicalSort
+	projection := "*"
+	if payload {
+		// Sort keys may occur in private intermediate files, never in the stored
+		// payload schema. They remain native values, not re-decoded JSON fields.
+		projection = "record_id,raw_json,envelope_sdk_json,normalization_warnings_json,canonical_metadata_json"
+	}
 	var uncompressed int64
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE(sum(total_uncompressed_size),0) FROM parquet_metadata(`+parquetPathList(paths)+`)`).Scan(&uncompressed); err != nil {
 		return err
 	}
 	if uncompressed <= request.NativeMemoryBytes/8 {
-		_, err := db.ExecContext(ctx, `COPY (`+source+` ORDER BY `+order+`) TO '`+quoteSQLString(output)+`' (`+compactCopyOptions+`)`)
+		_, err := db.ExecContext(ctx, `COPY (SELECT `+projection+` FROM (`+source+`) ORDER BY `+order+`) TO '`+quoteSQLString(output)+`' (`+compactCopyOptions+`)`)
 		return err
 	}
 	// Materialize only the scalar keys and sizes BEFORE the window. Otherwise
@@ -36,7 +43,7 @@ func copyCompactionRole(ctx context.Context, db *sql.DB, request CompactionReque
 		rowBytes = "64+COALESCE(bit_length(raw_json)//8,0)+COALESCE(bit_length(envelope_sdk_json)//8,0)+COALESCE(bit_length(normalization_warnings_json)//8,0)+COALESCE(bit_length(canonical_metadata_json)//8,0)"
 	}
 	keys := `CREATE TEMP TABLE compact_keys AS WITH sizes AS MATERIALIZED (
-		SELECT ` + order + `,greatest(` + rowBytes + `,4096)::BIGINT AS row_bytes FROM (` + source + `) a)
+		SELECT ` + bundleSortColumns + `,greatest(` + rowBytes + `,4096)::BIGINT AS row_bytes FROM (` + source + `) a)
 		SELECT record_id,row_bytes,((sum(row_bytes) OVER(ORDER BY ` + order + ` ROWS UNBOUNDED PRECEDING)-1)//4194304)::BIGINT AS chunk FROM sizes`
 	if _, err := db.ExecContext(ctx, keys); err != nil {
 		return fmt.Errorf("size ordered partitions: %w", err)
@@ -90,14 +97,14 @@ func copyCompactionRole(ctx context.Context, db *sql.DB, request CompactionReque
 	}
 	if len(parts) == 0 {
 		// Retention can remove every row. Preserve the exact source schema.
-		statement = `COPY (SELECT * FROM (` + source + `) WHERE false) TO '` + quoteSQLString(output) + `' (` + compactCopyOptions + `)`
+		statement = `COPY (SELECT ` + projection + ` FROM (` + source + `) WHERE false) TO '` + quoteSQLString(output) + `' (` + compactCopyOptions + `)`
 	} else {
 		// Do not use parquetPathList here: lexicographic sorting would put chunk10
 		// before chunk2. No wildcard/hive column or physical final re-sort.
 		for index, path := range parts {
 			parts[index] = "'" + quoteSQLString(path) + "'"
 		}
-		statement = `COPY (SELECT * FROM read_parquet([` + strings.Join(parts, ",") + `],hive_partitioning=false)) TO '` + quoteSQLString(output) + `' (` + options + `,PRESERVE_ORDER true)`
+		statement = `COPY (SELECT ` + projection + ` FROM read_parquet([` + strings.Join(parts, ",") + `],hive_partitioning=false)) TO '` + quoteSQLString(output) + `' (` + options + `,PRESERVE_ORDER true)`
 	}
 	if _, err := db.ExecContext(ctx, statement); err != nil {
 		return fmt.Errorf("concatenate ordered partitions: %w", err)

@@ -27,6 +27,8 @@ const (
 	appendRowsPerFlush  = 2048
 	appendBytesPerFlush = 4 << 20
 	maxStageLineBytes   = (2 << 20) + (64 << 10)
+	bundleSortColumns   = "project_id,service,event_time_us,record_id"
+	bundlePhysicalSort  = "project_id,service NULLS FIRST,event_time_us,record_id"
 )
 
 type nativeStageLine struct {
@@ -401,7 +403,7 @@ func writePartition(ctx context.Context, db *sql.DB, outputDirectory string, ind
 	payloadPath := filepath.Join(outputDirectory, prefix+"-payload.parquet")
 	paths := []string{analyticsPath, payloadPath}
 	where := ` WHERE event_day=CAST(? AS DATE) AND kind=?`
-	order := ` ORDER BY project_id,service NULLS FIRST,event_time_us,record_id`
+	order := ` ORDER BY ` + bundlePhysicalSort
 	// These typed stage columns were already decoded with the same types by
 	// materializeStage. Reuse them instead of parsing the full JSON again.
 	// Parse the large canonical stage JSON once per row. Independent extracts

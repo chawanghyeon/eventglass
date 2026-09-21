@@ -22,12 +22,25 @@ import (
 )
 
 func wideCompactionFixture(t testing.TB, count int) (engine.CompactionRequest, map[string][32]byte) {
+	return wideCompactionScopedFixture(t, count, false)
+}
+
+func wideCompactionScopedFixture(t testing.TB, count int, scoped bool) (engine.CompactionRequest, map[string][32]byte) {
 	t.Helper()
 	inputs := make([]engine.CompactionInput, count)
 	expected := make(map[string][32]byte, count*16)
 	var inputBytes int64
 	for index := range inputs {
-		request, raw := wideConversionBatch(t, 16, index)
+		var service *string
+		projectID := int64(10)
+		if scoped {
+			projectID = 12 - int64(index/4)
+			if index%4 != 3 {
+				value := []string{"서비스", "billing", ""}[index%4]
+				service = &value
+			}
+		}
+		request, raw := wideConversionScopedBatch(t, 16, index, projectID, service)
 		_, err := engine.Convert(context.Background(), request, func(bundle engine.ConvertedBundle) error {
 			inputs[index] = engine.CompactionInput{BundleID: fmt.Sprint(index), AnalyticsPath: bundle.Analytics.Path, PayloadPath: bundle.Payload.Path, IdentitySHA256: bundle.IdentitySHA256}
 			inputBytes += bundle.Analytics.Evidence.Bytes + bundle.Payload.Evidence.Bytes
@@ -51,6 +64,30 @@ func wideCompactionFixture(t testing.TB, count int) (engine.CompactionRequest, m
 	return engine.CompactionRequest{Version: 1, TenantID: 1, LaneID: 3, SchemaVersion: 1, GroupingVersion: 1,
 		EventDay: "1970-01-01", Kind: model.KindError, Inputs: inputs, OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"),
 		NativeMemoryBytes: 256 << 20, NativeSpillBytes: engine.DefaultNativeSpillBytes}, expected
+}
+
+func TestCompactWideCanonicalLayoutAcrossProjectsAndServices(t *testing.T) {
+	request, _ := wideCompactionScopedFixture(t, 12, true)
+	request.NativeMemoryBytes = 192 << 20
+	db, err := engine.Open(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, input := range request.Inputs {
+		paths = append(paths, "'"+strings.ReplaceAll(input.AnalyticsPath, "'", "''")+"'")
+	}
+	var uncompressed int64
+	err = db.QueryRow(`SELECT sum(total_uncompressed_size) FROM parquet_metadata([` + strings.Join(paths, ",") + `])`).Scan(&uncompressed)
+	db.Close()
+	if err != nil || uncompressed <= request.NativeMemoryBytes/8 {
+		t.Fatalf("fixture must exercise partitioned COPY: bytes=%d err=%v", uncompressed, err)
+	}
+	result, err := engine.Compact(context.Background(), request)
+	if err != nil || result.Bundle.RowCount != 192 || len(result.Bundle.ProjectIDs) != 3 {
+		t.Fatalf("scoped rows=%d projects=%v err=%v", result.Bundle.RowCount, result.Bundle.ProjectIDs, err)
+	}
+	verifyWideCompactionValues(t, request, result)
 }
 
 func TestCompactWideInputsWithinNativeMemory(t *testing.T) {
@@ -143,10 +180,9 @@ func verifyWideCompactionValues(t *testing.T, request engine.CompactionRequest, 
 			t.Fatal(err)
 		}
 		path := result.Bundle.Analytics.Path
-		order := "received_time_us,lane_id,batch_seq,record_ordinal,record_id"
+		order := "project_id,service NULLS FIRST,event_time_us,record_id"
 		if payload {
 			path = result.Bundle.Payload.Path
-			order = "record_id"
 		}
 		rows, err = db.Query(`SELECT record_id,sha256(to_json(a)) FROM read_parquet(?) a`, path)
 		if err != nil {
@@ -168,7 +204,13 @@ func verifyWideCompactionValues(t *testing.T, request engine.CompactionRequest, 
 			t.Fatalf("column hashes remaining=%d err=%v", len(expected), err)
 		}
 		var mismatches int64
-		if err := db.QueryRow(`SELECT count(*) FROM (SELECT file_row_number,row_number() OVER(ORDER BY `+order+`)-1 expected FROM read_parquet(?,file_row_number=true)) WHERE file_row_number<>expected`, path).Scan(&mismatches); err != nil || mismatches != 0 {
+		ordered := `SELECT file_row_number,row_number() OVER(ORDER BY ` + order + `)-1 expected FROM read_parquet(?,file_row_number=true)`
+		args := []any{path}
+		if payload {
+			ordered = `SELECT p.file_row_number,row_number() OVER(ORDER BY a.project_id,a.service NULLS FIRST,a.event_time_us,p.record_id)-1 expected FROM read_parquet(?,file_row_number=true) p JOIN read_parquet(?) a USING(record_id)`
+			args = append(args, result.Bundle.Analytics.Path)
+		}
+		if err := db.QueryRow(`SELECT count(*) FROM (`+ordered+`) WHERE file_row_number<>expected`, args...).Scan(&mismatches); err != nil || mismatches != 0 {
 			t.Fatalf("payload=%t physical sort mismatches=%d err=%v", payload, mismatches, err)
 		}
 	}

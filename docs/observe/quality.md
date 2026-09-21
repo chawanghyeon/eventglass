@@ -1281,6 +1281,80 @@ Corrected official-duration service runs,
 maintenance-budget progress and independent capacity/cost evidence still remain;
 R3/R4 are not closed by these local results.
 
+### Canonical physical order survives maintenance
+
+A follow-up audit found that the existing compactor did not honor DESIGN5.2's
+physical sort. Convert ordered both files by project/service(NULLS FIRST)/event
+time/record ID; Compact instead used receipt/lane order for analytics and ID-only
+order for payload. The09d06ad wide test checked preservation of those old orders,
+not conformance to the canonical layout contract. A two-input/six-record native
+regression first verifies the conversion outputs, then proves that both merged
+files incorrectly order IDs `a b c d e f` rather than the independently expected
+`c d e f b a`. It includes different projects, null/empty services and event times
+which disagree with receipt order. Before fails in0.314s; the focused fix passes
+in0.324s. Those single-test durations are not performance comparisons.
+
+Conversion and compaction now share a fixed native sort definition. Payload's
+retained typed analytics layout keys are materialized once and reused across
+bounded output batches. Final COPY projects the original five payload columns;
+extra layout fields occur only in private intermediates. No raw JSON decoding,
+normalizer replay, public schema change, authorization change, receipt ordering
+change or retention-floor change is involved. The native engine retains its
+byte-bounded writer, per-input scope/identity checks and final pair verification.
+
+The56-pair/896-record regression again passes both192/256MiB profiles, preserving
+all column hashes and now asserting canonical physical order for both files.
+Outputs are132,971,566/133,052,290bytes. The final-source rerun takes30.79s including
+fixture/verification; cgroup peak536,875,008bytes, max-events12,075 and OOM/kill0
+are not headroom proof.
+Cancellation/retry and retention-boundary tests pass too. A further actual
+SDK-shaped fixture uses12 pairs/192 records and57,030,740 compressed bytes,
+three projects and null/empty/ASCII/Unicode services. Actual Parquet metadata
+asserts that this exercises the wide partitioned path, not only small COPY.
+It passes with the focused small regression in a fresh CPU1/512MiB/swap0,
+non-root/read-only cgroup: peak377,630,720bytes, max/OOM/kill0.
+
+Matched measurements compare09d06ad with this layout correction, using unchanged
+fixtures and the same pinned dependency. CPU1/512MiB/swap0, Go1.27.1/GOMAXPROCS1,
+96MiB Go soft limit, isolated disk scratch and network denial remain identical.
+No heavy work runs alongside timings; each median uses five samples of three
+operations. Wide input uses2GiB spill on both sides, ordinary cases256MiB.
+For16 wide pairs/256 records, latency997.986→1,114.394ms, rate256.5→229.7records/s,
+Go bytes/op2,572,522→2,576,178 and allocations/op11,828→11,848 are measured.
+Process max RSS286,744,576→334,110,720bytes and cgroup peaks452,435,968→512,221,184
+include fixture setup; max/OOM/kill remain0. S3/network requests and bytes are0.
+The additional typed layout join has a measured cost; this is contract repair,
+not a performance improvement. Service SLOs and pruning benefits are unproven.
+
+| Ordinary input pairs | Median before → after | Go bytes/op before → after | Go allocations/op before → after |
+| --- | --- | --- | --- |
+|2|69.442→79.499ms|2,169,672→2,171,141|1,908→1,929|
+|8|76.668→87.521ms|2,305,280→2,307,400|5,467→5,486|
+|32|103.749→117.785ms|2,853,984→2,856,584|19,685→19,705|
+|128|203.833→240.290ms|5,036,186→5,051,053|76,523→76,542|
+
+These small-input cases also become slower. Their cgroup peaks are102,789,120
+and104,603,648bytes, max/OOM/kill0. Logs use the `compaction-order-small-` prefix.
+Evidence uses `.tools/compaction-order-{before,after,large,focused,scoped}.log`
+and `.tools/compaction-order-wide-{before,after}.log`.
+
+Final-source ARM64 validation passes unit/vet/architecture/layout/codegen, all
+pinned-native engine contracts/vet (69.758s), PostgreSQL/MinIO integration
+(16.385s), native query/Live/alert/maintenance integration (36.388s), and the
+Chromium operator check (2.8s). A separate CPU1/512MiB/no-swap, non-root,
+read-only disk-backed run verifies real512-record ingest/publication/compaction
+and retention in11.43s. Its paired files are76,012,426/76,027,270bytes;
+PUT28/377,780,744bytes, HEAD28, full GET78/1,363,410,786bytes and Range0 include
+fixture setup and verification. With the real24/64/128MiB download checks, that
+cgroup reaches536,870,912bytes/max-events1,960/OOM/kill0; no headroom is claimed.
+The default resource gate passes24 cycles/12,600 logical records in115.447s,
+105/s, worst cycle256ms, cgroup peak142,397,440bytes/OOM0/scratch0, including
+native OOM/cancel/join and permit drain. These are scoped regression checks,
+not corrected official-duration R3 capacity or release evidence. Logs use
+`.tools/compaction-order-{unit,codegen,large-final,contracts,integration,integration-bounded,resource,browser}.log`.
+Fresh uncached host ARM64 race checks pass app4.289s, ingest4.061s and
+maintenance1.754s. The frozen source-design SHA256 remains unchanged.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

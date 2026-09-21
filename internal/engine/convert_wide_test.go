@@ -29,6 +29,10 @@ func wideConversionRequest(t testing.TB, count int) (engine.ConversionRequest, m
 }
 
 func wideConversionBatch(t testing.TB, count, batch int) (engine.ConversionRequest, map[string]string) {
+	return wideConversionScopedBatch(t, count, batch, 10, nil)
+}
+
+func wideConversionScopedBatch(t testing.TB, count, batch int, projectID int64, service *string) (engine.ConversionRequest, map[string]string) {
 	t.Helper()
 	root := t.TempDir()
 	random := rand.New(rand.NewSource(1780 + int64(batch)))
@@ -39,13 +43,17 @@ func wideConversionBatch(t testing.TB, count, batch int) (engine.ConversionReque
 		if _, err := random.Read(blob); err != nil {
 			t.Fatal(err)
 		}
-		items[ordinal] = sdk.Item{Ordinal: ordinal, Type: "event", Value: map[string]any{
+		value := map[string]any{
 			"event_id": fmt.Sprintf("%032x", batch*count+ordinal+1), "message": fmt.Sprintf("wide conversion %d", ordinal),
 			"extra": map[string]any{"blob": base64.StdEncoding.EncodeToString(blob)},
-		}}
+		}
+		if service != nil {
+			value["tags"] = map[string]any{"service.name": *service}
+		}
+		items[ordinal] = sdk.Item{Ordinal: ordinal, Type: "event", Value: value}
 	}
 	normalized, err := ingest.NormalizeEnvelope(sdk.Envelope{Items: items}, ingest.NormalizeOptions{
-		TenantID: 1, ProjectID: 10, AcceptanceID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x111+batch), ArrivalTime: time.Unix(1, 0)})
+		TenantID: 1, ProjectID: projectID, AcceptanceID: fmt.Sprintf("00000000-0000-4000-8000-%012x", 0x111+batch), ArrivalTime: time.Unix(1, 0)})
 	if err != nil {
 		t.Fatal(err)
 	}

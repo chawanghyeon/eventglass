@@ -60,14 +60,16 @@ func Compact(ctx context.Context, request CompactionRequest) (CompactionResult, 
 	if request.MinReceivedTimeUS > 0 {
 		retained += ` WHERE received_time_us>=` + strconv.FormatInt(request.MinReceivedTimeUS, 10)
 	}
-	if err := copyCompactionRole(ctx, db, request, retained, "received_time_us,lane_id,batch_seq,record_ordinal,record_id", analyticsPath, analyticsPaths, false); err != nil {
+	if err := copyCompactionRole(ctx, db, request, retained, analyticsPath, analyticsPaths, false); err != nil {
 		return CompactionResult{}, fmt.Errorf("rewrite analytics parquet: %w", err)
 	}
-	payload := `SELECT p.* FROM read_parquet(` + parquetPathList(payloadPaths) + `) p`
-	if request.MinReceivedTimeUS > 0 {
-		payload += ` SEMI JOIN (` + retained + `) a USING(record_id)`
+	// Payload's physical schema omits layout keys. Read only the retained
+	// analytics keys once, then reuse them across bounded payload COPY batches.
+	if _, err := db.ExecContext(ctx, `CREATE TEMP TABLE compact_layout AS SELECT `+bundleSortColumns+` FROM (`+retained+`)`); err != nil {
+		return CompactionResult{}, fmt.Errorf("read retained layout keys: %w", err)
 	}
-	if err := copyCompactionRole(ctx, db, request, payload, "record_id", payloadPath, payloadPaths, true); err != nil {
+	payload := `SELECT p.record_id,p.raw_json,p.envelope_sdk_json,p.normalization_warnings_json,p.canonical_metadata_json,a.project_id,a.service,a.event_time_us FROM read_parquet(` + parquetPathList(payloadPaths) + `) p JOIN compact_layout a USING(record_id)`
+	if err := copyCompactionRole(ctx, db, request, payload, payloadPath, payloadPaths, true); err != nil {
 		return CompactionResult{}, fmt.Errorf("rewrite payload parquet: %w", err)
 	}
 	bundle, err := inspectPartition(ctx, db, 0, partition{day: request.EventDay, kind: request.Kind}, analyticsPath, payloadPath)
