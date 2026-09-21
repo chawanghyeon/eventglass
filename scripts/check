@@ -204,7 +204,7 @@ case "${1:-}" in
   sdk) sdk ;;
   crash) crash ;;
   web) web ;;
-  resource) docker_required resource; missing "resource verification" ;;
+  resource) docker_required resource; ./scripts/check-resource ;;
   scale) docker_required scale; missing "scale verification" ;;
   comparison) docker_required comparison; missing "comparison verification" ;;
   recovery) docker_required recovery; ./scripts/check-recovery ;;

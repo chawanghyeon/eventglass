@@ -13,7 +13,8 @@ PostgreSQL/MinIO integration and the final non-root ARM64 image browser flow. M3
 passed real MinIO and pinned-DuckDB cold/warm request and byte assertions for scan,
 payload, and reducer child reads. M4 passed an actual pgBackRest base+WAL restore
 into two independent PGDATA volumes, full referenced-object reads, signed report
-import and missing-object failure. R1 is the next packet. Physical GC remains
+import and missing-object failure. R1's CPU1/512MiB/swap0 containment gate also
+passes; R2 is the next packet. Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises
 the actual ingest/publication/query runtime. Check `api/implemented-routes.json` before wiring a feature.
@@ -123,7 +124,7 @@ without it, finish local packets and report the exact unverified gate.
 Suggested continuation instruction:
 
 > Read docs/implementation/README.md and work-plan.md. Inspect the current tree
-> and select R1 (sustained resource limits) from the actual
+> and select R2 (scaling metrics and deployment bounds) from the actual
 > capability gaps, including its negative tests,
 > relevant verification, documentation, commit and push. Preserve DESIGN.md and
 > ARCHITECTURE.md contracts. Use ARM64 and the pinned DuckDB 2.0 build. Do not

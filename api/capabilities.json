@@ -356,8 +356,8 @@
   "pending": [
     {
       "id": "sustained-performance",
-      "packet": "R1-R3",
-      "description": "512MiB mixed load, p95/p99, 1/2/4 worker scaling/fairness and whole-installation costs."
+      "packet": "R2-R3",
+      "description": "1/2/4 worker scaling/fairness, end-to-end p95/p99 and whole-installation costs; R1 resource containment passes."
     },
     {
       "id": "release",

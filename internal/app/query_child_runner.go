@@ -9,8 +9,10 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strings"
 
 	"github.com/chawanghyeon/eventglass/internal/engine"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
@@ -96,6 +98,9 @@ func (runner ProcessQueryRunner) Run(ctx context.Context, request engine.QueryRe
 		_ = os.RemoveAll(request.SpillDirectory)
 		if ctx.Err() != nil {
 			return engine.QuerySummary{}, ctx.Err()
+		}
+		if strings.Contains(strings.ToLower(stderr.String()), "out of memory") {
+			return engine.QuerySummary{}, errors.Join(resource.ErrLimited, errors.New("query engine exhausted its native memory or spill budget"))
 		}
 		return engine.QuerySummary{}, fmt.Errorf("query engine child failed: %w", err)
 	}

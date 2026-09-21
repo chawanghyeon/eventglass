@@ -112,6 +112,20 @@ deleting the referenced object made the second restore fail with S3 404 and stay
 throughput claims. The operational sequence and key separation are documented in
 [`docs/operations/recovery.md`](../operations/recovery.md).
 
+R1's `./scripts/check resource` runs the linked release binary on Linux ARM64
+with cgroup CPU quota 1, memory 512 MiB, swap 0, PID limit 256, read-only root and
+a bounded scratch tmpfs. On 2026-09-21 the default two-minute schedule completed
+24 cycles/12,600 normalized records at the logical 100 logs/s+5 errors/s input
+mix. Each cycle ran isolated DuckDB conversion and rows-query children; the worst
+cycle was 380 ms against a 5 s no-backlog interval. Cgroup peak memory was
+190,730,240 bytes with zero cgroup OOM/OOM-kill, and scratch entries were zero
+after each completed cycle. The same gate measured the largest legal synthetic
+message at 349,364 bytes, classified a DuckDB native/spill exhaustion as
+`resource_exhausted`, joined a canceled child before removing output/spill, and
+proved drain did not release a live 192 MiB permit. This is a two-minute resource
+containment fixture with local files, not the R3 5-minute warmup/30-minute full
+PG/S3/API load, latency SLO, or whole-installation RSS/cost result.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

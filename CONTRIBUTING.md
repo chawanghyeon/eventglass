@@ -13,6 +13,7 @@ The active product is the root Go module. Use Go 1.26.5 exactly and run commands
 ./scripts/check contracts
 ./scripts/check integration
 ./scripts/check recovery
+./scripts/check resource
 ./scripts/check sdk
 ./scripts/check crash
 ./scripts/check web
@@ -35,6 +36,13 @@ Playwright Chromium installation.
 actual PostgreSQL base+WAL restore into isolated volumes, verifies restored S3
 references, imports a signed rehearsal report, and exercises the missing-object
 fail-closed path. It uses only disposable Colima/Docker resources.
+
+`./scripts/check resource` runs the native ARM64 binary under CPU1/512MiB/swap0
+for two minutes by default. `EVENTGLASS_RESOURCE_DURATION=30s` is available only
+for development feedback; completion evidence uses the default. The gate checks
+the target logical log/error mix, cgroup peak/OOM counters, native OOM and cancel
+cleanup, permit ownership and scratch reclamation. It does not replace R3's
+30-minute end-to-end PostgreSQL/S3 load.
 
 Complete and verify one gate at a time, then commit directly to `main` and run `git push origin main`. Use commit subjects such as `feat: 한국어 변경 요약`, selecting `fix`, `perf`, `test`, `docs`, or `chore` as appropriate. Do not bypass hooks or rewrite published history merely to normalize messages.
 

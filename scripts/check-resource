@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) echo "unsupported resource-test architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+artifacts=$(mktemp -d "$ROOT/.tools/eventglass-resource.XXXXXX")
+cleanup() {
+  rm -rf "$artifacts"
+}
+trap cleanup EXIT INT TERM
+
+docker buildx build --platform linux/arm64 --target build --load --tag eventglass-go:resource-build .
+docker run --rm --platform linux/arm64 -v "$artifacts:/eventglass-tests" eventglass-go:resource-build \
+  go test -tags='duckdb_use_static_lib resource' -c -o /eventglass-tests/resource.test ./tests/resource
+
+duration=${EVENTGLASS_RESOURCE_DURATION:-2m}
+docker run --rm --platform linux/arm64 \
+  --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 --read-only \
+  --tmpfs /scratch:rw,nosuid,nodev,size=384m,mode=1777 \
+  -e TMPDIR=/scratch \
+  -e EVENTGLASS_RESOURCE_REQUIRED=1 \
+  -e EVENTGLASS_RESOURCE_DURATION="$duration" \
+  -e EVENTGLASS_TEST_BINARY=/out/eventglass-go \
+  -v "$artifacts:/eventglass-tests:ro" \
+  --entrypoint /eventglass-tests/resource.test eventglass-go:resource-build \
+  -test.v -test.count=1 -test.timeout=12m
