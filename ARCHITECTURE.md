@@ -61,6 +61,9 @@ Generated HTTP DTOs may be imported only by api, never by app/query/control.
 `api.QueryAdapter` owns public result decoding and token/HTTP translation;
 `query.Submission` owns catalog verification and durable plan submission, and
 `query.Awaiter` waits for authoritative completion without running tasks.
+Query owns deterministic pre-seal partitioning by file count, compressed bytes
+and serialized manifest size. Oversized metadata groups split before task IDs
+are sealed; neither app dispatch nor worker retry replaces a sealed partition.
 `app.DurableQuerySyncExecutor` is an optional colocated helper, not a requirement
 for sync/detail/Live. API-only and combined roles use the same durable protocol.
 The api export interface accepts engine protocol values; app injects the

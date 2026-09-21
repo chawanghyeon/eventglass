@@ -128,6 +128,12 @@ cgroup peaks and scope of the measurement.
 The following equal20s/300s/90s PG/S3 pair measured backlog slope+10.24→−3.32/min,
 visibility5.235→2.775s and drain6.014→1.007s with all60 searches complete.
 Rows/histogram p95 remain576/631ms, above500ms, so R3 is still incomplete.
+The next256-file scan candidate passed all targets in the same20s/300s/90s
+diagnostic: rows/histogram p95=362/457ms, visibility869ms, backlog slope−1.26/min,
+all60 searches complete and final backlog0. It keeps the64MiB scan and1MiB task
+limits; metadata-heavy groups split deterministically only before plan sealing.
+The official5min/30min/10min1/2/4-worker evidence is still required. A separate
+late-query scheduling experiment did not improve the targets and was discarded.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped
 cloud test or an emulator. If expensive/performance targets miss, state measured

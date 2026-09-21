@@ -356,6 +356,56 @@ p95 targets still exceed500ms. Retained evidence is under
 `.tools/comparison-report-1.a2EONz` and `.tools/comparison-report-1.0xHvAQ`.
 R3 remains incomplete; this diagnostic does not replace its official profile.
 
+The subsequent scan-bound experiment keeps the existing worker scheduler and
+raises the shared planner/native file cap from128 to256, without raising the
+64MiB scan target,1MiB manifest, native256MiB or8-active-Range limits. With the
+same20s/300s/90s profile, CPU1/512MiB worker and dataset SHA, both variants
+accepted33,600 records (30,000 logs+1,500 errors during load) and completed60
+queries without conflicts, failures or cgroup OOM:
+
+| One-worker scan-bound diagnostic | 128 files (`a36513e`) | 256 files |
+|---|---:|---:|
+| ACK p95 ms | 380 | 379 |
+| Rows / histogram p95 ms | 576 / 631 | 362 / 457 |
+| Visibility p95 ms | 2,775 | 869 |
+| Load backlog slope jobs/min / maximum | −3.32 / 44 | −1.26 / 18 |
+| Final backlog / drain ms | 0 / 1,007 | 0 / 1,002 |
+| Native query tasks / work ms | 145 / 12,617 | 61 / 8,432 |
+| S3 PUT / HEAD / GET / Range requests | 6,206 / 23,167 / 15,849 / 1,912 | 6,107 / 23,204 / 15,664 / 1,840 |
+| S3 PUT / GET / Range bytes | 44,666,878 / 108,836,307 / 21,012,185 | 42,923,395 / 105,257,670 / 20,476,128 |
+| PG WAL bytes | 80,117,992 | 78,309,672 |
+| Whole installation / worker peak sampled bytes | 852,156,741 / 89,967,820 | 909,618,706 / 67,077,406 |
+
+The short diagnostic's target map is all true. It is **not** the official R3
+profile or a whole-installation memory saving: total sampled memory increased,
+and the compaction trajectory differs (last planned files110 versus146).
+Go allocations are not separately sampled by this end-to-end harness. The
+unchanged dated cost model projects USD517.69 versus512.26/month; this is not
+an actual AWS bill or demonstrated production saving. Candidate evidence:
+`.tools/comparison-report-1.zVW4PD`, runtime image
+`sha256:584f373c952fa3c01771267b942b8425dd8c297ea96d1100c9a2a056e9360aa5`.
+The subsequent metadata-bound regression reproduced rejection of a group that
+can fit smaller manifests. Planning now bisects such groups before sealing,
+preserves stable file order/exactly-once assignment, rejects a single oversized
+manifest and enforces the total metadata budget while constructing the plan.
+The diagnostic did not exercise that fallback. The final source passed unit,
+codegen, all Linux ARM64 native contracts/vet, isolated PostgreSQL/MinIO
+integration (host11.422s and native25.156s), and final-image Playwright (3.1s).
+The first integration attempt's native test compilation was killed while other
+builds competed for the Colima VM's2 CPUs/4GiB; its serial rerun passed. This is
+not hidden as a product test pass. A network-disabled CPU1/512MiB/swap0 run of
+the real256-file/257-rejection and cancellation/exact-integer tests passed with
+memory.peak68,354,048 bytes and OOM counters0 (no S3 I/O). The official profile
+still must validate the final source revision.
+
+A separate late-query-before-conversion scheduling candidate was discarded:
+the same short profile measured rows/histogram602/723ms, visibility6,097ms,
+backlog slope+1.61/min and whole/worker peak881,810,470/87,115,694 bytes.
+S3 PUT/HEAD/GET/Range counts were6,126/25,599/15,668/1,916 and transferred
+PUT/GET/Range bytes43,740,225/106,883,392/20,818,290. All60 queries completed,
+but there was no demonstrated improvement. Its source changes are removed;
+only measured evidence remains in `.tools/comparison-report-1.06GFpo`.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

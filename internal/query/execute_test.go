@@ -87,8 +87,47 @@ func TestScanFileLimitKeepsByteAndManifestCaps(t *testing.T) {
 			files[index].BlockSHA256[block] = fmt.Sprintf("%064x", block+1)
 		}
 	}
-	if _, err := BuildExecutionPlan(testPlanScope(), files); !errors.Is(err, ErrQueryLimit) {
-		t.Fatalf("oversized scan manifest accepted: %v", err)
+	plan, err = BuildExecutionPlan(testPlanScope(), files)
+	if err != nil || plan.ScanCount < 2 {
+		t.Fatalf("metadata-heavy files were not split before sealing: scans=%d err=%v", plan.ScanCount, err)
+	}
+	seen := make(map[string]bool)
+	for index, task := range plan.Tasks[:plan.ScanCount] {
+		if len(task.Manifest) > MaxTaskManifestBytes || task.Key.PartitionID != index {
+			t.Fatalf("invalid bounded partition: %+v bytes=%d", task.Key, len(task.Manifest))
+		}
+		var manifest TaskManifest
+		if err := decodeExact(task.Manifest, &manifest); err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range manifest.Files {
+			if seen[file.FileID] {
+				t.Fatalf("duplicate file %s", file.FileID)
+			}
+			seen[file.FileID] = true
+		}
+	}
+	if len(seen) != len(files) {
+		t.Fatalf("lost files: %d != %d", len(seen), len(files))
+	}
+	repeated, err := BuildExecutionPlan(testPlanScope(), files)
+	if err != nil || repeated.SHA256 != plan.SHA256 {
+		t.Fatalf("metadata split is not deterministic: %s != %s err=%v", repeated.SHA256, plan.SHA256, err)
+	}
+	many := make([]model.CatalogFile, 2048)
+	for index := range many {
+		many[index] = files[index%len(files)]
+		many[index].FileID = fmt.Sprintf("%08x-0000-4000-8000-000000000000", index)
+	}
+	if result, err := BuildExecutionPlan(testPlanScope(), many); !errors.Is(err, ErrQueryLimit) || len(result.Tasks) != 0 {
+		t.Fatalf("total plan metadata cap bypassed: tasks=%d err=%v", len(result.Tasks), err)
+	}
+	files[0].BlockSHA256 = make([]string, MaxTaskManifestBytes/64+1)
+	for index := range files[0].BlockSHA256 {
+		files[0].BlockSHA256[index] = fmt.Sprintf("%064x", index+1)
+	}
+	if _, err := BuildExecutionPlan(testPlanScope(), files[:1]); !errors.Is(err, ErrQueryLimit) {
+		t.Fatalf("oversized single-file manifest accepted: %v", err)
 	}
 }
 

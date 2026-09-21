@@ -76,7 +76,7 @@ func TestExecuteQueryRowsAndReducerKeepGlobalOrder(t *testing.T) {
 	}
 }
 
-func TestExecuteQueryBoundsOneHundredTwentyEightScanFiles(t *testing.T) {
+func TestExecuteQueryBoundsTwoHundredFiftySixScanFiles(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	first := filepath.Join(root, "input-0.parquet")
@@ -103,7 +103,7 @@ func TestExecuteQueryBoundsOneHundredTwentyEightScanFiles(t *testing.T) {
 	request.OutputPath = filepath.Join(root, "rejected.parquet")
 	request.SpillDirectory = filepath.Join(root, "rejected-spill")
 	if _, err := engine.ExecuteQuery(ctx, request); err == nil {
-		t.Fatal("129 scan inputs were accepted")
+		t.Fatal("257 scan inputs were accepted")
 	}
 }
 

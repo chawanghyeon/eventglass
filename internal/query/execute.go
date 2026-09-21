@@ -69,26 +69,58 @@ func BuildExecutionPlan(scope PlanScope, files []model.CatalogFile) (ExecutionPl
 	if err != nil {
 		return ExecutionPlan{}, err
 	}
-	plan := ExecutionPlan{ScanCount: len(partitions)}
+	plan := ExecutionPlan{}
+	appendTask := func(task model.QueryPlannedTask) error {
+		if plan.ManifestBytes > MaxPlanBytes-len(task.Manifest) {
+			return ErrQueryLimit
+		}
+		plan.ManifestBytes += len(task.Manifest)
+		plan.Tasks = append(plan.Tasks, task)
+		return nil
+	}
 	if len(partitions) == 0 {
 		key := model.QueryTaskKey{Stage: model.QueryTaskReduce, Level: 1, PartitionID: 0}
 		task, err := makePlannedTask(scope, key, nil, nil)
 		if err != nil {
 			return ExecutionPlan{}, err
 		}
-		plan.Tasks = append(plan.Tasks, task)
-		plan.ReducerCount = 1
-	}
-	for partitionID, partition := range partitions {
-		key := model.QueryTaskKey{Stage: model.QueryTaskScan, Level: 0, PartitionID: partitionID}
-		task, err := makePlannedTask(scope, key, partition, nil)
-		if err != nil {
+		if err := appendTask(task); err != nil {
 			return ExecutionPlan{}, err
 		}
-		plan.Tasks = append(plan.Tasks, task)
+		plan.ReducerCount = 1
 	}
-	previous := make([]model.QueryTaskKey, len(partitions))
-	for index := range partitions {
+	var appendScan func([]model.CatalogFile) error
+	appendScan = func(partition []model.CatalogFile) error {
+		if plan.ScanCount >= MaxScanPartitions {
+			return ErrQueryLimit
+		}
+		key := model.QueryTaskKey{Stage: model.QueryTaskScan, Level: 0, PartitionID: plan.ScanCount}
+		task, err := makePlannedTask(scope, key, partition, nil)
+		if errors.Is(err, ErrQueryLimit) && len(partition) > 1 {
+			// Split metadata-heavy partitions only before sealing. Recursion is
+			// bounded by the scan file cap; running/retried tasks never replan.
+			middle := len(partition) / 2
+			if err := appendScan(partition[:middle]); err != nil {
+				return err
+			}
+			return appendScan(partition[middle:])
+		}
+		if err != nil {
+			return err
+		}
+		if err := appendTask(task); err != nil {
+			return err
+		}
+		plan.ScanCount++
+		return nil
+	}
+	for _, partition := range partitions {
+		if err := appendScan(partition); err != nil {
+			return ExecutionPlan{}, err
+		}
+	}
+	previous := make([]model.QueryTaskKey, plan.ScanCount)
+	for index := range previous {
 		previous[index] = model.QueryTaskKey{Stage: model.QueryTaskScan, Level: 0, PartitionID: index}
 	}
 	for level := 1; len(previous) > 1; level++ {
@@ -104,17 +136,13 @@ func BuildExecutionPlan(scope PlanScope, files []model.CatalogFile) (ExecutionPl
 			if err != nil {
 				return ExecutionPlan{}, err
 			}
-			plan.Tasks = append(plan.Tasks, task)
+			if err := appendTask(task); err != nil {
+				return ExecutionPlan{}, err
+			}
 			plan.ReducerCount++
 			next = append(next, key)
 		}
 		previous = next
-	}
-	for _, task := range plan.Tasks {
-		if plan.ManifestBytes > MaxPlanBytes-len(task.Manifest) {
-			return ExecutionPlan{}, ErrQueryLimit
-		}
-		plan.ManifestBytes += len(task.Manifest)
 	}
 	encoded, err := canonicalPlanBytes(plan.Tasks)
 	if err != nil || len(encoded) > MaxPlanBytes {
