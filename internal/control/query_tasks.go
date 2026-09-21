@@ -139,7 +139,8 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 				AND p.stage=i.producer_stage AND p.level=i.producer_level AND p.partition_id=i.producer_partition_id
 				WHERE i.tenant_id=t.tenant_id AND i.query_id=t.query_id AND i.consumer_stage=t.stage
 				AND i.consumer_level=t.level AND i.consumer_partition_id=t.partition_id AND p.state<>'succeeded'))
-		ORDER BY q.deadline,q.query_id FOR UPDATE OF q SKIP LOCKED LIMIT 1`, target).Scan(&queryID, &tenantID, &snapshotID, &deadline)
+		ORDER BY (SELECT count(*) FROM query_tasks active WHERE active.tenant_id=q.tenant_id AND active.state='running' AND active.lease_until>clock_timestamp()),q.deadline,q.query_id
+		FOR UPDATE OF q SKIP LOCKED LIMIT 1`, target).Scan(&queryID, &tenantID, &snapshotID, &deadline)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}

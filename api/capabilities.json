@@ -356,8 +356,8 @@
   "pending": [
     {
       "id": "sustained-performance",
-      "packet": "R2-R3",
-      "description": "1/2/4 worker scaling/fairness, end-to-end p95/p99 and whole-installation costs; R1 resource containment passes."
+      "packet": "R3",
+      "description": "End-to-end 30-minute p95/p99 and whole-installation PG/S3 cost evidence; R1 containment and R2 scaling control pass."
     },
     {
       "id": "release",

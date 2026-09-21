@@ -126,6 +126,21 @@ proved drain did not release a live 192 MiB permit. This is a two-minute resourc
 containment fixture with local files, not the R3 5-minute warmup/30-minute full
 PG/S3/API load, latency SLO, or whole-installation RSS/cost result.
 
+R2's `./scripts/check scale` runs the autoscale/controller tests in the Linux
+ARM64 build. A fixed 96-task control workload produced the same SHA-256
+`9e698f81334bec1fb49ff3952bf0c600aa6b93696af3f1dab2c3bea7344c8fb0`
+at 1/2/4 workers; observed harness times were 302/152/77 ms. Those sleeps test
+dispatcher concurrency and logical equivalence, not Eventglass throughput.
+PostgreSQL integration proves a second claim prefers a tenant with no running
+conversion over an older second job from the first tenant. Pure controller tests
+cover the 1 MiB/s conservative prior, EWMA alpha 0.2, two samples before scale
+out, dependency error>20%/pool wait>1s freeze, warm minimum one, 300s stability
+and at most25% scale-in. API1+worker20+scheduler1 uses 50 of the 56 allocatable
+PG connections (8 remain reserved from the global64). The private metrics listener
+exports only three fixed pool labels and gates KEDA demand on the PostgreSQL/S3
+marker check. The manifests are a bounded deployment baseline, not a deployed or
+proven autoscaling cluster.
+
 ## Release and workflow
 
 Commit reviewed changes directly to main and push after relevant checks. Current

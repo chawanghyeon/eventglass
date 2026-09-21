@@ -59,10 +59,11 @@ func ClaimConversionJob(ctx context.Context, pool *pgxpool.Pool, installationID 
 	leaseMicroseconds := lease.Microseconds()
 	var job ConversionJob
 	err = tx.QueryRow(ctx, `WITH candidate AS (
-		SELECT job_id FROM jobs
-		WHERE kind='convert' AND storage_generation=$1 AND prepared_output_id IS NULL AND fence<$2 AND attempt<$3
+		SELECT j.job_id FROM jobs j
+		WHERE j.kind='convert' AND j.storage_generation=$1 AND j.prepared_output_id IS NULL AND j.fence<$2 AND j.attempt<$3
 		  AND ((state='queued' AND retry_at<=clock_timestamp()) OR (state='running' AND lease_until<=clock_timestamp()))
-		ORDER BY retry_at,created_at,job_id FOR UPDATE SKIP LOCKED LIMIT 1
+		ORDER BY (SELECT count(*) FROM jobs active WHERE active.tenant_id=j.tenant_id AND active.state='running' AND active.lease_until>clock_timestamp()),j.retry_at,j.created_at,j.job_id
+		FOR UPDATE OF j SKIP LOCKED LIMIT 1
 	)
 	UPDATE jobs j SET state='running',attempt=j.attempt+1,fence=j.fence+1,owner=$4,
 		lease_until=clock_timestamp()+($5::bigint * interval '1 microsecond'),updated_at=clock_timestamp()

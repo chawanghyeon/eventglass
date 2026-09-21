@@ -23,6 +23,7 @@ const (
 type Config struct {
 	DatabaseURL            string
 	HTTPAddr               string
+	MetricsAddr            string
 	PublicURL              string
 	ScratchDir             string
 	WebDir                 string
@@ -54,7 +55,7 @@ func LoadConfigFromEnv(lookup func(string) (string, bool)) (Config, error) {
 		}
 	}
 	config := Config{
-		DatabaseURL: value("EVENTGLASS_DATABASE_URL"), HTTPAddr: value("EVENTGLASS_HTTP_ADDR"),
+		DatabaseURL: value("EVENTGLASS_DATABASE_URL"), HTTPAddr: value("EVENTGLASS_HTTP_ADDR"), MetricsAddr: value("EVENTGLASS_METRICS_ADDR"),
 		PublicURL: value("EVENTGLASS_PUBLIC_URL"), ScratchDir: value("EVENTGLASS_SCRATCH_DIR"),
 		WebDir:             value("EVENTGLASS_WEB_DIR"),
 		BootstrapTokenFile: value("EVENTGLASS_BOOTSTRAP_TOKEN_FILE"), AuthHashKeyFile: value("EVENTGLASS_AUTH_HASH_KEY_FILE"),
@@ -80,6 +81,14 @@ func (config Config) Validate() error {
 	}
 	if config.HTTPAddr == "" || config.DrainTimeout <= 0 || config.DrainTimeout > 30*time.Second {
 		return errors.New("HTTP address and a positive drain timeout up to 30s are required")
+	}
+	if config.MetricsAddr != "" {
+		if config.MetricsAddr == config.HTTPAddr && !strings.HasSuffix(config.MetricsAddr, ":0") {
+			return errors.New("metrics and public HTTP addresses must differ")
+		}
+		if _, _, err := net.SplitHostPort(config.MetricsAddr); err != nil {
+			return errors.New("EVENTGLASS_METRICS_ADDR must be a host:port listener")
+		}
 	}
 	if len(config.Roles) == 0 {
 		return errors.New("at least one Eventglass role is required")

@@ -47,6 +47,7 @@ type Runtime struct {
 	publisher      *ingest.DurablePublicationWorkflow
 	workerOwner    string
 	handler        http.Handler
+	metricsHandler http.Handler
 	installation   control.RuntimeInstallation
 	markerKey      string
 	markerBytes    int64
@@ -57,6 +58,7 @@ type Runtime struct {
 	startOnce      sync.Once
 	addrMu         sync.RWMutex
 	addr           string
+	metricsAddr    string
 }
 
 func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
@@ -167,6 +169,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 		markerKey: markerKey, markerBytes: int64(len(marker)), markerSHA: markerSHA, started: make(chan struct{}),
 		alertControl: runtimeAlertOperations, alertCipher: runtimeAlertCipher,
 	}
+	runtime.metricsHandler = http.HandlerFunc(runtime.serveAutoscaleMetrics)
 	nativeTasks := NewNativeTaskGate()
 	if len(config.Roles) > 1 {
 		nativeTasks.working, nativeTasks.reservation, nativeTasks.memory = resources.Working, combinedWorkingBytes, combinedWorkingBytes
@@ -396,6 +399,12 @@ func (runtime *Runtime) Addr() string {
 	return runtime.addr
 }
 
+func (runtime *Runtime) MetricsAddr() string {
+	runtime.addrMu.RLock()
+	defer runtime.addrMu.RUnlock()
+	return runtime.metricsAddr
+}
+
 func (runtime *Runtime) Run(ctx context.Context) error {
 	listener, err := net.Listen("tcp", runtime.config.HTTPAddr)
 	if err != nil {
@@ -408,8 +417,26 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		runtime.database.Close()
 		return err
 	}
+	var metricsListener net.Listener
+	if runtime.config.MetricsAddr != "" {
+		metricsListener, err = net.Listen("tcp", runtime.config.MetricsAddr)
+		if err != nil {
+			_ = listener.Close()
+			if runtime.batcher != nil {
+				_ = runtime.batcher.Drain(context.Background())
+			}
+			if runtime.blockCache != nil {
+				runtime.blockCache.Close()
+			}
+			runtime.database.Close()
+			return err
+		}
+	}
 	runtime.addrMu.Lock()
 	runtime.addr = listener.Addr().String()
+	if metricsListener != nil {
+		runtime.metricsAddr = metricsListener.Addr().String()
+	}
 	runtime.addrMu.Unlock()
 	runtime.startOnce.Do(func() { close(runtime.started) })
 	server := &http.Server{
@@ -418,6 +445,13 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 	}
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- server.Serve(listener) }()
+	var metricsServer *http.Server
+	var metricsResult chan error
+	if metricsListener != nil {
+		metricsServer = &http.Server{Handler: runtime.metricsHandler, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second, MaxHeaderBytes: 8 << 10}
+		metricsResult = make(chan error, 1)
+		go func() { metricsResult <- metricsServer.Serve(metricsListener) }()
+	}
 	var workerResult chan error
 	workerContext, stopWorker := context.WithCancel(ctx)
 	defer stopWorker()
@@ -448,6 +482,11 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		if ctx.Err() == nil {
 			cause = errors.Join(errors.New("scheduler role stopped"), cause)
 		}
+	case cause = <-metricsResult:
+		metricsResult = nil
+		if errors.Is(cause, http.ErrServerClosed) {
+			cause = nil
+		}
 	}
 	runtime.ready.Store(false)
 	stopWorker()
@@ -462,6 +501,10 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 		drainResult <- runtime.batcher.Drain(drainCtx)
 	}()
 	shutdownErr := server.Shutdown(drainCtx)
+	var metricsShutdownErr error
+	if metricsServer != nil {
+		metricsShutdownErr = metricsServer.Shutdown(drainCtx)
+	}
 	drainErr := <-drainResult
 	workingErr := runtime.resources.Working.Drain(drainCtx)
 	ingressErr := runtime.resources.Ingress.Drain(drainCtx)
@@ -492,8 +535,18 @@ func (runtime *Runtime) Run(ctx context.Context) error {
 			cause = errors.Join(cause, drainCtx.Err())
 		}
 	}
+	if metricsResult != nil {
+		select {
+		case metricsErr := <-metricsResult:
+			if !errors.Is(metricsErr, http.ErrServerClosed) {
+				cause = errors.Join(cause, metricsErr)
+			}
+		case <-drainCtx.Done():
+			cause = errors.Join(cause, drainCtx.Err())
+		}
+	}
 	runtime.database.Close()
-	return errors.Join(cause, shutdownErr, drainErr, workingErr, ingressErr, diskErr)
+	return errors.Join(cause, shutdownErr, metricsShutdownErr, drainErr, workingErr, ingressErr, diskErr)
 }
 
 func (runtime *Runtime) livez(writer http.ResponseWriter, _ *http.Request) {

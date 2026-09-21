@@ -1,0 +1,263 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: eventglass
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eventglass-runtime
+  namespace: eventglass
+data:
+  EVENTGLASS_PUBLIC_URL: https://eventglass.example.invalid
+  EVENTGLASS_S3_REGION: us-east-1
+  EVENTGLASS_S3_BUCKET: replace-before-apply
+  EVENTGLASS_S3_PREFIX: live
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventglass-api
+  namespace: eventglass
+  annotations:
+    eventglass.dev/pg-pool-per-replica: "8"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: eventglass, eventglass.dev/role: api}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: eventglass, eventglass.dev/role: api}
+    spec:
+      nodeSelector: {kubernetes.io/arch: arm64}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: eventglass
+          image: ghcr.io/chawanghyeon/eventglass:0.0.0-g06
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: {name: eventglass-runtime}
+            - secretRef: {name: eventglass-runtime} # pragma: allowlist secret -- reference only; values are not committed
+          env:
+            - {name: EVENTGLASS_ROLES, value: api}
+            - {name: EVENTGLASS_HTTP_ADDR, value: ":8080"}
+            - {name: EVENTGLASS_METRICS_ADDR, value: ":9090"}
+            - {name: EVENTGLASS_SCRATCH_DIR, value: /var/lib/eventglass}
+            - {name: EVENTGLASS_AUTH_HASH_KEY_FILE, value: /var/run/secrets/eventglass/auth-hash-key}
+            - {name: EVENTGLASS_TOKEN_KEY_FILE, value: /var/run/secrets/eventglass/token-key}
+            - {name: EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE, value: /var/run/secrets/eventglass/alert-encryption-key}
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: metrics, containerPort: 9090}
+          resources:
+            requests: {cpu: "1", memory: 512Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          readinessProbe: {httpGet: {path: /readyz, port: http}, periodSeconds: 5, timeoutSeconds: 2}
+          livenessProbe: {httpGet: {path: /livez, port: http}, periodSeconds: 10, timeoutSeconds: 2}
+          startupProbe: {httpGet: {path: /livez, port: http}, periodSeconds: 2, failureThreshold: 30}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: scratch, mountPath: /var/lib/eventglass}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/eventglass, readOnly: true}
+      volumes:
+        - name: scratch
+          emptyDir: {sizeLimit: 4Gi}
+        - name: runtime-secrets
+          secret: {secretName: eventglass-files, defaultMode: 256} # pragma: allowlist secret -- reference only; values are not committed
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventglass-worker
+  namespace: eventglass
+  annotations:
+    eventglass.dev/pg-pool-per-replica: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: eventglass, eventglass.dev/role: worker}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: eventglass, eventglass.dev/role: worker}
+    spec:
+      nodeSelector: {kubernetes.io/arch: arm64}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: eventglass
+          image: ghcr.io/chawanghyeon/eventglass:0.0.0-g06
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: {name: eventglass-runtime}
+            - secretRef: {name: eventglass-runtime} # pragma: allowlist secret -- reference only; values are not committed
+          env:
+            - {name: EVENTGLASS_ROLES, value: worker}
+            - {name: EVENTGLASS_HTTP_ADDR, value: ":8080"}
+            - {name: EVENTGLASS_METRICS_ADDR, value: ":9090"}
+            - {name: EVENTGLASS_SCRATCH_DIR, value: /var/lib/eventglass}
+            - {name: EVENTGLASS_ALERT_ENCRYPTION_KEY_FILE, value: /var/run/secrets/eventglass/alert-encryption-key}
+          ports:
+            - {name: metrics, containerPort: 9090}
+          resources:
+            requests: {cpu: "1", memory: 512Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          readinessProbe: {httpGet: {path: /readyz, port: 8080}, periodSeconds: 5, timeoutSeconds: 2}
+          livenessProbe: {httpGet: {path: /livez, port: 8080}, periodSeconds: 10, timeoutSeconds: 2}
+          startupProbe: {httpGet: {path: /livez, port: 8080}, periodSeconds: 2, failureThreshold: 30}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: scratch, mountPath: /var/lib/eventglass}
+            - {name: runtime-secrets, mountPath: /var/run/secrets/eventglass, readOnly: true}
+      volumes:
+        - name: scratch
+          emptyDir: {sizeLimit: 4Gi}
+        - name: runtime-secrets
+          secret: {secretName: eventglass-files, defaultMode: 256} # pragma: allowlist secret -- reference only; values are not committed
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: eventglass-scheduler
+  namespace: eventglass
+  annotations:
+    eventglass.dev/pg-pool-per-replica: "2"
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/name: eventglass, eventglass.dev/role: scheduler}
+  template:
+    metadata:
+      labels: {app.kubernetes.io/name: eventglass, eventglass.dev/role: scheduler}
+    spec:
+      nodeSelector: {kubernetes.io/arch: arm64}
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: eventglass
+          image: ghcr.io/chawanghyeon/eventglass:0.0.0-g06
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef: {name: eventglass-runtime}
+            - secretRef: {name: eventglass-runtime} # pragma: allowlist secret -- reference only; values are not committed
+          env:
+            - {name: EVENTGLASS_ROLES, value: scheduler}
+            - {name: EVENTGLASS_HTTP_ADDR, value: ":8080"}
+            - {name: EVENTGLASS_METRICS_ADDR, value: ":9090"}
+            - {name: EVENTGLASS_SCRATCH_DIR, value: /var/lib/eventglass}
+          ports:
+            - {name: metrics, containerPort: 9090}
+          resources:
+            requests: {cpu: "1", memory: 512Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          readinessProbe: {httpGet: {path: /readyz, port: 8080}, periodSeconds: 5, timeoutSeconds: 2}
+          livenessProbe: {httpGet: {path: /livez, port: 8080}, periodSeconds: 10, timeoutSeconds: 2}
+          startupProbe: {httpGet: {path: /livez, port: 8080}, periodSeconds: 2, failureThreshold: 30}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: scratch, mountPath: /var/lib/eventglass}
+      volumes:
+        - name: scratch
+          emptyDir: {sizeLimit: 4Gi}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: eventglass-api, namespace: eventglass}
+spec:
+  selector: {app.kubernetes.io/name: eventglass, eventglass.dev/role: api}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: eventglass-worker-metrics
+  namespace: eventglass
+  labels: {app.kubernetes.io/name: eventglass, eventglass.dev/role: worker}
+spec:
+  selector: {app.kubernetes.io/name: eventglass, eventglass.dev/role: worker}
+  ports:
+    - {name: metrics, port: 9090, targetPort: metrics}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata: {name: eventglass-worker, namespace: eventglass}
+spec:
+  selector:
+    matchLabels: {app.kubernetes.io/name: eventglass, eventglass.dev/role: worker}
+  endpoints:
+    - {port: metrics, path: /metrics, interval: 10s, scrapeTimeout: 2s}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: {name: eventglass-worker, namespace: eventglass}
+spec:
+  scaleTargetRef: {name: eventglass-worker}
+  pollingInterval: 10
+  cooldownPeriod: 300
+  minReplicaCount: 1
+  maxReplicaCount: 20
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 20
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - {type: Percent, value: 25, periodSeconds: 60}
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        metricName: eventglass_ingest_queued_bytes
+        query: max(eventglass_autoscale_queued_bytes{pool="ingest"}) * max(eventglass_autoscale_dependency_available)
+        threshold: "5242880"
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        metricName: eventglass_query_queued_bytes
+        query: max(eventglass_autoscale_queued_bytes{pool="query"}) * max(eventglass_autoscale_dependency_available)
+        threshold: "524288"
+    - type: prometheus
+      metadata:
+        serverAddress: http://prometheus-operated.monitoring.svc:9090
+        metricName: eventglass_maintenance_queued_bytes
+        query: max(eventglass_autoscale_queued_bytes{pool="maintenance"}) * max(eventglass_autoscale_dependency_available)
+        threshold: "314572800"
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: eventglass-worker-private, namespace: eventglass}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/name: eventglass, eventglass.dev/role: worker}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: monitoring}
+      ports:
+        - {protocol: TCP, port: 9090}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {eventglass.dev/dependencies: "true"}
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}

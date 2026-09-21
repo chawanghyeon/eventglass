@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1 have implementations and scoped tests. R2 is the next packet.
+G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1–R2 have implementations and scoped tests. R3 is the next packet.
 M2 physical GC stays frozen whenever M4's signed coordinated backup attestation is absent or older than 24 hours.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
@@ -94,7 +94,7 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 | ID / depends on | Files/artifact | Required tests and done condition |
 |---|---|---|
 | R1 / M4 — complete | tests/resource Linux cgroup harness; scripts/check resource | CPU1/512MiB/swap0 profile verifies maximum input, two-minute 100 logs/s+5 errors/s logical mix through normalization and actual conversion/query children, no growing cycle backlog, cgroup OOM=0, bounded child OOM/cancel/join, exact permit drain and zero scratch residue. This is containment evidence, not R3's 30-minute end-to-end SLO. |
-| R2 / R1 | app autoscale metrics; deploy/kubernetes/KEDA; scripts/check scale |1/2/4 workers, same logical results, PG64 total cap, dependency slowdown no replica storm, scale-in25%, warm min1, tenant fairness |
+| R2 / R1 — complete | app autoscale metrics/control; deploy/kubernetes/KEDA; scripts/check scale | Private fixed-label backlog metrics and storage availability, EWMA prior, two-sample scale-out, dependency freeze, 300s stable scale-in capped at25%, warm min1/max20 and PG64 total bound. Conversion/query claims prefer tenants without running work. Linux ARM64 1/2/4 control harness produced the same checksum; manifests enforce non-root/read-only/CPU1/512MiB/bounded scratch and KEDA timing. This is control evidence, not R3 throughput. |
 | R3 / R2 | tests/comparison independent oracle/load/cost report; scripts/check comparison | Fixed10k/100k/1m/10m seeds,5min warmup/30min load/10min drain, required SLOs, whole-installation PG/S3 costs with dated price inputs; **G07 complete if all targets met** |
 | R4 / R3 | deploy backend locks; scripts/check release; operator/upgrade guides; SBOM/notices | Authorized AWS + proven selfhost smoke/restore, ARM64 provenance, secret/license scans, schema/journal compatibility and rollback rehearsal, declared SDK matrix; **G08 complete; only then advertise release** |
 

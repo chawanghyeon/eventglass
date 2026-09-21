@@ -138,7 +138,8 @@ func TestRuntimeStartsDurableIngressAndDrains(t *testing.T) {
 	}
 	config := app.Config{
 		DatabaseURL: fixture.pool.Config().ConnString(), HTTPAddr: "127.0.0.1:0", PublicURL: "http://127.0.0.1",
-		ScratchDir: filepath.Join(t.TempDir(), "runtime"), AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), AlertEncryptionKeyFile: authHashKeyFile(t), InsecureCookie: true,
+		MetricsAddr: "127.0.0.1:0",
+		ScratchDir:  filepath.Join(t.TempDir(), "runtime"), AuthHashKeyFile: authHashKeyFile(t), TokenKeyFile: authHashKeyFile(t), AlertEncryptionKeyFile: authHashKeyFile(t), InsecureCookie: true,
 		Roles: map[app.Role]bool{app.RoleAPI: true}, S3: s3Config, DrainTimeout: time.Second,
 	}
 	if _, err := app.NewRuntime(context.Background(), config); err == nil {
@@ -167,6 +168,15 @@ func TestRuntimeStartsDurableIngressAndDrains(t *testing.T) {
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	baseURL := "http://" + runtime.Addr()
+	metricsResponse, err := client.Get("http://" + runtime.MetricsAddr() + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metricsBody, _ := io.ReadAll(metricsResponse.Body)
+	metricsResponse.Body.Close()
+	if metricsResponse.StatusCode != http.StatusOK || !bytes.Contains(metricsBody, []byte(`eventglass_autoscale_queued_bytes{pool="ingest"}`)) || !bytes.Contains(metricsBody, []byte("eventglass_autoscale_dependency_available 1")) {
+		t.Fatalf("autoscale metrics status=%d body=%s", metricsResponse.StatusCode, metricsBody)
+	}
 	response, err := client.Get(baseURL + "/readyz")
 	if err != nil {
 		t.Fatal(err)

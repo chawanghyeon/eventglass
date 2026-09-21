@@ -205,7 +205,7 @@ case "${1:-}" in
   crash) crash ;;
   web) web ;;
   resource) docker_required resource; ./scripts/check-resource ;;
-  scale) docker_required scale; missing "scale verification" ;;
+  scale) docker_required scale; ./scripts/check-scale ;;
   comparison) docker_required comparison; missing "comparison verification" ;;
   recovery) docker_required recovery; ./scripts/check-recovery ;;
   release) docker_required release; missing "release verification" ;;

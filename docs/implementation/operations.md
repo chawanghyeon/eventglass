@@ -277,7 +277,8 @@ with jittered probes every5s; don't hide stalled age. Tenant round-robin claims
 max1 child/tenant/worker and max4 global query tasks/query; document that global
 fairness is approximate until G07 measures skew across replicas.
 
-Kubernetes/KEDA manifests select Linux ARM64, resource requests/limits, startup/
+The implemented `deploy/kubernetes/base.yaml` baseline selects Linux ARM64 at
+release scheduling time and fixes resource requests/limits, startup/
 readiness/liveness, grace30s, private PG/S3/gateway network, non-root read-only
 root, bounded scratch, secrets mounts. Query scaler metric comes from queued
 estimated bytes/service-rate target, not merely jobs count. Min/max and pool
