@@ -57,9 +57,10 @@ Pure-Go checks do not rebuild DuckDB.
 
 Scoped R3 optimizations prune proven first-page row scans after full catalog
 verification and eliminate duplicate histogram scans when filling empty buckets.
-The latest matched short profile measures rows/histogram p95 at344/848ms,
-with no growing backlog; histogram still misses the500ms target. It does not
-close G07 or establish a production release.
+The latest short profile measures rows/histogram p95 at516/1,324ms, worse than
+the preceding344/848ms; both now miss500ms despite passing backlog/accounting
+checks. Two separate maximum-pair real-dispatcher runs pass with zero OOM or
+budget overrun. These scoped results do not close G07 or establish a release.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the

@@ -167,7 +167,11 @@ permit or retrospectively erases work. A join overrun is observable and fails
 comparison verification. This wall-time admission policy is not a hard CPU-time
 ratio for every retrospective sample. Budget cancellation leaves the durable
 lease to expire/recover with its existing fence rules; it cannot abandon live
-native work or adopt an unfinished result. Workers recheck the pressure predicate
+native work or adopt an unfinished result. A budget-deadline failure delays that
+fixed operation slot for one60s accounting window, allowing fresh measured idle
+credit to accumulate instead of repeatedly canceling the same partial rewrite.
+Ordinary failures retain250ms retry delay; foreground and other maintenance
+slots remain eligible. Workers recheck the pressure predicate
 in the transaction claiming queued/prepared/expired compaction and retention
 work, since pressure can start after reservation. Publication/delivery keep
 their separate joined loops; GC's fresh-backup interlock remains mandatory.
@@ -200,14 +204,21 @@ Wide native rewrites must not keep a full sorted value vector beside the Parquet
 writer. Small inputs retain the direct COPY path, selected by actual Parquet
 uncompressed metadata, not compressed file length. Larger inputs materialize
 only scalar sort keys and byte sizes, partition into4MiB key ranges with a4KiB
-minimum row charge, and write at most eight ranges per native invocation. At
+minimum row charge, and write at most eight ranges per native invocation,
+further bounded to one range per24MiB of managed native memory (four at96MiB). At
 most1,024 intermediate partitions are admitted. Their conservative byte
 reservation is subtracted from the existing native spill allowance; insufficient
 budget fails before writing partitions. Actual partition counts/bytes and paths
 are checked before numeric-order concatenation into one paired replacement.
-Intermediate canonical columns never round-trip through JSON; analytics JSON
-is used only to measure a row's size, while payload uses its existing string
-byte lengths. Final native scans still prove exact identity, statistics and
+Intermediate canonical columns never round-trip through JSON. Analytics sizing
+counts UTF-8 bytes of every typed variable column and nested string, with4KiB
+per-row,256B per-attribute and32B per-list-element overhead; payload uses its
+existing string byte lengths. It does not allocate complete-row JSON solely to
+measure size. The2x intermediate allowance and actual manifest checks remain
+mandatory. App caps compaction/retention managed native memory at96MiB (or the
+smaller role/request limit), independently of conversion/query. This reserves
+space for native allocations outside that managed limit and does not promise
+headroom in the512MiB process cgroup. Final native scans still prove exact identity, statistics and
 SHA/block evidence. The repeated scans are sequential reads of already verified
 local inputs, not additional S3 downloads; this trades local I/O/latency for
 bounded native buffers and requires matched measurements, not a speedup claim.

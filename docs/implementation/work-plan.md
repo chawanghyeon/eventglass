@@ -311,7 +311,25 @@ bytes under CPU1/512MiB/swap0. It preserves pinned reads, identity, half-open
 retention, revocation/retry and cleanup. Its cgroup reaches512MiB with reclaim
 pressure but OOM0; no headroom claim is made. This closes that scoped resource
 execution, not maximum-byte progress under the app's rolling20% dispatcher.
-The latter and corrected official mixed-load SLOs remain outstanding.
+The latter and corrected official mixed-load SLOs remain outstanding. A later
+repeat while adding the real dispatcher reproduces native-child OOM; maximum-
+pair stability is reopened rather than inferred from that first scoped pass.
+
+The subsequent typed-size/writer-bound correction caps app maintenance native
+memory at96MiB and admits four4MiB write ranges at that limit. Per-operation
+retry cooldown allows fresh measured idle credit after budget cancellation,
+without changing the20% accounting, fences or joined cleanup. Two fresh
+CPU1/512MiB/swap0 executions now pass both maximum-pair direct workflows and the
+actual worker dispatcher, including canceled compaction/retention retry and
+pinned reads, with OOM0 and budget overrun0. Reclaim still reaches the512MiB
+limit; this is scoped eventual-progress evidence, not headroom or mixed-load
+SLO completion. See quality.md for failed alternatives and exact evidence.
+The same fresh20s/300s/90s one-worker diagnostic then measures rows/histogram
+p95=516/1,324ms, worse than the preceding344/848ms. Both500ms query targets fail;
+exact published counts, all59 queries, backlog/accounting, restart/cache checks
+and OOM0 pass. R3 must now resolve both query SLOs and the maintenance/query
+trajectory before corrected official-duration runs; native-only speedup and
+maximum-byte progress do not close it. R4 remains incomplete.
 
 ## Failure-injection matrix (stable acceptance IDs)
 

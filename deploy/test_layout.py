@@ -89,7 +89,7 @@ class GoLayoutTests(unittest.TestCase):
             "--cpus 1 --memory 512m --memory-swap 512m", "--user 65532:65532",
             "--read-only", "GOMEMLIMIT=96MiB", "GOMAXPROCS=1",
             "--wait --wait-timeout 60 postgres minio", "EVENTGLASS_INTEGRATION_REQUIRED=1",
-            "^TestMaintenanceMaximumBundleResource$", "memory.peak", "memory.events",
+            "^TestMaintenanceMaximumBundle(Resource|Dispatcher)$", "memory.peak", "memory.events",
             "docker volume rm", "tr '[:upper:]' '[:lower:]'",
         ):
             self.assertIn(required, source)

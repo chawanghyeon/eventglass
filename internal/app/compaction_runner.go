@@ -19,13 +19,22 @@ type ProcessCompactionRunner struct {
 	Gate       *NativeTaskGate
 }
 
+// DuckDB's managed limit excludes some Parquet vectors/writer allocations.
+// Leave room for those and the supervisor inside the worker's512MiB cgroup.
+// This is a maintenance-only cap; smaller combined-role requests remain smaller.
+const maintenanceNativeMemoryBytes = int64(96 << 20)
+
+func (runner ProcessCompactionRunner) memoryLimit(requested int64) int64 {
+	return min(runner.Gate.memoryLimit(requested), maintenanceNativeMemoryBytes)
+}
+
 func (runner ProcessCompactionRunner) Run(ctx context.Context, request engine.CompactionRequest) (engine.CompactionResult, error) {
 	release, err := runner.Gate.acquire(ctx)
 	if err != nil {
 		return engine.CompactionResult{}, err
 	}
 	defer release()
-	request.NativeMemoryBytes = runner.Gate.memoryLimit(request.NativeMemoryBytes)
+	request.NativeMemoryBytes = runner.memoryLimit(request.NativeMemoryBytes)
 	binary := runner.BinaryPath
 	if binary == "" {
 		binary, err = os.Executable()

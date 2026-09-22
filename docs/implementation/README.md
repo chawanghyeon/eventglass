@@ -32,8 +32,12 @@ query-owned first-page pruning path has unit/native/PG/S3/browser evidence,
 retains all catalog HEAD and authority checks, and conservatively falls back for
 cursors/filters/insufficient proof. The matched short service profile improves
 rows p95=893→312ms and passes the backlog target, but histogram995ms still misses
-500ms. Its planning-only improvement is not a full-service SLO or memory-headroom
-claim. R3
+500ms. Subsequent histogram state reuse reached344/848ms, but the latest
+20s/300s/90s diagnostic after maximum-maintenance hardening regresses to
+516/1,324ms: both query SLOs remain open. Separately, typed sizing, bounded native
+writer fan-in and app-owned retry admission pass two maximum-pair actual-worker
+resource executions, with zero OOM or budget overrun but no memory headroom.
+These local results are not full-service SLO or release claims. R3
 remains the first incomplete packet and R4 remains dependency-blocked. Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises

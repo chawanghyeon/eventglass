@@ -35,7 +35,7 @@ docker run --rm --platform linux/arm64 --network none -v "$artifacts:/artifacts"
   docker info --format 'host_arch={{.Architecture}} host_cpus={{.NCPU}} host_memory={{.MemTotal}}'
   docker run --rm --platform linux/arm64 --network none "$image" sha256sum \
     /out/eventglass-go /opt/duckdb/lib/libduckdb_bundle.a /src/tests/integration/maintenance_native_test.go
-  printf '%s\n' 'cpu=1 memory=512MiB swap=0 GOMEMLIMIT=96MiB GOMAXPROCS=1 native_memory=256MiB native_spill=2GiB scratch=disk_volume non_root=true read_only=true'
+  printf '%s\n' 'cpu=1 memory=512MiB swap=0 GOMEMLIMIT=96MiB GOMAXPROCS=1 conversion_native_memory=256MiB maintenance_native_memory=96MiB native_spill=2GiB scratch=disk_volume non_root=true read_only=true'
 } >"$artifacts/environment.txt"
 docker compose -p "$project" -f deploy/compose.yaml up -d --wait --wait-timeout 60 postgres minio
 docker compose -p "$project" -f deploy/compose.yaml run --rm minio-init
@@ -53,7 +53,7 @@ docker run --name "$container" --platform linux/arm64 --network "${project}_defa
   -e EVENTGLASS_S3_ENDPOINT=http://minio:9000 -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
   -e AWS_ACCESS_KEY_ID=eventglass-local -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
   --entrypoint sh "$image" -c '
-    /artifacts/maintenance.test -test.run "^TestMaintenanceMaximumBundleResource$" -test.v -test.count=1 -test.timeout=12m
+    /artifacts/maintenance.test -test.run "^TestMaintenanceMaximumBundle(Resource|Dispatcher)$" -test.v -test.count=1 -test.timeout=20m
     result=$?
     for field in memory.peak memory.max memory.swap.max memory.events; do
       printf "%s\n" "$field"

@@ -5,9 +5,12 @@ package engine_test
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,9 +29,13 @@ func wideCompactionFixture(t testing.TB, count int) (engine.CompactionRequest, m
 }
 
 func wideCompactionScopedFixture(t testing.TB, count int, scoped bool) (engine.CompactionRequest, map[string][32]byte) {
+	return wideCompactionSizedFixture(t, count, 16, scoped)
+}
+
+func wideCompactionSizedFixture(t testing.TB, count, perInput int, scoped bool) (engine.CompactionRequest, map[string][32]byte) {
 	t.Helper()
 	inputs := make([]engine.CompactionInput, count)
-	expected := make(map[string][32]byte, count*16)
+	expected := make(map[string][32]byte, count*perInput)
 	var inputBytes int64
 	for index := range inputs {
 		var service *string
@@ -40,7 +47,7 @@ func wideCompactionScopedFixture(t testing.TB, count int, scoped bool) (engine.C
 				service = &value
 			}
 		}
-		request, raw := wideConversionScopedBatch(t, 16, index, projectID, service)
+		request, raw := wideConversionScopedBatch(t, perInput, index, projectID, service)
 		_, err := engine.Convert(context.Background(), request, func(bundle engine.ConvertedBundle) error {
 			inputs[index] = engine.CompactionInput{BundleID: fmt.Sprint(index), AnalyticsPath: bundle.Analytics.Path, PayloadPath: bundle.Payload.Path, IdentitySHA256: bundle.IdentitySHA256}
 			inputBytes += bundle.Analytics.Evidence.Bytes + bundle.Payload.Evidence.Bytes
@@ -98,6 +105,21 @@ func TestCompactWideInputsWithinNativeMemory(t *testing.T) {
 	}
 }
 
+func TestCompactMaximumWideWorkerInputs(t *testing.T) {
+	request, expected := wideCompactionSizedFixture(t, 14, 64, false)
+	request.NativeMemoryBytes = 96 << 20
+	runtime.GC()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	started := time.Now()
+	result, err := engine.Compact(ctx, request)
+	t.Logf("maximum native compaction elapsed=%s managed_memory=%d", time.Since(started), request.NativeMemoryBytes)
+	if err != nil || result.Bundle.RowCount != int64(len(expected)) {
+		t.Fatalf("maximum worker inputs: rows=%d err=%v", result.Bundle.RowCount, err)
+	}
+	verifyWideCompactionValues(t, request, result)
+}
+
 func testCompactWideInputs(t *testing.T, memory int64) {
 	request, expected := wideCompactionFixture(t, 56)
 	request.NativeMemoryBytes = memory
@@ -150,7 +172,13 @@ func verifyWideCompactionValues(t *testing.T, request engine.CompactionRequest, 
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec("SET memory_limit='192MiB'"); err != nil {
+	if _, err := db.Exec("SET memory_limit='96MiB'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("SET temp_directory='" + strings.ReplaceAll(t.TempDir(), "'", "''") + "'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("SET max_temp_directory_size='2GiB'"); err != nil {
 		t.Fatal(err)
 	}
 	for _, payload := range []bool{false, true} {
@@ -162,46 +190,34 @@ func verifyWideCompactionValues(t *testing.T, request engine.CompactionRequest, 
 			}
 			paths[i] = "'" + strings.ReplaceAll(path, "'", "''") + "'"
 		}
-		expected := map[string]string{}
-		rows, err := db.Query(`SELECT record_id,sha256(to_json(a)) FROM read_parquet([` + strings.Join(paths, ",") + `]) a`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for rows.Next() {
-			var id, hash string
-			if err := rows.Scan(&id, &hash); err != nil {
-				t.Fatal(err)
+		expected := make(map[string]string)
+		for _, path := range paths {
+			// A16-ID page must not decode every input file's wide vectors.
+			// Input files are independent here; merge their full-column evidence
+			// while rejecting duplicate IDs and keeping the same total bound.
+			for id, digest := range boundedWideColumnHashes(t, db, `read_parquet(`+path+`)`) {
+				if _, exists := expected[id]; exists || len(expected) >= 8192 {
+					t.Fatal("duplicate or unbounded input oracle identity")
+				}
+				expected[id] = digest
 			}
-			expected[id] = hash
 		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
+		t.Logf("complete-column input oracle payload=%t records=%d", payload, len(expected))
 		path := result.Bundle.Analytics.Path
 		order := "project_id,service NULLS FIRST,event_time_us,record_id"
 		if payload {
 			path = result.Bundle.Payload.Path
 		}
-		rows, err = db.Query(`SELECT record_id,sha256(to_json(a)) FROM read_parquet(?) a`, path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for rows.Next() {
-			var id, hash string
-			if err := rows.Scan(&id, &hash); err != nil {
-				t.Fatal(err)
-			}
+		actual := boundedWideColumnHashes(t, db, `read_parquet('`+strings.ReplaceAll(path, "'", "''")+`')`)
+		t.Logf("complete-column output oracle payload=%t records=%d", payload, len(actual))
+		for id, hash := range actual {
 			if expected[id] != hash {
 				t.Fatalf("payload=%t changed columns for %s", payload, id)
 			}
 			delete(expected, id)
 		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil || len(expected) != 0 {
-			t.Fatalf("column hashes remaining=%d err=%v", len(expected), err)
+		if len(expected) != 0 {
+			t.Fatalf("column hashes remaining=%d", len(expected))
 		}
 		var mismatches int64
 		ordered := `SELECT file_row_number,row_number() OVER(ORDER BY ` + order + `)-1 expected FROM read_parquet(?,file_row_number=true)`
@@ -213,6 +229,127 @@ func verifyWideCompactionValues(t *testing.T, request engine.CompactionRequest, 
 		if err := db.QueryRow(`SELECT count(*) FROM (`+ordered+`) WHERE file_row_number<>expected`, args...).Scan(&mismatches); err != nil || mismatches != 0 {
 			t.Fatalf("payload=%t physical sort mismatches=%d err=%v", payload, mismatches, err)
 		}
+	}
+}
+
+func TestWideColumnOracleIncludesNestedValuesAndPhysicalTypes(t *testing.T) {
+	db, err := engine.Open(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	source := `(SELECT 'row'::VARCHAR record_id,NULL::VARCHAR optional,[{s:'blob',n:1},NULL] attrs,1::INTEGER n,3.125::DECIMAL(18,3) exact)`
+	want := boundedWideColumnHashes(t, db, source)["row"]
+	if got := boundedWideColumnHashes(t, db, source)["row"]; got == "" || got != want {
+		t.Fatal("non-deterministic complete-column oracle")
+	}
+	for _, change := range []struct{ name, from, to string }{
+		{"null_vs_empty", "NULL::VARCHAR", "''::VARCHAR"},
+		{"nested_string", "'blob'", "'other'"},
+		{"nested_integer", "n:1", "n:2"},
+		{"nested_null", "},NULL]", "},{s:NULL,n:NULL}]"},
+		{"physical_type", "1::INTEGER", "1::BIGINT"},
+		{"decimal_value", "3.125", "3.126"},
+		{"column_name", " optional,", " renamed,"},
+		{"additional_column", " exact)", " exact,0 added)"},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			got := boundedWideColumnHashes(t, db, strings.ReplaceAll(source, change.from, change.to))["row"]
+			if got == "" || got == want {
+				t.Fatal("changed native value/type/schema escaped complete-column oracle")
+			}
+		})
+	}
+}
+
+// Hash every named/typed column with native JSON semantics, then chain their
+// digests in schema order. Scan only one value column and16 identities at once;
+// neither a complete wide-row JSON copy nor all wide vectors coexist. Every
+// nested/decimal/null value remains covered, with at most8192 fixture records.
+func boundedWideColumnHashes(t *testing.T, db *sql.DB, source string) map[string]string {
+	t.Helper()
+	columns, err := db.Query(`DESCRIBE SELECT * FROM ` + source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var terms []string
+	for columns.Next() {
+		var name, kind string
+		var rest [4]sql.NullString
+		if err := columns.Scan(&name, &kind, &rest[0], &rest[1], &rest[2], &rest[3]); err != nil {
+			t.Fatal(err)
+		}
+		if len(terms) >= 64 {
+			t.Fatal("unbounded oracle schema")
+		}
+		quoted := `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+		// Include the physical type as well, not merely a coincident JSON value.
+		terms = append(terms, quoted+`:=struct_pack(type:='`+strings.ReplaceAll(kind, "'", "''")+`',value:=sha256(to_json(`+quoted+`)))`)
+	}
+	err = columns.Err()
+	columns.Close()
+	if err != nil || len(terms) == 0 {
+		t.Fatalf("oracle schema: columns=%d err=%v", len(terms), err)
+	}
+	result := map[string]string{}
+	after := ""
+	for {
+		rows, err := db.Query(`SELECT record_id FROM `+source+` WHERE record_id>? ORDER BY record_id LIMIT 16`, after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []any
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			ids = append(ids, id)
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(ids) == 0 {
+			return result
+		}
+		page := make(map[string][32]byte, len(ids))
+		for _, id := range ids {
+			page[id.(string)] = [32]byte{}
+		}
+		for _, term := range terms {
+			expression := `sha256(to_json(struct_pack(` + term + `)))`
+			rows, err = db.Query(`SELECT record_id,`+expression+` FROM `+source+` a WHERE record_id IN (`+strings.TrimSuffix(strings.Repeat("?,", len(ids)), ",")+`)`, ids...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := make(map[string]bool, len(ids))
+			for rows.Next() {
+				var id, digest string
+				if err := rows.Scan(&id, &digest); err != nil {
+					t.Fatal(err)
+				}
+				previous, exists := page[id]
+				if !exists || seen[id] || len(digest) != 64 {
+					t.Fatal("invalid native column identity/digest")
+				}
+				seen[id] = true
+				page[id] = sha256.Sum256(append(previous[:], digest...))
+			}
+			err = rows.Err()
+			rows.Close()
+			if err != nil || len(seen) != len(ids) {
+				t.Fatalf("bounded column hashes=%d ids=%d err=%v", len(seen), len(ids), err)
+			}
+		}
+		for id, digest := range page {
+			if _, exists := result[id]; exists || len(result) >= 8192 {
+				t.Fatal("duplicate identity or unbounded native verification fixture")
+			}
+			result[id] = hex.EncodeToString(digest[:])
+		}
+		after = ids[len(ids)-1].(string)
 	}
 }
 
@@ -297,6 +434,32 @@ func TestCompactWideRetentionBoundaryAndSpillAdmission(t *testing.T) {
 
 func BenchmarkCompactWideInputs(b *testing.B) {
 	request, expected := wideCompactionFixture(b, 16)
+	inputHash := sha256.New()
+	var inputBytes int64
+	for _, input := range request.Inputs {
+		for _, path := range []string{input.AnalyticsPath, input.PayloadPath} {
+			file, err := os.Open(path)
+			if err != nil {
+				b.Fatal(err)
+			}
+			info, err := file.Stat()
+			if err != nil {
+				file.Close()
+				b.Fatal(err)
+			}
+			if err := binary.Write(inputHash, binary.BigEndian, uint64(info.Size())); err != nil {
+				file.Close()
+				b.Fatal(err)
+			}
+			count, err := io.Copy(inputHash, file)
+			closeErr := file.Close()
+			if err != nil || closeErr != nil || count != info.Size() {
+				b.Fatalf("hash actual input: bytes=%d err=%v close=%v", count, err, closeErr)
+			}
+			inputBytes += count
+		}
+	}
+	b.Logf("framed actual input SHA256=%x bytes=%d", inputHash.Sum(nil), inputBytes)
 	ids := make([]string, 0, len(expected))
 	for id := range expected {
 		ids = append(ids, id)

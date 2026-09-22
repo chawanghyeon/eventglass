@@ -35,10 +35,10 @@ func copyCompactionRole(ctx context.Context, db *sql.DB, request CompactionReque
 		_, err := db.ExecContext(ctx, `COPY (SELECT `+projection+` FROM (`+source+`) ORDER BY `+order+`) TO '`+quoteSQLString(output)+`' (`+compactCopyOptions+`)`)
 		return err
 	}
-	// Materialize only the scalar keys and sizes BEFORE the window. Otherwise
-	// the optimizer carries the wide values through its sort again. JSON is used
-	// only for byte accounting, never to round-trip the stored canonical values.
-	rowBytes := "octet_length(encode(to_json(a)))"
+	// Materialize only scalar keys and sizes BEFORE the window. Serializing a
+	// wide analytic row to JSON just to count bytes duplicates its large strings
+	// in expression allocators. Measure the typed values without encoding them.
+	rowBytes := compactionAnalyticsRowBytesSQL()
 	if payload {
 		rowBytes = "64+COALESCE(bit_length(raw_json)//8,0)+COALESCE(bit_length(envelope_sdk_json)//8,0)+COALESCE(bit_length(normalization_warnings_json)//8,0)+COALESCE(bit_length(canonical_metadata_json)//8,0)"
 	}
@@ -73,9 +73,11 @@ func copyCompactionRole(ctx context.Context, db *sql.DB, request CompactionReque
 	defer os.RemoveAll(directory) // ExecContext has joined its native work first.
 	options := compactCopyOptions + ",ROW_GROUP_SIZE_BYTES '4MiB',DATA_PAGE_SIZE_LIMIT 1048576,STRING_DICTIONARY_PAGE_SIZE_LIMIT 1048576"
 	var statement string
-	// The pinned partitioned writer also retains its input batch. Admit at most
-	// eight4MiB key ranges per invocation rather than retaining all wide values.
+	// The pinned partitioned writer also retains its input batch. Each4MiB key
+	// range needs room for decoded values, sorting and writer state. Scale its
+	// fan-in with the managed limit, never admitting more than eight ranges.
 	// This is sequential local I/O over already verified files, not more S3 GETs.
+	rangesPerWrite := max(int64(1), min(int64(8), request.NativeMemoryBytes/(24<<20)))
 	for after := int64(-1); ; {
 		var next sql.NullInt64
 		if err := db.QueryRowContext(ctx, `SELECT min(chunk) FROM compact_keys WHERE chunk>?`, after).Scan(&next); err != nil {
@@ -84,7 +86,7 @@ func copyCompactionRole(ctx context.Context, db *sql.DB, request CompactionReque
 		if !next.Valid {
 			break
 		}
-		end := next.Int64 + 8
+		end := next.Int64 + rangesPerWrite
 		statement = `COPY (SELECT a.*,k.chunk FROM (` + source + `) a JOIN (SELECT * FROM compact_keys WHERE chunk>=` + strconv.FormatInt(next.Int64, 10) + ` AND chunk<` + strconv.FormatInt(end, 10) + `) k USING(record_id)) TO '` + quoteSQLString(directory) + `' (` + options + `,PARTITION_BY (chunk),ORDER_BY (` + order + `),OVERWRITE_OR_IGNORE true)`
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("write ordered partitions: %w", err)
@@ -114,6 +116,28 @@ func copyCompactionRole(ctx context.Context, db *sql.DB, request CompactionReque
 	}
 	_, err = db.ExecContext(ctx, "SET max_temp_directory_size='"+strconv.FormatInt(request.NativeSpillBytes, 10)+"B'")
 	return err
+}
+
+func compactionAnalyticsRowBytesSQL() string {
+	// Charge fixed scalar/vector/null overhead once per row, then every variable
+	// string byte. Native Parquet writes these values, not their JSON escapes.
+	// Nested attributes include256B each for their struct/decimal/null overhead;
+	// string lists include32B per element. The existing2x intermediate allowance
+	// and checked actual file manifest are still required, not replaced by this
+	// per-row estimate. bit_length counts UTF-8 bytes rather than characters.
+	terms := []string{"4096"}
+	for _, column := range []string{"record_id", "acceptance_id", "batch_id", "kind", "source_event_id", "trace_id", "span_id", "level", "original_level", "message", "message_template", "service", "environment", "release", "logger", "sdk_name", "sdk_version", "platform", "server_name", "issue_id", "exception_type", "exception_value"} {
+		terms = append(terms, "COALESCE(bit_length("+column+")//8,0)")
+	}
+	attribute := []string{"256"}
+	for _, field := range []string{"namespace", "path", "value_type", "string_value", "json_value", "unit"} {
+		attribute = append(attribute, "COALESCE(bit_length(attribute."+field+")//8,0)")
+	}
+	terms = append(terms, "COALESCE(list_sum(list_transform(attrs,lambda attribute: "+strings.Join(attribute, "+")+")),0)")
+	for _, column := range []string{"search_values", "warnings"} {
+		terms = append(terms, "COALESCE(list_sum(list_transform("+column+",lambda value: 32+COALESCE(bit_length(value)//8,0))),0)")
+	}
+	return strings.Join(terms, "+")
 }
 
 func compactionPartPaths(directory string, count, maxBytes int64) ([]string, error) {

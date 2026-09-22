@@ -1891,6 +1891,179 @@ R3's service histogram/official-duration gates and R4 remain incomplete.
 The earlier passing `.tools/maintenance-resource.K01kbI` used separate4GiB
 test budgets; it is superseded by the final shared role-budget run above.
 
+A subsequent repeated resource/actual-dispatcher run on957d0ca-derived sources
+reproduces a killed native compaction child and kernel OOM events. Therefore
+the preceding single successful resource execution does not establish reliable
+maximum-byte completion. Retain the failure evidence and keep this boundary
+open until the repeat failure is corrected and reverified; do not increase the
+512MiB cgroup or replace this fixture with smaller/compressible input.
+
+The actual worker harness subsequently reproduced two separate defects. At the
+old256MiB managed limit the direct child and dispatcher suffered three kernel
+OOM kills (`.tools/maintenance-resource.szGpZO`); lowering it to192MiB alone
+still suffered two (`.tools/maintenance-resource.iw5vFu`). Full-row analytics
+JSON sizing fails at128MiB when requesting another16MiB at123.7MiB used
+(`.tools/max-compaction-native-128.log`). Separately, the real30s lease retry
+schedule can repeatedly spend fresh idle credit on canceled partial rewrites:
+the four-minute synctest completes zero jobs in eight attempts before the fix
+(`.tools/maintenance-dispatch-starvation-before.log`).
+
+Typed UTF-8 sizing removes that JSON copy, retaining every scalar/nested
+variable column, conservative overhead, the2x intermediate reservation and
+actual file-manifest checks. App keeps all-attempt accounting and fences, but
+delays only the budget-canceled operation slot for one60s window; ordinary
+errors retain250ms delay and other work continues. The starvation regression
+then passes. This does not manufacture idle credit or expand the20% grant.
+
+The128MiB candidate passed both direct and actual-dispatcher tests once
+(`.tools/maintenance-resource.aBFdTb`), but its fresh repeat
+(`.tools/maintenance-resource.mYPbhc`) killed the direct child with OOM1 even
+though the dispatcher again passed81.72s. Both outcomes are retained; a
+successful dispatcher does not erase a failed direct execution. Lowering the
+managed limit to64MiB alone or with two write ranges fails in the native writer
+at56.7–57MiB while requesting8MiB;96MiB with eight ranges also fails. Reducing
+writer fan-in to three ranges at96MiB completes native compaction in13.221s,
+too long for the12s admission ceiling even before S3 I/O. Four ranges complete
+the same265,497,584B/896-record native rewrite in8.371s. These two diagnostic
+processes subsequently suffered OOM in their separate192MiB complete-row
+verification, not in Compact; their outer commands remain failed. Simply
+lowering that verifier to96MiB still reproduced OOM. The final independent
+oracle hashes each named/typed column with native JSON semantics, then chains
+those digests in schema order. It reads one input file and one value column at
+a time, with16-ID pages, at most64 columns/8192 records and96MiB managed memory
+plus an isolated2GiB spill limit. Every nested/decimal/null value is still
+compared; physical sort and exact paired identities remain separate assertions.
+Negative tests detect changed nulls, nested strings/integers/null structs,
+decimal values, physical types, renamed and additional columns. This removes
+both the complete-row JSON copy and repeated wide decoding across all inputs;
+it changes no product S3 path. `.tools/max-compaction-native.ptCnRP/run.log`
+passes the265,497,584B native fixture and all these assertions in32.38s, including
+7.885s Compact; CPU1/512MiB/swap0 peak536,875,008B,8,480 max events, OOM0.
+Actual durable workflow and full native contracts are required independently
+of this diagnostic.
+
+The final96MiB/four-range candidate passes two fresh complete
+`maintenance-resource` invocations. Both use actual durable SDK ingestion and
+14 paired inputs/896 records/265,537,875B, the same product binary SHA256
+`e141e6204a6c40f872288b28925c48a90941c8f70e63996f3e8c770dd9dcd07e`, pinned
+native library, CPU1/512MiB/swap0,96MiB Go limit,2GiB native spill and the existing
+shared role disk budget. Each starts its own actual worker and proves canceled
+compaction **and retention** eventually complete after fresh idle credit;
+old snapshot identities, revocation, half-open retention and zero physical GC
+remain mandatory. The second retention wait is expected cancellation/retry,
+not excluded from the wall time or worker I/O.
+
+| Evidence directory | Direct compaction / whole test | Actual dispatcher whole test | Idle credit / all-attempt work | Cgroup peak / max events / OOM kills |
+| --- | --- | --- | --- | --- |
+| `.tools/maintenance-resource.ozjNEF` |9.329s /22.57s|145.66s|112,200ms /12,956ms|536,875,008B /12,453 /0|
+| `.tools/maintenance-resource.dypcOY` |9.212s /22.13s|146.03s|113,700ms /13,146ms|536,870,912B /12,319 /0|
+
+Both report zero budget overrun; cgroup usage still reaches the configured
+limit, so there is no headroom claim. Direct outputs total266,094,484 and
+266,094,575B; mixed retention takes1.291/1.243s and fully expired retirement
+0.802/1.392ms with no S3 work. Actual dispatcher compaction takes71.001/71.251s
+including the60s retry window, with three task claims (canceled attempt,
+successful Prepare, Swap). Mixed retention takes62.751/63.001s with three claims;
+fully expired retirement takes257/254ms with one claim. Kernel counters include
+fixture/oracle/supervisor/native descendants, not just the successful child.
+
+Actual direct S3 totals respectively are PUT46/641,750,010B and46/641,750,102B,
+HEAD46 each, full GET126/2,347,321,347B and126/2,347,321,804B, Range0.
+Worker-only totals are PUT6/294,617,655B and4/285,108,489B, HEAD6/5,
+full GET56/1,263,049,591B and56/1,263,018,649B, Range0; canceled attempts are
+included. Separate fixture/read-oracle totals are PUT42/356,641,579B and
+42/356,641,575B, HEAD42 each, GET92/1,530,580,275B and92/1,530,580,717B.
+The separately created installation marker is not included in those store
+counters. This is not a before/after speedup or sustained service-SLO claim.
+
+The separate matched native sizing benchmark uses16 paired inputs/256 records,
+76,028,076B and identical framed file SHA256
+`d94e08e5fc2ec8c0e3971f772ae725389d5ccb1642a9f090b5073684c289d353` in every
+sample on both sides. Same Go1.27.1/pinned ARM64 engine, CPU1/512MiB/swap0,
+GOMAXPROCS1, Go96MiB, native256MiB/spill2GiB, non-root/read-only, private disk
+volume and denied network; both binaries are compiled before timing and run
+sequentially without competing builds. Each median is five samples of three
+Compact+output-cleanup operations, with setup outside the timer. Every operation
+checks exact count/identity. Both use eight write ranges at256MiB; this isolates
+the native sizing change, **not** the96MiB actual-worker profile above.
+
+| Metric | Previous JSON sizing | Typed sizing |
+| --- | ---: | ---: |
+| Median time/op |1.669056060s|1.116696239s|
+| Median records/s |153.4|229.2|
+| Go allocated B/op |2,576,146|2,589,845|
+| Go allocations/op |11,848|11,931|
+| Process maximum RSS, including setup |331,247,616B|364,822,528B|
+| Whole benchmark cgroup peak |481,218,560B|517,042,176B|
+| S3 requests / bytes per operation |0 /0|0 /0|
+
+Latency improves33.1%, but Go allocations and RSS increase; do not describe this
+as memory savings or whole-service throughput. Neither side has max-pressure
+or OOM events. Evidence: `.tools/maintenance-sizing-bench.wh68E1`, before image
+`sha256:ee287e9082686123f2853e32b3de6608b11da8267243e0a283ec627b2c7728a0`,
+after image `sha256:9e29f84e45b6b21557d7c4e8f828a527e326ad0ac40abefea0e9fb8db9d2e9e8`.
+
+Root ARM64 unit/layout/architecture/vet and generated-contract comparisons pass;
+race checks pass app4.478s/maintenance1.671s/ingest4.025s. Full pinned-native
+contracts/vet pass (engine173.206s, process contracts0.843s), followed by real
+isolated PG/MinIO query/Live/authority/snapshot/retention integration39.722s.
+The first full-contract attempt failed with Colima `No space left on device`,
+not a passing check. Removing exactly eight unused old Eventglass test images
+freed build space; source/evidence, containers/volumes, current comparison images
+and the fixed native cache were preserved. The unmodified tests then passed,
+including image export. Logs use `.tools/maintenance-96-{unit,race,codegen,
+contracts-retry,integration}.log`; the failed disk run is
+`.tools/maintenance-96-contracts.log`. These checks do not close R3/R4.
+
+The final ARM64 production-image Chromium flow passes2.7s
+(`.tools/maintenance-96-browser.log`). Building the subsequent fresh comparison
+image again exhausted Colima's20GiB disk before measurement. Five further old,
+unreferenced Eventglass test images were removed; no containers/volumes or native
+cache were removed. The before/after benchmark executables and logs remain,
+with executable SHA256 `eb0020f635f97a3d39fb16437e5091a8f400d9dd9e404ed8fc2d6cdc5186c060`
+and `c38dd4faad9e96e1c106c042e31ece8094214b55a1ff926ccc739c17520c78ee`.
+The following comparison rebuild succeeded without reusing an old application.
+
+The fresh one-worker20s/300s/90s diagnostic is retained at
+`.tools/comparison-report-1.skhb95/report.json`, revision957d0ca-dirty, with logs
+`.tools/maintenance-96-comparison-retry.log`. Compare with the preceding
+`.tools/comparison-report-1.CZky1f/report.json`, not an older convenience file.
+Both have the same fixture-definition hash,33,600 accepted including warmup,
+32,000 logs+1,600 errors through public query,59 measured successful queries,
+zero conflicts and final backlog0. Actual submitted envelopes differ with
+fresh installations/timing:10,798/40,179,137B versus11,072/36,933,652B; this is
+the same logical profile, **not** byte-identical input like the native benchmark.
+New submitted-input SHA256 is
+`d3e35ce558e172b075a2a35df3a38651d6421302b65bc049560294909dba812e`.
+
+| Service observation | Preceding profile |96MiB maintenance candidate |
+| --- | ---: | ---: |
+| Rows / histogram p95 |344 /848ms|516 /1,324ms|
+| Rows / histogram server p95 |168 /655ms|193 /1,066ms|
+| ACK / visibility p95 |371 /799ms|377 /1,764ms|
+| Maximum queried files / bytes |682 /7,602,007B|849 /8,849,878B|
+| Conversion work / busy time |1,867 /224,159ms|1,853 /245,468ms|
+| Compaction work / busy time |198 /13,115ms|139 /9,915ms|
+| Observed idle credit |73,600ms|52,200ms|
+| Sampled whole-installation peak |785,737,840B|882,554,960B|
+
+Both new query p95 targets fail500ms; the command correctly exits1. The smaller
+native benchmark does not outweigh this service regression. Less idle credit,
+fewer compaction work steps and more queried files are observed together; this
+single pair does not establish which code/trajectory difference caused them.
+All maintenance attempts remain charged (compaction9,959ms+retention108ms+GC31ms),
+with zero budget overrun and cgroup OOM. Backlog slope+0.003173/min passes the
+existing tolerance, max12; do not describe that as a negative slope. API/worker
+cgroup peaks are159,756,288/66,146,304B, with all three worker incarnations observed.
+
+New S3 totals are PUT5,881/31,953,883B, HEAD74,514, full GET13,617/74,407,277B,
+Range2,061/18,363,553B; PG WAL79,810,888B. These include foreground and maintenance,
+not just query traffic. After load, cold/warm all-history regex takes1,210/877ms,
+Range795/4, preserving the same snapshot and rows. Ten seconds idle adds no
+query work, but maintenance still reads548 objects/3,827,791B. Restart, cache,
+public counts and resource checks pass; R3 requires both query SLOs, diagnosis
+of this trajectory, and corrected official-duration profiles. R4 is not released.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

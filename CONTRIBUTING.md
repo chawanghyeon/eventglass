@@ -98,8 +98,12 @@ isolated disk volume rather than charging retained fixture files to tmpfs.
 PostgreSQL and MinIO are disposable and outside that worker cgroup. The runner
 retains image/native/source identities, phase timings, actual S3 counts/bytes,
 kernel peak/OOM observations and its exit state under `.tools/maintenance-resource.*`.
-This resource check does not exercise the app dispatcher's rolling20% admission
-budget and must not be reported as proof that maximum rewrites finish within it.
+It runs both directly supervised workflows and a fresh actual worker process
+with the app dispatcher's rolling20% admission budget. The latter must recover
+from budget cancellation, finish the same maximum pair and both retention
+tasks, preserve old pinned reads, and report all-attempt budget accounting with
+zero overruns. This scoped eventual-progress check does not replace sustained
+mixed-load SLOs; reaching the cgroup limit with reclaim is not memory headroom.
 
 `./scripts/check scale` verifies autoscale decisions, the PG64 replica budget,
 tenant round-robin dispatch, identical 1/2/4 worker logical results and the

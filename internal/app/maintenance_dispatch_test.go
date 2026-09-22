@@ -192,3 +192,50 @@ func TestMaintenanceMakesProgressWithShortSpareIntervals(t *testing.T) {
 		}
 	})
 }
+
+func TestBudgetCanceledLargeMaintenanceEventuallyGetsFreshSpareWindow(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		runtime := &Runtime{nativeTasks: NewNativeTaskGate()}
+		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer cancel()
+		var nextClaim time.Time
+		attempts, completed, otherClaims := 0, 0, 0
+		work := []workerOperation{
+			{"conversion", func(context.Context) (bool, error) { return false, nil }},
+			{"retention", func(context.Context) (bool, error) {
+				if attempts > 0 {
+					otherClaims++
+				}
+				return false, nil
+			}},
+			{"compaction", func(taskContext context.Context) (bool, error) {
+				if time.Now().Before(nextClaim) {
+					return false, nil
+				}
+				attempts++
+				// Match the real canceled claim's lease expiry, not an immediate
+				// retry that changes the production failure trajectory.
+				nextClaim = time.Now().Add(workerLease)
+				select {
+				case <-taskContext.Done():
+					return true, taskContext.Err()
+				case <-time.After(9 * time.Second):
+					completed++
+					cancel()
+					return true, nil
+				}
+			}},
+		}
+		if err := runtime.runWorkerGroup(ctx, work); err != nil {
+			t.Fatal(err)
+		}
+		if completed != 1 || attempts < 2 || otherClaims == 0 {
+			t.Fatalf("large work starved or froze other maintenance: completed=%d attempts=%d other=%d", completed, attempts, otherClaims)
+		}
+		idle := runtime.stats.entries["maintenance_spare"].busy
+		spent := runtime.stats.entries["compaction"].elapsed + runtime.stats.entries["retention"].elapsed
+		if spent > idle/4 || runtime.stats.entries["maintenance_budget_overrun"].calls != 0 {
+			t.Fatalf("retry progress bypassed accounting: idle=%s work=%s", idle, spent)
+		}
+	})
+}

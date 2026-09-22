@@ -66,7 +66,10 @@ func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperati
 	idle := make([]string, 0, len(work))
 	budget := maintenanceTimeBudget{origin: time.Now()}
 	hasMaintenance := slices.ContainsFunc(work, func(operation workerOperation) bool { return maintenanceOperation(operation.name) })
-	var maintenanceRetryAt time.Time
+	// Fixed worker slots bound this state. A deadline-canceled operation waits
+	// for a fresh accounting window; repeated partial rewrites must not consume
+	// the very idle credit needed to finish. Other maintenance remains eligible.
+	maintenanceRetryAt := make([]time.Time, len(work))
 	for ctx.Err() == nil {
 		idle = idle[:0]
 		var progressed bool
@@ -97,10 +100,10 @@ func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperati
 			idle = append(idle, work[index].name)
 		}
 		maintenanceFailed := false
-		if !progressed && err == nil && hasMaintenance && ctx.Err() == nil && !time.Now().Before(maintenanceRetryAt) {
+		if !progressed && err == nil && hasMaintenance && ctx.Err() == nil {
 			for offset := range work {
 				index := (next + offset) % len(work)
-				if !maintenanceOperation(work[index].name) {
+				if !maintenanceOperation(work[index].name) || time.Now().Before(maintenanceRetryAt[index]) {
 					continue
 				}
 				started := time.Now()
@@ -112,6 +115,7 @@ func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperati
 				// run joins native/IO work and cleanup before it returns. A
 				// deadline requests cancellation; it never releases ownership.
 				progressed, err = work[index].run(taskContext)
+				budgetExpired := errors.Is(taskContext.Err(), context.DeadlineExceeded)
 				cancel()
 				finished := time.Now()
 				budget.record(started, finished, true)
@@ -122,7 +126,11 @@ func (runtime *Runtime) runWorkerGroup(ctx context.Context, work []workerOperati
 				if err != nil {
 					// A frozen GC interlock or a maintenance retry must not
 					// put ready foreground work to sleep with this attempt.
-					maintenanceRetryAt = finished.Add(250 * time.Millisecond)
+					retryDelay := 250 * time.Millisecond
+					if budgetExpired {
+						retryDelay = maintenanceWindow
+					}
+					maintenanceRetryAt[index] = finished.Add(retryDelay)
 					maintenanceFailed = true
 				}
 				if err != nil || progressed {
