@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1–R2 have implementations and scoped tests. R3 remains the first incomplete packet: historical1/2/4-worker official-duration runs pass the former targets, but corrected clean02c98f2 one-worker measurements fail both query SLOs despite passing data/maintenance/resource checks. The runner stops before2/4 workers. Independent fixed-work capacity/efficiency passes on4ced580; the subsequent bounded conversion/shared-disk correction and full native oracle also have scoped passes.
+G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1–R2 have implementations and scoped tests. R3 remains the first incomplete packet: historical1/2/4-worker official-duration runs pass the former targets, but the latest corrected clean04ec2c2 one-worker profile passes rows404ms while histogram874ms still fails500ms. Data/maintenance/resource checks pass; the runner stops before2/4 workers. Independent fixed-work capacity/efficiency passes on4ced580; the subsequent bounded conversion/shared-disk correction and full native oracle also have scoped passes.
 M2 physical GC stays frozen whenever M4's signed coordinated backup attestation is absent or older than 24 hours.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
@@ -419,6 +419,18 @@ help does not steal work. An actual single-worker PG/S3/native fixture changes
 A/A/B to A/B/A while preserving exact results and cross-tenant denial. These
 are correctness checks, not a measured throughput improvement; multi-worker
 skew and corrected official-duration SLOs still keep R3/R4 incomplete.
+
+The subsequent actual1/2/4-process conversion/query fixtures pass three samples
+each, checking every worker's participation, exact identities, authorization,
+first untouched-tenant turn and recording claim-count skew. All processes share
+one bounded test cgroup; this is queued-work correctness, not per-replica
+throughput or elapsed-time fairness. The frozen clean04ec2c2 official run also
+completes all four native dataset oracles and exact220,500 public records, with
+backlog0, restart/cache/maintenance checks and OOM0. Rows/histogram p95 improve
+from02c98f2's591/1,737ms to404/874ms under the same duration/resource/load profile,
+but histogram still exceeds500ms. The command exits1 before corrected2/4-worker
+profiles. Keep R3 and R4 incomplete; retain the full measured tradeoffs in
+quality.md rather than treating these passes as release completion.
 
 ## Failure-injection matrix (stable acceptance IDs)
 

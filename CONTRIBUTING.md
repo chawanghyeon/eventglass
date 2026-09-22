@@ -133,14 +133,22 @@ ARM64. It is not a real dispatch or throughput benchmark. The old test-local
 round-robin algorithm was removed because it never called product scheduling.
 The integration gate instead runs `TestConversionTenantTurnsActualWorker`, using
 actual two-tenant ACK/publication, a bounded private-schema claim audit and the
-pinned engine's complete analytics/payload ID oracle. Its single-worker result
-does not close multi-worker fairness requirements. The same native gate runs
+pinned engine's complete analytics/payload ID oracle. The same native gate runs
 `TestPublicQueryEndToEndTenantTurnsActualWorker`: actual Parquet/S3 fixtures,
 authorized Submission/Awaiter, the product worker, exact result identities and
 cross-tenant result denial verify background query turns. This is not a durable
 ingest or throughput test. PostgreSQL tests separately exercise a saturated
 older query, targeted helper isolation, concurrent per-query caps, cancellation,
 stale generation and cursor wrap; metadata-only plans are labeled as such.
+The plural `ActualWorkers` variants run two and four real worker processes,
+paused after their first idle sweep while the bounded fixture is queued, then
+resumed together. Every process must claim work, an untouched second tenant
+must appear within one initial turn per worker plus one, and the same exact-ID
+and authority oracles apply. Claim audit sequence is not global commit order or
+an elapsed-time fairness guarantee. For repeated correctness checks, compile
+the native integration binary first and run both singular/plural conversion
+and query tests with `-test.count=3`; a shared CPU1/512MiB/swap0 test cgroup is
+not the per-replica resource profile or a throughput/scaling measurement.
 
 `./scripts/check comparison` runs the R3 end-to-end comparison against fresh
 PostgreSQL and MinIO installations with 1, 2, and 4 ARM64 workers. The official

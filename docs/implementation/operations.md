@@ -421,7 +421,11 @@ filters it out, and a fresh count after the query-row lock still enforces the
 cap under races. SKIP LOCKED may defer contested work until the next sweep.
 The synchronous request helper stays targeted to its own query, outside this
 background cursor. Actual single-worker searches check A/B/A turns, exact
-results and cross-tenant rejection; multi-worker skew remains R3 work.
+results and cross-tenant rejection. Two/four-process native fixtures also check
+every worker's participation, exact results and the first untouched tenant's
+bounded turn, recording claim-count skew across three repetitions. This is
+finite queued-work correctness, not global commit ordering, elapsed-time
+fairness under continuous arrivals or per-replica throughput evidence.
 
 The implemented `deploy/kubernetes/base.yaml` baseline selects Linux ARM64 at
 release scheduling time and fixes resource requests/limits, startup/

@@ -55,8 +55,7 @@ bound preserves full SHA verification, ordered inputs and joined cancellation.
 Real S3 download microbenchmarks improve, with higher RSS; the same short service
 profile changes295/566→303/548ms and still fails histogram500ms. Native maximum-
 pair direct/dispatcher, actual S3 failure/retry, full integration including10,000
-event days, child contracts and browser checks pass. No official profile has
-been rerun for that change yet. The following six-cohort selector reduces a real
+event days, child contracts and browser checks pass. The following six-cohort selector reduces a real
 mixed-size PG/S3/native rewrite149.0→132.0ms and GET2.48MB→92KB, but may leave
 more quiet files. Its short-service306/558ms is not better than303/548ms and still
 fails histogram500ms; correctness/native/browser checks pass, not R3 completion.
@@ -66,7 +65,14 @@ resource executions, with zero OOM or budget overrun but no memory headroom.
 These local results are not full-service SLO or release claims. R3
 also now has a real one-worker conversion fairness regression: an app-owned
 cursor prevents an older queue taking consecutive equally occupied turns after
-completion. Query and multi-worker skew still need verification. R3
+completion. A separate query cursor/capacity filter passes exact results,
+cross-tenant denial and concurrent task caps. Actual1/2/4-process conversion and
+query queued-work fixtures now pass three repetitions, recording claim-count
+skew and requiring participation by every process; these are not continuous-load
+or elapsed-time fairness measurements. The latest clean04ec2c2 official profile
+passes rows404ms, exact220,500 public records, maintenance/resource/restart/cache
+checks and the full native oracle, but histogram874ms still fails500ms. Corrected
+official2/4-worker profiles do not start after that failure. R3
 remains the first incomplete packet and R4 remains dependency-blocked. Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises

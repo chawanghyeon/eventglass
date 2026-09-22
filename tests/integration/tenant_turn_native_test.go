@@ -22,6 +22,19 @@ import (
 // records actual conversion claims only; it is bounded test instrumentation,
 // not a product hook or a throughput measurement.
 func TestConversionTenantTurnsActualWorker(t *testing.T) {
+	checkConversionTenantTurnsActualWorkers(t, 1)
+}
+
+func TestConversionTenantTurnsActualWorkers(t *testing.T) {
+	for _, workers := range []int{2, 4} {
+		t.Run(fmt.Sprintf("workers-%d", workers), func(t *testing.T) {
+			checkConversionTenantTurnsActualWorkers(t, workers)
+		})
+	}
+}
+
+func checkConversionTenantTurnsActualWorkers(t *testing.T, workerCount int) {
+	t.Helper()
 	fixture := setupAcceptFixture(t, 1791)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -32,17 +45,26 @@ func TestConversionTenantTurnsActualWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var workers []*maintenanceRuntime
+	var resume func()
+	if workerCount > 1 {
+		workers, resume = startPausedTenantWorkers(t, ctx, fixture, prefix, workerCount)
+	}
+	firstCount, secondCount := 12, 4
+	if workerCount > 1 {
+		firstCount, secondCount = 24, 8
+	}
 	expected := map[int64][]string{}
 	for index, target := range []*acceptFixture{fixture, second} {
 		workflow := integrationWorkflow(t, target, ops, store, fmt.Sprintf("tenant-turn-%d", index))
-		count := 12
+		count := firstCount
 		if index == 1 {
-			count = 4
+			count = secondCount
 		}
 		for batch := range count {
 			command := integrationCommand(t, target, target.projectID, target.auth, target.uuidForLane(batch%16), fmt.Sprintf("tenant turn %d/%d", index, batch))
 			command.Request, err = ingest.NormalizeEnvelope(sdk.Envelope{Items: []sdk.Item{{Ordinal: 0, Type: "event", Value: map[string]any{
-				"event_id": fmt.Sprintf("%032x", index*16+batch+1), "message": fmt.Sprintf("tenant turn %d/%d", index, batch),
+				"event_id": fmt.Sprintf("%032x", index*32+batch+1), "message": fmt.Sprintf("tenant turn %d/%d", index, batch),
 			}}}}, ingest.NormalizeOptions{TenantID: target.tenantID, ProjectID: target.projectID, AcceptanceID: command.Request.AcceptanceID, ArrivalTime: time.Unix(1, 0)})
 			if err != nil {
 				t.Fatal(err)
@@ -56,18 +78,21 @@ func TestConversionTenantTurnsActualWorker(t *testing.T) {
 		slices.Sort(expected[target.tenantID])
 	}
 	if _, err := fixture.pool.Exec(ctx, `CREATE TABLE test_claim_order (
-		ordinal BIGSERIAL PRIMARY KEY CHECK(ordinal<=64),tenant_id BIGINT NOT NULL,job_id UUID NOT NULL,attempt INTEGER NOT NULL);
+		ordinal BIGSERIAL PRIMARY KEY CHECK(ordinal<=64),tenant_id BIGINT NOT NULL,job_id UUID NOT NULL,attempt INTEGER NOT NULL,owner TEXT NOT NULL);
 		CREATE FUNCTION test_record_claim() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
 		  IF NEW.state='running' AND NEW.prepared_output_id IS NULL AND NEW.attempt>OLD.attempt THEN
-		    INSERT INTO test_claim_order(tenant_id,job_id,attempt) VALUES(NEW.tenant_id,NEW.job_id,NEW.attempt);
+		    INSERT INTO test_claim_order(tenant_id,job_id,attempt,owner) VALUES(NEW.tenant_id,NEW.job_id,NEW.attempt,NEW.owner);
 		  END IF;
 		  RETURN NEW;
 		END $$;
 		CREATE TRIGGER test_claim_order AFTER UPDATE ON jobs FOR EACH ROW EXECUTE FUNCTION test_record_claim()`); err != nil {
 		t.Fatal(err)
 	}
-	worker := startMaintenanceRuntime(t, ctx, fixture, prefix)
-	defer worker.stop()
+	if workerCount == 1 {
+		workers = []*maintenanceRuntime{startMaintenanceRuntime(t, ctx, fixture, prefix)}
+	} else {
+		resume()
+	}
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
@@ -75,24 +100,32 @@ func TestConversionTenantTurnsActualWorker(t *testing.T) {
 		if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FROM jobs WHERE state='completed'`).Scan(&completed); err != nil {
 			t.Fatal(err)
 		}
-		if completed == 16 {
+		if completed == firstCount+secondCount {
 			break
+		}
+		for _, worker := range workers {
+			select {
+			case <-worker.done:
+				t.Fatalf("worker stopped early: %v", worker.err)
+			default:
+			}
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("publication incomplete: %d/16: %v", completed, ctx.Err())
-		case <-worker.done:
-			t.Fatalf("worker stopped early: %v", worker.err)
+			t.Fatalf("publication incomplete: %d/%d: %v", completed, firstCount+secondCount, ctx.Err())
 		case <-ticker.C:
 		}
 	}
-	worker.stop()
+	for _, worker := range workers {
+		worker.stop()
+	}
 	var turns []int64
-	if err := fixture.pool.QueryRow(ctx, `SELECT array_agg(tenant_id ORDER BY ordinal) FROM test_claim_order`).Scan(&turns); err != nil {
+	var owners int
+	if err := fixture.pool.QueryRow(ctx, `SELECT array_agg(tenant_id ORDER BY ordinal),count(DISTINCT owner) FROM test_claim_order`).Scan(&turns, &owners); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("actual single-worker conversion claim order=%v", turns)
-	if len(turns) != 16 {
+	t.Logf("actual conversion workers=%d claim order=%v", workerCount, turns)
+	if len(turns) != firstCount+secondCount {
 		t.Fatalf("unexpected retries/claims=%d", len(turns))
 	}
 	// Read every actual current analytics and payload file after shutdown. The
@@ -155,7 +188,11 @@ func TestConversionTenantTurnsActualWorker(t *testing.T) {
 			}
 		}
 	}
-	for index := range 8 {
+	if workerCount > 1 {
+		checkMultipleWorkerTenantTurns(t, workerCount, turns, fixture.tenantID, second.tenantID, firstCount, secondCount, owners)
+		return
+	}
+	for index := range 2 * secondCount {
 		want := fixture.tenantID
 		if index%2 == 1 {
 			want = second.tenantID

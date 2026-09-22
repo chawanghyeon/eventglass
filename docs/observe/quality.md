@@ -2800,6 +2800,140 @@ binds (`unit.log`); the unchanged check passed with local-network permission.
 Correctness checks can overlap and their times are not paired benchmarks.
 No schema/API change required regenerated contracts or capability-gate changes.
 
+### Official-duration verification after bounded maintenance and tenant scheduling
+
+The frozen clean `04ec2c2bdc878259f0dd2d6e8773405a7067e735` product completes
+the full native oracle and one-worker official service profile, but the outer
+`scripts/check comparison` correctly exits1: histogram p95 still exceeds500ms.
+No quick/reused-product override or threshold change was used. The native-oracle
+build image is `sha256:371b49f514d0c30d30e979f74626302761c3d9c955d67d832de95717042a40df`;
+comparison build/runtime images are
+`sha256:7132b6e65cdae3d37ce9cf06bffaa644e5fda16ee595043e118726dbea220a53` /
+`sha256:294f02808dfe2a4f8466ae72929c82e02086c7b589041f1df1012b87315e7365`.
+The product binary is `517c3d57cbd6c8af52529bd37e54fcd8df8ee5d57c335df83b793f6bdb4843e0`,
+with the unchanged pinned native library. Product, comparison sources and
+compiled measurement inputs stayed frozen; unrelated integration-test additions
+were edited only after compilation and were neither mounted nor executed in
+this measurement. No competing builds or tests ran during observation.
+
+`.tools/native-oracle.62xXNy` retains all four successful10k/100k/1m/10m runs,
+their exit states, input/source/image hashes and resource evidence. Elapsed time
+is1,775/10,376/96,032/956,124ms with OOM0. The10m actual envelope SHA remains
+`1497dc8c86ac7ed8990b081b5d74e71833a75ef3185a4e6529fdb218aca2f5ec`;
+2,196 analytics files hold528,495,771B from682,231,716 journal bytes.
+Supervisor cumulative allocations272,562,880,144B are not RSS; the kernel peak
+536,875,008B reaches the512MiB boundary with reclaim, not memory headroom.
+These network-denied native oracles make zero S3 requests and do not measure
+service throughput.
+
+Service evidence is `.tools/comparison-report-1.HEZiKz/report.json`, resource
+samples, all three worker incarnation observations and retained runtime logs;
+the outer log is `.tools/query-scheduling-official-comparison.log`.
+The actual SIGKILL replacement starts at10:08:43UTC. Warmup/load/drain limits,
+offered logical100 logs/s+5 errors/s, CPU1/512MiB/swap0 per Go role, Go1.27.1,
+native engine and local PG/MinIO profile match the earlier clean02c98f2 run.
+The table compares these official-duration observations, not the shorter
+diagnostics or an isolated attribution to one of the intervening changes.
+
+| Measurement |02c98f2|04ec2c2|
+|---|---:|---:|
+| Rows / histogram p95 |591/1,737ms|404/874ms|
+| Rows / histogram durable-job p95 |196/1,248ms|155/646ms|
+| Rows / histogram pre/post-job overhead p95 |468/478ms|251/251ms|
+| ACK / visibility p95 |370/1,049ms|370/821ms|
+| Public queries / failures |359/0|360/0|
+| Maximum selected files |2,117|878|
+| Final backlog / drain |0/2,009ms|0/1,004ms|
+| Main maintenance attempts / observed idle |82,330/448,000ms|97,446/448,100ms|
+| Sampled whole-installation peak |2,010,015,332B|1,920,068,483B|
+| Worker cgroup peak |213,065,728B|138,022,912B|
+| S3 PUT count / bytes |39,026/293,132,090B|39,294/241,854,491B|
+| S3 HEAD count |823,728|573,291|
+| S3 full GET count / bytes |98,433/711,846,998B|101,099/613,859,945B|
+| S3 Range count / bytes |12,937/148,037,541B|12,835/129,040,927B|
+| PG WAL |692,682,648B|666,788,112B|
+
+Both runs return exactly210,000 logs+10,500 errors through public queries,
+with no conflicts, OOM events, OOM kills or maintenance-budget overruns. The new
+backlog maximum21 and slope+0.00537794/min pass the existing tolerance, not a
+negative-slope claim. Load-end completed compactions total723; raw counters
+include failed/no-work maintenance attempts. The cost model estimates715.57USD/
+month under its dated assumptions, versus840.84USD; neither is a cloud bill.
+Actual71,563 envelopes/293,597,622B have framed SHA
+`30f18f61d89146187ebddaa085bb4d285eefa98089a3de66a17f06f46ea9f374`.
+Fresh identities, retries and scheduling differ between runs; full GET and PUT
+request counts increase. No broad cost/memory superiority or per-query allocation
+claim follows from these single service observations.
+
+Independent post-load checks pass in62.41s: new-worker cold/warm same-snapshot
+rows take1,191/995ms, with Range793/4 and18,928,028/32,930B. Provider/OS caches
+are not cleared. Full replacement-worker maintenance takes7,113ms against
+49,800ms observed idle, with zero budget overruns;60s idle adds no query work.
+The retained post-load compaction failure is counted, not excluded. Missing
+signed backup evidence still blocks physical GC. Rows now pass500ms but
+histogram874ms fails, so corrected2/4-worker profiles do not start and R3/R4
+remain incomplete. Native, data, cache and resource passes cannot override it.
+
+### Actual two/four-worker tenant claim observations
+
+The existing native conversion and public-query fixtures now share only a
+bounded test-process startup helper, not a new product scheduler abstraction.
+For two/four replicas, it waits for each real worker's first idle query sweep,
+pauses those processes, queues the finite workload, then resumes them. A cleanup
+registered after all process cleanups resumes paused workers before TERM/join;
+the ordinary runtime helper waits for termination before deleting scratch.
+Readiness uses a context-bound one-second HTTP timeout, bounded transport and
+64KiB response; each isolated-schema audit is limited to64 rows.
+
+Conversion submits24 A+8 B real durable one-record ACK jobs. After all workers
+join, every normalized record ID must appear exactly once in both current S3
+Parquet roles. Query submits8 A+8 B ordinary async Submission/Awaiter searches,
+using four principals per tenant within the unchanged2/user and8/tenant limits.
+Every result must contain the three expected IDs and correct project, and A
+cannot retrieve B's result. Each requested worker must actually claim work;
+there are no retries or missing claims. Single-worker original12+4 conversion
+and2+1 query fixtures retain their strict alternating/A-B-A assertions.
+
+`.tools/multiple-tenant-workers.os3B3p/{environment.txt,run.log}` records three
+repetitions of all six fixtures,18 passing executions in total. The unchanged
+04ec2c2 product binary/library hashes are above; current tests compile against
+comparison-build `7132b6e65cdae3d37ce9cf06bffaa644e5fda16ee595043e118726dbea220a53`.
+The test binary SHA is
+`d14dadf814e794a6c01ee2ea95c87174b0d7b479b213e59391e06e4abf6e4a9a`;
+all three test-source hashes are retained alongside it. No heavy correctness
+check overlapped the official service measurement.
+
+| Fixture | Processes | B first claim, three samples | Maximum prefix count skew, three samples |
+|---|---:|---|---|
+| Conversion24+8 |2|3,3,3|3,2,3|
+| Conversion24+8 |4|4,5,3|3,5,2|
+| Query8+8 |2|3,3,3|2,2,2|
+| Query8+8 |4|5,5,5|4,4,4|
+
+Skew is the absolute claim-count difference while both tenants still have
+unclaimed work. The first B claim is bounded by processes+1 because each fresh
+worker can initially select A once. We record, rather than promise a universal
+bound for, later skew. Audit sequence allocation is not a strict cross-process
+commit/completion order. These finite preloaded fixtures exclude startup skew
+and do not establish time fairness under continuous arrivals or starvation
+bounds over arbitrary workloads.
+
+The test driver and all its workers share one Linux ARM64 CPU1/512MiB/swap0,
+non-root/read-only cgroup,128MiB scratch, GOMEMLIMIT96MiB/GOMAXPROCS1; PG/MinIO
+are disposable and outside it. Peak215,158,784B, OOM events/kills0 and exit0
+are correctness-test observations, not the per-replica resource/throughput
+profile. No latency improvement, S3 cost or service allocation claim is made.
+
+Additional checks pass: Go1.27.1 ARM64 unit/layout/architecture/vet and
+byte-identical codegen, complete host PG/S3 integration30.797s, selected pinned
+native query/Live/authority/snapshot/retention/compaction integration60.437s,
+child contracts0.913s and freshly built final-image Chromium3.0s. Relevant
+failure/retry/cancellation and authorization cases remain in those suites;
+none are skipped. Logs use `.tools/multiple-tenant-{unit,codegen,integration,
+contracts,browser}.log` and `.tools/multiple-tenant-workers-check.log`.
+No product implementation, API schema, native budget or backup-GC interlock
+changes in this test increment; the capability map keeps R3/R4 pending.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

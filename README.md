@@ -4,7 +4,7 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00–G06 have implemented baselines and scoped executable evidence. G05 connects the complete operator surface; M1–M4 implement compaction, fail-closed retention/GC, verified Range/block caching, and coordinated PostgreSQL/WAL/S3 recovery. Physical GC remains frozen whenever signed recovery evidence is absent or older than 24 hours. R1 passes a Linux ARM64 CPU1/512MiB/swap0 two-minute containment gate at the target logical 100 logs/s+5 errors/s mix. R2 adds bounded autoscaling control and a 1/2/4 logical-equivalence harness. R3's historical 1/2/4-worker official-duration runs pass the former target map, but the audit found warmup-contaminated ACK samples and missing maintenance-budget evidence. The corrected clean02c98f2 official one-worker run now passes data/maintenance/resource checks but fails both query SLOs; the runner stops before2/4 workers. Independent fixed-work capacity/efficiency passes the clean4ced580 nine-installation matrix. Bounded conversion/shared-disk corrections pass a real10,000-day publication boundary and the full10k/100k/1m/10m native oracle. R3 and dependent R4 remain incomplete. No deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
+Current status: G00–G06 have implemented baselines and scoped executable evidence. G05 connects the complete operator surface; M1–M4 implement compaction, fail-closed retention/GC, verified Range/block caching, and coordinated PostgreSQL/WAL/S3 recovery. Physical GC remains frozen whenever signed recovery evidence is absent or older than 24 hours. R1 passes a Linux ARM64 CPU1/512MiB/swap0 two-minute containment gate at the target logical 100 logs/s+5 errors/s mix. R2 adds bounded autoscaling control and a 1/2/4 logical-equivalence harness. R3's historical 1/2/4-worker official-duration runs pass the former target map, but the audit found warmup-contaminated ACK samples and missing maintenance-budget evidence. The latest clean04ec2c2 official one-worker run passes rows p95=404ms and data/maintenance/resource checks, but histogram874ms still fails500ms; the runner stops before2/4 workers. Independent fixed-work capacity/efficiency passes the clean4ced580 nine-installation matrix. Bounded conversion/shared-disk corrections pass a real10,000-day publication boundary and the full10k/100k/1m/10m native oracle. R3 and dependent R4 remain incomplete. No deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
@@ -85,7 +85,13 @@ An app-owned conversion cursor fixes repeated older-tenant selection after work
 finishes. Real single-worker PG/S3/native tests preserve all IDs and rotate ready
 tenants. A separate query cursor and capacity filter also pass actual A/B/A
 search execution, exact results, cross-tenant denial and concurrent task caps.
-Multi-worker skew and sustained query SLOs remain unverified, not release claims.
+Actual1/2/4-process queued-work tests now pass three repetitions, preserving
+all IDs and checking each worker's participation and tenant claim-count skew.
+This is not elapsed-time fairness or per-replica throughput evidence. The latest
+clean04ec2c2 official profile measures404/874ms versus02c98f2's591/1,737ms;
+rows pass but histogram still fails500ms. Actual220,500 public records, restart,
+backlog0, maintenance accounting and OOM0 pass. Corrected official2/4 profiles
+and R4 remain open; see quality.md for full provenance and tradeoffs.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the
