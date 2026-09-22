@@ -150,13 +150,19 @@ current generation and no active reservation. Prefer >=8 files smaller than8MiB
 or predicted at least50% GET reduction, output target32–64MiB, max input256MiB
 compressed/128 bundles/task and estimated scratch allowance. Maximum one active
 maintenance task/lane. Small quiet datasets need not be rewritten forever.
-Candidate ranking compares the actually selectable prefix of each partition:
-oldest generation/ID order, at least8 inputs, stop after first reaching32MiB,
+Candidate ranking compares the actually selectable prefix of each size cohort
+within a partition. Paired compressed-byte boundaries16KiB/64KiB/256KiB/1MiB/4MiB
+form six fixed cohorts; exact boundary bytes belong to the larger cohort. This
+keeps a quiet larger replacement out of every newly arriving tiny-input rewrite.
+Within a cohort use oldest generation/ID order, at least8 inputs, stop after first reaching32MiB,
 never above128 inputs/256MiB. Prefer the largest prefix count (expected paired
 file/GET reduction), then the fewest rewrite bytes; use tenant/lane/partition
 order only for ties. Ranking an entire unbounded partition would overestimate
 the benefit of a prefix cut off by the size target. PostgreSQL returns only the
-winning prefix, at most128 rows. Reservation/fence checks remain authoritative;
+winning prefix, at most128 rows. Quiet cohorts below8 stay unmodified, so up to
+seven inputs per cohort can remain; this trades file count for less rewrite
+amplification, not a guaranteed query-latency improvement. Larger cohorts become
+eligible independently at8 inputs. Reservation/fence checks remain authoritative;
 selection does not promise fairness or alter the measured spare-time budget.
 Scheduler pauses maintenance if ingest oldest>5s or query queue>0.5s; at most20%
 of measured spare worker time per rolling60s, no stealing reserved ingest slots.

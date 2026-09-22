@@ -391,6 +391,16 @@ fails500ms. This is not the official-duration correction required above.
 R3 remains first incomplete, including fairness/complete scaling evidence;
 do not advance to a release claim on this scoped transport optimization.
 
+Size-cohort selection now keeps quiet large replacements out of tiny-input
+rewrites. Six fixed paired-byte cohorts preserve the existing minimum/target,
+128-input/256MiB ceilings, lane reservations and app budget. Actual PG boundary,
+quiet/progress/ranking tests and a durable-ingest/native/S3 identity oracle cover
+the policy. The matched mixed-size workflow median149.044→132.002ms and GET
+2,477,649→92,423B show scoped rewrite savings, not faster full-service queries:
+the short service pair measures303/548→306/558ms and still fails histogram500ms.
+More quiet files and selector cost2.157→2.554ms are explicit tradeoffs. R3 remains
+incomplete; official-duration query/fairness/scaling and R4 work remain required.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

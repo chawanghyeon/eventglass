@@ -2563,6 +2563,109 @@ Logs use `.tools/maintenance-download-{unit,codegen,race,verify,resource,
 integration,contracts,browser,comparison}.log`. API/schema, fences, authorization,
 native limits and the signed-backup GC interlock are unchanged.
 
+### Fixed size-cohort compaction selection
+
+Control now selects within six paired compressed-byte cohorts, with boundaries
+16KiB/64KiB/256KiB/1MiB/4MiB. This is a scheduling refinement allowed by DESIGN12,
+not a data-corruption fix or a new storage layout. The existing oldest prefix,
+minimum8,32MiB target,128-input/256MiB ceilings, one active task/lane, pressure,
+reservation/fencing and app-owned maintenance budget remain. Quiet cohorts can
+retain seven inputs each, explicitly trading more files for fewer rewrites.
+There is no fairness, query-SLO or whole-system throughput claim.
+
+Actual PG tests cover every exact size boundary, quiet7+7, ready8+8, independent
+larger-cohort progress, mixed-count ranking, reservation, active lane exclusion
+and the existing cancellation/limit cases. Baseline22dcdbb selects an old10MiB
+pair plus eight8KiB pairs (10,551,296B); the candidate selects only the65,536B
+small cohort. Equal-count large/small cohorts select83,886,080→65,536B. These
+first two figures are catalog metadata, not actual S3/Parquet measurements.
+Evidence: `.tools/compaction-tiers-before.XDC4vw` and
+`.tools/compaction-tiers-after.qHPm1p`. Five samples of ten selector calls after
+warmup use the same logical168-bundle catalog and fresh bounded ARM64 containers.
+Median cost2.157140→2.554424ms increases; both select128 inputs and make two PG
+queries,69,153 Go B/op and2,213 allocs/op, with S3 count/bytes0. Process maximum
+RSS34,877,440→35,561,472B and cgroup34,308,096→35,295,232B include fixture setup;
+OOM/kill0. This is overhead, not a selector speedup.
+
+`TestCompactionSizeCohortNativeRewrite`, now included by the standard integration
+gate, supplies the missing actual-byte evidence. Nine durable ACK/conversion/
+publication batches produce one1,197,426B large pair and eight tiny pairs totaling
+79,637B. Five fresh isolated fixtures then time selection through fenced swap.
+The independent post-swap pinned-engine oracle reads both current Parquet roles
+and compares all12 exact IDs to durable occurrences, including the quiet pair.
+Baseline's only intended failure is selecting all nine instead of eight. The
+first draft oracle referenced the wrong file metadata columns; it was corrected
+before both retained measurements, not treated as a product failure or pass.
+
+Both sides compile before observation in the same Go1.27.1 ARM64/pinned-native
+image, replacing only control's selector source with baseline22dcdbb or candidate.
+Separate fresh CPU1/512MiB/swap0 non-root/read-only containers use128MiB scratch,
+GOMEMLIMIT96MiB/GOMAXPROCS1 and disposable PG/MinIO. No other test/build overlaps
+timing. Fresh IDs/timestamps make this the same logical workload, not identical
+file bytes. Fixture/oracle CPU time and S3 reads are outside the measured workflow.
+Evidence: `.tools/compaction-tier-native-before.kTqd50` and
+`.tools/compaction-tier-native-after.C85mmm`; rejected first draft is `.MPphLi`.
+
+| Mixed-size workflow, median unless stated | Before | Cohorts |
+| --- | ---: | ---: |
+| Selection through swap |149.044465ms|132.001774ms|
+| Go allocation / allocations |3,744,120B /15,528|3,412,336B /14,278|
+| Actual S3 full GET count / bytes |20 /2,477,649B|18 /92,423B|
+| Actual S3 PUT count / bytes |2 /1,200,586B|2 /12,786B|
+| Actual HEAD / Range count |2 /0|2 /0|
+| Parent max RSS, includes fixture/oracle |87,367,680B|87,146,496B|
+| Combined cgroup peak, includes children/setup/oracle |136,417,280B|137,076,736B|
+
+All12 IDs remain exact; OOM/kill0. Cgroup peak increases, so no memory saving is
+claimed. This proves reduced repeated large-pair rewriting, not greater sustained
+ingestion capacity. Test-source SHA is
+`97c951e0c542855cd0b7861932a1cd7edfc9d732d1cd912da5a660f08e6af065`.
+Baseline/candidate selector SHAs are `0bec2148f42225740b15b68002fdba4775a2d3dbf103645b0af9200b2892270f`
+and `74652a700e8d680fc99030c0d6e5bc49f83739e6a67ba9fae35f3d994a14285c`.
+
+The unchanged20s/300s/90s real-service profile compares prior `.h8LAhb` with
+`.tools/comparison-report-1.FddXVM/report.json`. Fresh candidate binary SHA is
+`2048f7984ba32f02f2b0d921d96a426d218abdf3aecf5480c3c1f62892d0b71b`, build image
+`sha256:b15b4ae25515d8f9bbaa9ac3151a2c19544df13d82b6cd4d29f9a61a48096fec`;
+the pinned native library is unchanged. No reused application or other load runs.
+
+| Actual short service | Before | Cohorts |
+| --- | ---: | ---: |
+| Rows / histogram p95 |303 /548ms|306 /558ms|
+| Histogram durable-job p95 |390ms|387ms|
+| ACK / visibility p95 |371 /750ms|372 /748ms|
+| Maximum query files |601|605|
+| Completed compactions / work steps |117 /241|121 /251|
+| All maintenance attempts / observed idle |15,271 /74,700ms|15,628 /77,200ms|
+| Sampled whole-installation peak |788,207,236B|794,473,527B|
+| Worker cgroup peak |71,512,064B|68,087,808B|
+| S3 PUT count / bytes |5,967 /35,528,788B|5,965 /34,487,563B|
+| S3 HEAD count |51,132|51,496|
+| S3 full GET count / bytes |14,593 /86,156,852B|14,554 /83,776,597B|
+| S3 Range count / bytes |2,027 /19,500,180B|2,040 /19,111,638B|
+| PG WAL |75,054,136B|74,946,720B|
+
+Both return33,600 exact public records,60 successful queries, final backlog0,
+OOM0 and passing main/post-load maintenance accounting. Candidate max backlog12,
+slope−0.238604/min; no overrun. Cold/warm same-snapshot rows818/605ms, Range550/3
+and6,510,070/24,515B;10s idle adds no query work. Post-load attempts1,759ms versus
+8,100ms idle pass. Actual input10,875 envelopes/44,524,233B has framed SHA
+`e09c2ae1c0f4e66d2cff079145d1993582eb19c7ee42ad7e8075df3e7ac5a469`.
+Histogram558ms still fails500ms and the command exits1. Variation in generated
+IDs, retries and scheduling precludes a whole-service speedup/cost attribution.
+Official-duration query correction, fairness/scaling and dependent R4 remain open.
+
+Executed candidate checks: ARM64 Go1.27.1 unit/layout/architecture/vet and
+byte-identical codegen; complete host PG/S3 suite30.057s; selected pinned-native
+query/Live/authority/retention/snapshot/compaction suite61.263s, including the new
+real size-cohort test; child-process contracts1.032s; freshly built final-image
+Chromium3.0s. These correctness checks overlap each other, not either measurement.
+The unchanged10,000-day conversion boundary and maximum-pair direct/dispatcher
+checks were not rerun for this control-only increment; their22dcdbb evidence is
+above. Logs use `.tools/compaction-tiers-{unit,codegen,integration,contracts,
+browser,comparison}.log` and `.tools/compaction-tier-native-*.log`. No API/schema,
+native engine/limit, ingest/query ownership, authority or backup interlock changed.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

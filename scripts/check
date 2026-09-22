@@ -104,7 +104,7 @@ integration() {
     -e AWS_ACCESS_KEY_ID=eventglass-local \
     -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
     -w /src eventglass-go:integration-build \
-    go test -tags=duckdb_use_static_lib -count=1 -run '^(TestPublicQueryEndToEnd|TestMaintenanceEndToEnd)' -v ./tests/integration
+    go test -tags=duckdb_use_static_lib -count=1 -run '^(TestPublicQueryEndToEnd|TestMaintenanceEndToEnd|TestCompactionSizeCohortNativeRewrite)' -v ./tests/integration
   # Compile outside the bounded runtime: compiler memory is not worker memory.
   docker run --rm --platform linux/arm64 --network none \
     -v "$conversion_artifacts:/tests" eventglass-go:integration-build \

@@ -77,6 +77,10 @@ The next bounded maintenance-download change reduces actual same-input S3
 download time but increases benchmark RSS. Its matched short service profile
 measures303/548ms versus295/566ms; histogram still fails500ms. No official SLO
 pass or broad cost/memory improvement is inferred from that small difference.
+Size-cohort compaction avoids repeatedly rewriting a quiet large pair with tiny
+arrivals. Actual mixed-size workflow median149.0→132.0ms and GET2.48MB→92KB
+are scoped savings; the short service306/558ms still fails histogram500ms and
+does not improve on303/548ms. Quiet cohorts may retain more files. R3 stays open.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the

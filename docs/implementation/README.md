@@ -56,7 +56,11 @@ Real S3 download microbenchmarks improve, with higher RSS; the same short servic
 profile changes295/566→303/548ms and still fails histogram500ms. Native maximum-
 pair direct/dispatcher, actual S3 failure/retry, full integration including10,000
 event days, child contracts and browser checks pass. No official profile has
-been rerun for that change yet. Separately, typed sizing, bounded native
+been rerun for that change yet. The following six-cohort selector reduces a real
+mixed-size PG/S3/native rewrite149.0→132.0ms and GET2.48MB→92KB, but may leave
+more quiet files. Its short-service306/558ms is not better than303/548ms and still
+fails histogram500ms; correctness/native/browser checks pass, not R3 completion.
+Separately, typed sizing, bounded native
 writer fan-in and app-owned retry admission pass two maximum-pair actual-worker
 resource executions, with zero OOM or budget overrun but no memory headroom.
 These local results are not full-service SLO or release claims. R3

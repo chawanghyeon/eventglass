@@ -68,6 +68,16 @@ at the exact received-time boundary, fully expired retirement, pinned old
 snapshot reads, authority revocation and retry/cancellation checks. It does not
 enable physical GC without signed backup evidence. Metadata-only maintenance
 fixtures are not a substitute for this end-to-end path.
+The native integration selection also includes
+`TestCompactionSizeCohortNativeRewrite`: five real nine-batch durable-ingest
+fixtures compare a quiet large pair with eight tiny pairs, run selection through
+swap, then independently read both current Parquet roles and check every accepted
+ID. Logs separate workflow time, Go allocations and S3 requests/bytes from fixture
+creation and the oracle. For paired policy-cost measurements, compile each control
+revision before running in separate fresh CPU1/512MiB/no-swap, non-root/read-only
+containers with128MiB scratch, GOMEMLIMIT96MiB/GOMAXPROCS1 and private PG/MinIO.
+Do not overlap builds/tests with measurement. Fresh IDs/timestamps make these
+equal logical fixtures, not byte-identical inputs or a sustained-throughput gate.
 The same gate runs the private downloader's `integration`-tagged real-MinIO
 missing-object, same-length corruption and restored-object retry checks.
 `BenchmarkMaintenanceDownloads` in `internal/maintenance` measures that concrete
