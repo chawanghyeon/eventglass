@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -29,6 +30,17 @@ import (
 // independent post-swap identity oracle. Fresh IDs/timestamps mean the five
 // logical repetitions are not byte-identical native-input benchmarks.
 func TestCompactionSizeCohortNativeRewrite(t *testing.T) {
+	testCompactionSizeCohortNativeRewrite(t, false)
+}
+
+// The retained disjoint policy leaves these near-equal inputs untouched. Read
+// both actual roles anyway; no-work must not imply missing or duplicated data.
+func TestCompactionSizeCohortNativeQuietBoundary(t *testing.T) {
+	testCompactionSizeCohortNativeRewrite(t, true)
+}
+
+func testCompactionSizeCohortNativeRewrite(t *testing.T, boundary bool) {
+	t.Helper()
 	for sample := range 5 {
 		t.Run(fmt.Sprint(sample), func(t *testing.T) {
 			binary := requiredEnvironment(t, "EVENTGLASS_TEST_BINARY")["EVENTGLASS_TEST_BINARY"]
@@ -58,17 +70,25 @@ func TestCompactionSizeCohortNativeRewrite(t *testing.T) {
 				Runner: app.ProcessConversionRunner{BinaryPath: binary, Gate: gate}, InstallationID: acceptInstallationID, ScratchDir: scratch, Disk: resources.Disk}
 			publisher := ingest.DurablePublicationWorkflow{Control: publication, Store: store}
 			random := rand.New(rand.NewSource(1774))
-			for batch := range 9 {
+			batches, expectedCount := 9, 12
+			if boundary {
+				batches, expectedCount = 8, 8
+			}
+			for batch := range batches {
 				command := integrationCommand(t, fixture, fixture.projectID, fixture.auth, fixture.uuidForLane(0), "unused")
 				count := 1
-				if batch == 0 {
+				if batch == 0 && !boundary {
 					count = 4
 				}
 				items := make([]sdk.Item, count)
 				for ordinal := range items {
 					value := map[string]any{"event_id": fmt.Sprintf("%032x", batch*4+ordinal+1), "message": fmt.Sprintf("size cohort %d/%d", batch, ordinal)}
 					if batch == 0 {
-						blob := make([]byte, 72<<10)
+						blobBytes := 72 << 10
+						if boundary {
+							blobBytes = 4 << 10
+						}
+						blob := make([]byte, blobBytes)
 						if _, err := random.Read(blob); err != nil {
 							t.Fatal(err)
 						}
@@ -109,7 +129,18 @@ func TestCompactionSizeCohortNativeRewrite(t *testing.T) {
 				WHERE b.tenant_id=$1 AND b.valid_from_generation>1`, fixture.tenantID).Scan(&tinyBytes); err != nil {
 				t.Fatal(err)
 			}
-			if largeBytes < 1<<20 || tinyBytes >= 128<<10 {
+			if boundary {
+				var below, above int
+				if err := fixture.pool.QueryRow(ctx, `SELECT count(*) FILTER (WHERE bytes>=8192 AND bytes<16384),
+					count(*) FILTER (WHERE bytes>=16384 AND bytes<32768) FROM
+					(SELECT sum(f.bytes) AS bytes FROM bundles b JOIN files f USING(bundle_id)
+					WHERE b.tenant_id=$1 AND b.valid_to_generation IS NULL GROUP BY b.bundle_id) sizes`, fixture.tenantID).Scan(&below, &above); err != nil {
+					t.Fatal(err)
+				}
+				if below != 7 || above != 1 {
+					t.Fatalf("real files do not straddle16KiB within shifted8–32KiB cohort: below=%d above=%d large=%d tiny=%d", below, above, largeBytes, tinyBytes)
+				}
+			} else if largeBytes < 1<<20 || tinyBytes >= 128<<10 {
 				t.Fatalf("fixture does not cover separate real size cohorts: large=%d tiny=%d", largeBytes, tinyBytes)
 			}
 			compactor := maintenance.Workflow{Control: operations, Store: store,
@@ -121,32 +152,45 @@ func TestCompactionSizeCohortNativeRewrite(t *testing.T) {
 			runtime.ReadMemStats(&before)
 			started := time.Now()
 			candidate, err := operations.FindCompactionCandidate(ctx)
-			if err != nil {
+			if boundary {
+				if !errors.Is(err, control.ErrMaintenanceNoWork) || len(candidate.BundleIDs) != 0 {
+					t.Fatalf("quiet boundary selection=%+v err=%v", candidate, err)
+				}
+			} else if err != nil {
 				t.Fatal(err)
 			}
-			_, err = operations.ReserveCompaction(ctx, control.ReserveCompactionCommand{InstallationID: acceptInstallationID, StorageGeneration: 1,
-				TaskID: uuid.NewString(), TenantID: fixture.tenantID, LaneID: 0, BundleIDs: candidate.BundleIDs})
-			if err != nil {
-				t.Fatal(err)
-			}
-			task, err := operations.ClaimCompaction(ctx, acceptInstallationID, "cohort-compactor", time.Minute)
-			if err != nil || task == nil {
-				t.Fatalf("compaction claim: %v %v", task, err)
-			}
-			if err := compactor.CompactAndPrepare(ctx, *task); err != nil {
-				t.Fatal(err)
-			}
-			prepared, err := operations.ClaimCompaction(ctx, acceptInstallationID, "cohort-swap", time.Minute)
-			if err != nil || prepared == nil || !prepared.Prepared {
-				t.Fatalf("swap claim: %v %v", prepared, err)
-			}
-			if _, err := compactor.Swap(ctx, *prepared); err != nil {
-				t.Fatal(err)
+			if !boundary {
+				_, err = operations.ReserveCompaction(ctx, control.ReserveCompactionCommand{InstallationID: acceptInstallationID, StorageGeneration: 1,
+					TaskID: uuid.NewString(), TenantID: fixture.tenantID, LaneID: 0, BundleIDs: candidate.BundleIDs})
+				if err != nil {
+					t.Fatal(err)
+				}
+				task, err := operations.ClaimCompaction(ctx, acceptInstallationID, "cohort-compactor", time.Minute)
+				if err != nil || task == nil {
+					t.Fatalf("compaction claim: %v %v", task, err)
+				}
+				if err := compactor.CompactAndPrepare(ctx, *task); err != nil {
+					t.Fatal(err)
+				}
+				prepared, err := operations.ClaimCompaction(ctx, acceptInstallationID, "cohort-swap", time.Minute)
+				if err != nil || prepared == nil || !prepared.Prepared {
+					t.Fatalf("swap claim: %v %v", prepared, err)
+				}
+				if _, err := compactor.Swap(ctx, *prepared); err != nil {
+					t.Fatal(err)
+				}
 			}
 			elapsed := time.Since(started)
 			runtime.ReadMemStats(&after)
 			afterIO := store.OperationCounts()
-			t.Logf("sample=%d selected=%d large_input_bytes=%d tiny_input_bytes=%d workflow_ns=%d go_bytes=%d go_allocs=%d S3_GET=%d S3_GET_bytes=%d S3_PUT=%d S3_PUT_bytes=%d S3_HEAD=%d S3_Range=%d", sample, len(candidate.BundleIDs), largeBytes, tinyBytes, elapsed.Nanoseconds(), after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs,
+			phase := "selection-through-swap"
+			if boundary {
+				phase = "no-work-selection-only"
+				if afterIO != beforeIO {
+					t.Fatal("no-work selection performed object I/O")
+				}
+			}
+			t.Logf("sample=%d phase=%s selected=%d large_input_bytes=%d tiny_input_bytes=%d elapsed_ns=%d go_bytes=%d go_allocs=%d S3_GET=%d S3_GET_bytes=%d S3_PUT=%d S3_PUT_bytes=%d S3_HEAD=%d S3_Range=%d", sample, phase, len(candidate.BundleIDs), largeBytes, tinyBytes, elapsed.Nanoseconds(), after.TotalAlloc-before.TotalAlloc, after.Mallocs-before.Mallocs,
 				afterIO.FullGetRequests-beforeIO.FullGetRequests, afterIO.FullGetBytes-beforeIO.FullGetBytes, afterIO.PutRequests-beforeIO.PutRequests, afterIO.PutBytes-beforeIO.PutBytes, afterIO.HeadRequests-beforeIO.HeadRequests, afterIO.RangeRequests-beforeIO.RangeRequests)
 			// Independent persisted occurrence IDs versus both actual current
 			// Parquet roles: the quiet large pair must remain queryable too.
@@ -154,7 +198,7 @@ func TestCompactionSizeCohortNativeRewrite(t *testing.T) {
 			if err := fixture.pool.QueryRow(ctx, `SELECT array_agg(record_id ORDER BY record_id) FROM issue_occurrences WHERE tenant_id=$1`, fixture.tenantID).Scan(&expected); err != nil {
 				t.Fatal(err)
 			}
-			if len(expected) != 12 {
+			if len(expected) != expectedCount {
 				t.Fatalf("accepted identity count=%d", len(expected))
 			}
 			db, err := engine.Open(ctx, "")
@@ -223,8 +267,12 @@ func TestCompactionSizeCohortNativeRewrite(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Logf("parent_maxrss=%d OS=%s (includes fixture and oracle; excludes child RSS)", usage.Maxrss, runtime.GOOS)
-			if slices.Contains(candidate.BundleIDs, largeID) || len(candidate.BundleIDs) != 8 {
-				t.Fatalf("quiet large pair was unnecessarily rewritten: selected=%d", len(candidate.BundleIDs))
+			wantSelected := 8
+			if boundary {
+				wantSelected = 0
+			}
+			if slices.Contains(candidate.BundleIDs, largeID) || len(candidate.BundleIDs) != wantSelected {
+				t.Fatalf("size selection differs from real fixture: boundary=%t selected=%d", boundary, len(candidate.BundleIDs))
 			}
 		})
 	}

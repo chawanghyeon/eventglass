@@ -439,6 +439,15 @@ histograms still failing500ms. Retain the new benchmark and negative evidence;
 the product keeps64KiB/file and8MiB/task staging. Do not treat this rejected
 candidate as an implemented improvement or rerun it without a new hypothesis.
 
+A two-grid compaction experiment was also rejected. It compacted a real eight-
+pair boundary fixture that the disjoint policy leaves quiet, but selector median
+cost increased2.470→3.252ms and matched short-service rows/histogram p95 changed
+293/585→302/625ms, with maximum queried files589→619. Exact33,600 public records,
+60 queries, backlog0, OOM0 and maintenance accounting pass in both, not the
+histogram500ms target. Restore the existing product/architecture; retain the
+actual-file quiet-boundary oracle, prefix-bound tests and negative measurements.
+Do not repeat this candidate without new evidence or mark R3/R4 complete.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

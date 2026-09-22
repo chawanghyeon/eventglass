@@ -101,6 +101,31 @@ func TestCompactionCandidateSizeTierBoundaries(t *testing.T) {
 	}
 }
 
+// Characterize the retained policy's boundary tradeoff. An overlapping-grid
+// candidate made progress here but did not improve the real service comparison.
+func TestCompactionCandidateQuietNearEqualBoundary(t *testing.T) {
+	for _, threshold := range []int64{16 << 10, 64 << 10, 256 << 10, 1 << 20, 4 << 20} {
+		t.Run(fmt.Sprint(threshold), func(t *testing.T) {
+			fixture := setupAcceptFixture(t, 1775)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := fixture.pool.Exec(ctx, `UPDATE lanes SET accepted_seq=32,published_seq=32,catalog_generation=2 WHERE tenant_id=$1 AND lane_id=0`, fixture.tenantID); err != nil {
+				t.Fatal(err)
+			}
+			seedCompactionSizeCohort(t, ctx, fixture, 0, 1, 7, threshold/2-1, "near-below")
+			seedCompactionSizeCohort(t, ctx, fixture, 0, 2, 1, threshold/2, "near-at")
+			operations, err := control.NewMaintenanceOperations(fixture.pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := operations.FindCompactionCandidate(ctx)
+			if !errors.Is(err, control.ErrMaintenanceNoWork) || len(candidate.BundleIDs) != 0 {
+				t.Fatalf("quiet boundary=%d unexpectedly selected=%d err=%v", threshold, len(candidate.BundleIDs), err)
+			}
+		})
+	}
+}
+
 func TestCompactionCandidateRanksReadyCohortNotMixedPartitionCount(t *testing.T) {
 	fixture := setupAcceptFixture(t, 1773)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -118,6 +143,53 @@ func TestCompactionCandidateRanksReadyCohortNotMixedPartitionCount(t *testing.T)
 	candidate, err := operations.FindCompactionCandidate(ctx)
 	if err != nil || candidate.LaneID != 1 || len(candidate.BundleIDs) != 8 {
 		t.Fatalf("mixed partition inflated expected reduction: %+v %v", candidate, err)
+	}
+}
+
+func TestCompactionCandidatePrefixBounds(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		count     int
+		fileBytes int64
+		wantCount int
+	}{
+		{"seven-inputs-not-ready", 7, 8 << 10, 0},
+		{"file-count-limit", 129, 8 << 10, control.MaxCompactionInputs},
+		{"target-prefix", 16, 2 << 20, 8},
+		{"minimum-above-target", 9, 7 << 20, 8},
+		{"large-file-excluded", 8, control.SmallCompactionFile, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := setupAcceptFixture(t, 1776)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := fixture.pool.Exec(ctx, `UPDATE lanes SET accepted_seq=256,published_seq=256,catalog_generation=1 WHERE tenant_id=$1 AND lane_id=0`, fixture.tenantID); err != nil {
+				t.Fatal(err)
+			}
+			ids := seedCompactionSizeCohort(t, ctx, fixture, 0, 1, test.count, test.fileBytes, "prefix-bound")
+			operations, err := control.NewMaintenanceOperations(fixture.pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			candidate, err := operations.FindCompactionCandidate(ctx)
+			if test.wantCount == 0 {
+				if !errors.Is(err, control.ErrMaintenanceNoWork) {
+					t.Fatalf("ineligible input selected: %+v %v", candidate, err)
+				}
+				return
+			}
+			slices.Sort(ids)
+			if err != nil || !slices.Equal(candidate.BundleIDs, ids[:test.wantCount]) {
+				t.Fatalf("bounded oldest-ID prefix: got=%v want=%v err=%v", candidate.BundleIDs, ids[:test.wantCount], err)
+			}
+			if int64(len(candidate.BundleIDs))*2*test.fileBytes > control.MaxCompactionInputBytes {
+				t.Fatal("input bytes exceeded")
+			}
+			if _, err := operations.ReserveCompaction(ctx, control.ReserveCompactionCommand{InstallationID: acceptInstallationID, StorageGeneration: 1,
+				TaskID: uuid.NewString(), TenantID: fixture.tenantID, LaneID: 0, BundleIDs: candidate.BundleIDs}); err != nil {
+				t.Fatalf("duplicate/invalid selection cannot reserve: %v", err)
+			}
+		})
 	}
 }
 

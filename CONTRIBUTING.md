@@ -78,6 +78,14 @@ revision before running in separate fresh CPU1/512MiB/no-swap, non-root/read-onl
 containers with128MiB scratch, GOMEMLIMIT96MiB/GOMAXPROCS1 and private PG/MinIO.
 Do not overlap builds/tests with measurement. Fresh IDs/timestamps make these
 equal logical fixtures, not byte-identical inputs or a sustained-throughput gate.
+`TestCompactionSizeCohortNativeQuietBoundary` uses the same bounded runner with eight
+actual durable batches: seven paired files below16KiB and one above, all within
+8–32KiB. It checks the actual sizes before selection and all accepted IDs in
+both unchanged Parquet roles after the current disjoint policy returns no work.
+This characterizes retained quiet files, not successful compaction or a release
+pass. An overlapping-grid candidate compacted them but was rejected after its
+service comparison; quality.md retains the measurements. Catalog tests also
+cover quiet boundaries,128-input/32MiB-target bounds and8MiB file exclusion.
 The same gate runs the private downloader's `integration`-tagged real-MinIO
 missing-object, same-length corruption and restored-object retry checks.
 `BenchmarkMaintenanceDownloads` in `internal/maintenance` measures that concrete

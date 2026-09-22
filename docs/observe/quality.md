@@ -3063,6 +3063,113 @@ The retained change adds only the mixed-size benchmark and its documentation;
 no production source differs from788451d. The unused legacy fixture wrapper was
 removed after measurement without changing generated inputs or execution.
 
+### Rejected overlapping compaction size boundaries
+
+The disjoint selector strands seven pairs immediately below a boundary plus one
+at it, even though their paired sizes differ by only2 bytes. Real PostgreSQL
+regressions fail at all five original boundaries on the unchanged baseline
+(`.tools/compaction-tiers-before.gsGLcT`). A candidate evaluated the original
+grid and one fixed half-shifted grid, ranks bounded prefixes separately by grid,
+and returned exactly one winner. It introduced no input duplication, new
+transaction, task limit, pressure exception or maintenance-budget change.
+Eleven candidate boundaries passed, with quiet distant cohorts, seven-input non-readiness,
+oldest-ID order,128-input cap,32MiB target, minimum-eight above target,8MiB file
+exclusion and normal fenced reservation covered. The standard integration
+selection now includes both native cohort tests.
+
+The same CPU1/512MiB/swap0 catalog-cost fixture still uses two PG statements per
+selection, zero S3 traffic and at most128 returned rows. Five-sample median time
+increases2.470→3.252ms; median Go allocations fall69,153→42,497B and2,213→932
+allocations after returning the pair sum as bigint. This is not a net service
+speedup. Evidence: `.tools/compaction-tiers-{before.gsGLcT,after.B5jKej}`.
+
+Actual durable ingestion, S3 publication and pinned-native compaction reproduce
+the boundary with seven pairs totaling69,679B below16KiB each and one28,673B pair.
+The old selector returns no work in all five repetitions; the candidate compacts
+all eight in all five and independently verifies all eight persisted record IDs
+in both current Parquet roles. Median selection-through-swap time is136.251ms,
+Go allocation3,491,632B/14,230 allocations,18 full GETs/about130,040B (including
+replacement verification),2 PUTs/about31,688B,2 HEADs and zero Range requests.
+There is no baseline completion latency to divide by: this is restored progress,
+not a speedup claim. Fresh IDs/timestamps make logical, not byte-identical, inputs.
+
+The separate quiet1.20MB pair plus eight tiny pairs control still selects only
+the tiny files. Median workflow time129.580→133.000ms is not an improvement;
+both use18 GETs/about92,424B,2 PUTs/about12,787B,2 HEADs and zero Range requests.
+Native runs compile before measurement and have no overlapping heavy work:
+`.tools/overlap-native-before.2tty9I` (expected boundary failures) and
+`.tools/overlap-native-after.F6r2Y3` (all ten fixtures pass). They use non-root,
+read-only ARM64 CPU1/512MiB/swap0,128MiB tmpfs and Go soft limit96MiB. Whole-run
+cgroup peaks139,137,024/138,940,416B include different completed work and are not
+memory-saving evidence; all OOM counters are zero. The common native library
+SHA is84ad753acc1390e13ce56e728d75d379bebeedec7f3df58ce071c1b373e4c79f;
+test binaries are746eb77f504c8eb5c3b77f7c52589ca27f8d69e65e5d3f8f20b608d719b4facd
+andd49d77d564a75338ae25e1376b904a5085255e34ea5db5c325af6bd08d1caea8.
+
+The matched20s/300s/90s one-worker service pair did **not** improve:
+`.tools/comparison-report-1.ZdK5Gl/report.json` versus
+`.tools/comparison-report-1.PLuASA/report.json`. Both use CPU1/512MiB/swap0 per
+role with isolated fresh PG/MinIO and no overlapping builds/tests.
+
+| Measurement | Retained disjoint policy | Rejected overlap candidate |
+|---|---:|---:|
+| Rows / histogram p95 |293 /585ms|302 /625ms|
+| Rows / histogram job p95 |141 /411ms|153 /469ms|
+| Rows / histogram pre/post overhead p95 |173 /175ms|183 /190ms|
+| Maximum queried files |589|619|
+| ACK / visibility p95 |372 /731ms|371 /772ms|
+| Final backlog / drain |0 /1,001ms|0 /1,006ms|
+| Backlog slope per minute |−0.358|−0.438|
+| Whole-installation sampled peak |809,972,529B|828,561,685B|
+| Worker observed cgroup peak |66,916,352B|68,497,408B|
+| S3 PUT requests / bytes |5,960 /34,401,018|5,984 /35,123,287|
+| S3 HEAD requests |50,637|51,051|
+| S3 full GET requests / bytes |14,525 /83,478,355|14,593 /85,153,139|
+| S3 Range requests / bytes |2,007 /18,859,206|2,012 /19,222,994|
+| PG WAL |75,003,600B|74,971,752B|
+| Cold / warm all-run regex |864 /609ms|846 /619ms|
+| Cold / warm Range requests |555 /3|569 /3|
+| Cold / warm Range bytes |6,558,590 /24,664|6,568,838 /25,426|
+
+Both verify33,600 public records,60 completed queries, zero conflicts/OOM,
+restart/cache consistency and10s idle with zero query work. All-attempt main
+maintenance/idle is15,611/77,600ms versus14,888/74,900ms; post-load1,751/8,200ms
+versus1,690/8,200ms, with zero budget overruns. Both commands exit1 because
+histogram p95 exceeds500ms. Fresh timing/IDs/retries produce different actual
+input hashes:10,788 envelopes/42,207,389B,
+`3b4a1c4cd4ef5c567450b149f723ada53f36e382fc5a9b416d0ffb91b9425c48`, versus
+10,795/43,472,462B,`ba1c79f05eca01dfdd12eb5618635ad765f31e1bfa53f12320c93be3417cdb27`.
+One pair does not isolate the cause of every difference, but supports no service
+improvement or R3 completion. Candidate build/runtime IDs are
+152ae1fa355ea67a962bdc605ba2ca9daed73e6fd7991f3274f96ac5758dc7a0 /
+c916c9555835560f721518d830ce9a1245c2fa35600189d63e22fc2fe12d2f35,
+product SHA303cf25f38208ce2f73707420ff61a84fce8fd126ff03aecaf83739b4e1e9595.
+The baseline retains product517c3d57cbd6c8af52529bd37e54fcd8df8ee5d57c335df83b793f6bdb4843e0.
+
+Before rejection, Go1.27.1 ARM64 unit/layout/architecture/vet and codegen passed.
+Control/maintenance race checks pass1.304/1.744s; real PG/S3 integration passes
+33.353s and the selected pinned-native query/authorization/snapshot/maintenance
+suite72.959s. Actual child contracts pass0.860s with the binary path set; the
+earlier invocation without it skipped tests and is not evidence. Fresh final-
+image Chromium passes3.0s. Logs are `.tools/overlap-{unit,codegen,race,integration,
+contracts-required,browser}.log`. The product selector and architecture/operations
+contracts were restored to0740ba8; the exact alternative is retained locally in
+`.tools/overlap-rejected.diff`. Final tests characterize the retained disjoint
+boundary (no work, no object I/O, all original records still readable), not the
+rejected candidate's progress. Its native fixture and prefix-bound tests remain
+reusable evidence; no production source or API/schema changes. R3's latest
+official404/874ms result, pending2/4 profiles and R4 remain unchanged. Physical
+GC still requires fresh real backup evidence.
+
+After restoring the selector, unit/layout/architecture/vet/codegen pass again.
+Final real-PG prefix/boundary tests pass in
+`.tools/compaction-tiers-before.7ckBmN` (34,988,032B cgroup peak, OOM0).
+The final actual-native fixture passes both five-sample cases in
+`.tools/overlap-native-before.RMjsNU`: quiet-large rewrite7.47s and retained
+quiet-boundary read oracle6.17s,136,503,296B whole-run cgroup peak and OOM0.
+These final checks verify the retained product and tests, not the rejected
+candidate. No measured service speedup or new completed release gate is claimed.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency
