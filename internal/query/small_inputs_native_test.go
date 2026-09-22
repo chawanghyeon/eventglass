@@ -56,8 +56,19 @@ func (*benchmarkFileRanges) PutStream(context.Context, string, io.ReadSeeker, in
 }
 
 func BenchmarkHistogramGateway(b *testing.B) {
+	benchmarkHistogramGateway(b, false)
+}
+
+// Identical logical rows with32 larger single-block files among224 tiny files.
+// The extra column is intentionally not selected: staging must not be credited
+// with reducing provider work that Parquet column pruning would already avoid.
+func BenchmarkHistogramGatewayMixedSizes(b *testing.B) {
+	benchmarkHistogramGateway(b, true)
+}
+
+func benchmarkHistogramGateway(b *testing.B, mixed bool) {
 	const files = 256
-	paths, inputBytes, digest := histogramTestFiles(b, files)
+	paths, inputBytes, digest := histogramTestFilesWithSizes(b, files, mixed)
 	b.Logf("identical fixture sha256=%s files=%d rows=%d bytes=%d", digest, files, files*100, inputBytes)
 	for _, name := range []string{"local", "warm-gateway", "warm-staged"} {
 		b.Run(name, func(b *testing.B) {
@@ -190,7 +201,7 @@ func histogramTestOperation(t testing.TB) engine.QueryOperation {
 	return operation
 }
 
-func histogramTestFiles(t testing.TB, count int) ([]string, int64, string) {
+func histogramTestFilesWithSizes(t testing.TB, count int, mixed bool) ([]string, int64, string) {
 	t.Helper()
 	root := t.TempDir()
 	db, err := engine.Open(context.Background(), "")
@@ -203,15 +214,31 @@ func histogramTestFiles(t testing.TB, count int) ([]string, int64, string) {
 	paths := make([]string, count)
 	for index := range paths {
 		paths[index] = filepath.Join(root, fmt.Sprintf("input-%d.parquet", index))
+		extra := ""
+		if mixed {
+			// All files keep the same schema. Each larger file contains100
+			// deterministic, distinct2KiB strings with no random source or time.
+			extra = ",''::VARCHAR ignored_text"
+			if index%8 == 0 {
+				parts := make([]string, 64)
+				for part := range parts {
+					parts[part] = fmt.Sprintf("md5(cast(i*64+%d AS VARCHAR))", part)
+				}
+				extra = ",(" + strings.Join(parts, "||") + ")::VARCHAR ignored_text"
+			}
+		}
 		statement := fmt.Sprintf(`COPY (SELECT 1::BIGINT tenant_id,2::BIGINT project_id,'log'::VARCHAR kind,
-			%d+i::BIGINT event_time_us,1::BIGINT received_time_us,0::INTEGER lane_id,1::BIGINT batch_seq
-			FROM range(100) t(i)) TO '%s' (FORMAT PARQUET,COMPRESSION ZSTD)`, index%15*60_000_000, strings.ReplaceAll(paths[index], "'", "''"))
+			%d+i::BIGINT event_time_us,1::BIGINT received_time_us,0::INTEGER lane_id,1::BIGINT batch_seq%s
+			FROM range(100) t(i)) TO '%s' (FORMAT PARQUET,COMPRESSION ZSTD)`, index%15*60_000_000, extra, strings.ReplaceAll(paths[index], "'", "''"))
 		if _, err := db.ExecContext(context.Background(), statement); err != nil {
 			t.Fatal(err)
 		}
 		info, err := os.Stat(paths[index])
 		if err != nil {
 			t.Fatal(err)
+		}
+		if mixed && (index%8 == 0 && (info.Size() <= 64<<10 || info.Size() > 256<<10) || index%8 != 0 && info.Size() > 64<<10) {
+			t.Fatalf("unexpected mixed fixture size: index=%d bytes=%d", index, info.Size())
 		}
 		bytes += info.Size()
 		var length [8]byte

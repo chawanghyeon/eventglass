@@ -2934,6 +2934,135 @@ contracts,browser}.log` and `.tools/multiple-tenant-workers-check.log`.
 No product implementation, API schema, native budget or backup-GC interlock
 changes in this test increment; the capability map keeps R3/R4 pending.
 
+### Rejected larger warm-block staging experiment
+
+The warm-input path excludes every file above64KiB even when its entire
+verified1MiB cache block is already present. A measured candidate considered
+those single-block aggregate inputs too, without changing the8MiB total staging
+reservation, native limits, manifest order, authority or catalog HEAD checks.
+Two fixed passes preserved the original<=64KiB opportunity before spending spare
+staging space on larger blocks. One buffer was bounded to1MiB; no provider read
+or flight was started by the probe. Cold/corrupt/multi-block/excess inputs kept
+lazy verified Range reads. Pins survived joined native execution and task files
+were removed before disk permits were released, including cancellation. The
+candidate was subsequently rejected: its native benefit did not translate into
+a measured service improvement. The product retains64KiB/8MiB staging limits;
+only the reproducible mixed-size benchmark is retained as code.
+
+The new mixed-size native benchmark contains256 real Parquet files,32 with
+deterministic unselected text making them64–256KiB, and224 tiny files. Logical
+rows25,600 and every histogram bucket are independently checked. Identical
+4,263,106 input bytes have framed SHA
+`3eed7d58548b552e755227f06585176f7bde1d533cfbb1d092a5e63ac0f6d806`.
+No S3/PG is involved: the source is real isolated files, warmed through the
+actual verified block cache before measurement. It deliberately keeps the
+large column unselected rather than crediting staging with provider savings
+that native column pruning would already provide.
+
+Before `.tools/mixed-staging-before.X6O9ef/warm-staged-verbose.log` and after
+`.tools/mixed-staging-after.eYqHKE/warm-staged.log` each run five samples of
+three iterations in separate fresh Go1.27.1 Linux ARM64 CPU1/512MiB/swap0,
+non-root/read-only containers,128MiB scratch, GOMEMLIMIT96MiB/GOMAXPROCS1 and
+network isolation. Compilation precedes observation; no other builds/tests run
+concurrently. Per-operation time and allocations include input preparation,
+native execution and cleanup; RSS/HWM and cgroup peaks include fixture setup.
+
+| Warm-staged measurement | Before | After |
+|---|---:|---:|
+| Median elapsed |74.009ms|66.452ms|
+| Median Go allocations |14,158,864B /9,813 allocations|6,158,749B /7,924 allocations|
+| Local HTTP requests / operation |66|0|
+| Source reads / bytes during measured loop |0 /0|0 /0|
+| Median process RSS |75,186,176B|77,197,312B|
+| Process HWM |104,640,512B|105,631,744B|
+| Cgroup peak |110,534,656B|111,558,656B|
+| OOM events / kills |0 /0|0 /0|
+
+An earlier non-verbose execution of the exact same baseline binary measured
+71.885ms median (`warm-staged.log` in its directory), showing timing variation;
+both baselines are retained, not selectively discarded. The unchanged warm
+gateway control still issues514 local requests/operation with zero source reads.
+These are scoped latency/allocation savings with slightly higher observed memory,
+not a service-throughput, S3-cost or memory-superiority claim. The benchmark does
+not replace the full sustained R3 profile.
+
+Environment/source hashes are beside both measurements. Native library SHA
+remains `84ad753acc1390e13ce56e728d75d379bebeedec7f3df58ce071c1b373e4c79f`.
+Rejected candidate production binary SHA is
+`f1302049e7c8803a9fba12b5a1defb53e35d4cc541fd5253254d806135e106ab`, freshly built
+in ARM64 image `sha256:0c0513d2c245df32dac43f6858ee5736cb93b780d2b2dc0394ebe8c5d3d05fc2`.
+The first candidate compile rejected typed-constant/int mismatches in unit tests
+before execution (`.tools/mixed-staging-after.S6rNdj`); the correction and final
+two-pass policy are the measured candidate, not a skipped validation.
+
+Candidate boundary tests covered the exact1MiB file ceiling,1MiB+1 lazy fallback, the unchanged
+8MiB total reservation, small-input priority despite large-first manifests,
+cold-probe no-read, invalid full/block identity, canceled preparation and retry,
+and second-pass failure releasing an earlier tiny pin. The joined-cancellation
+unit held a full1MiB input and proved file, disk permit and cache pin remained
+owned until its runner returns. Existing actual child cancellation contracts
+and PG/S3 authorization/failure/retry checks were separate real executions.
+Go1.27.1 ARM64 unit/layout/architecture/vet and byte-identical codegen pass;
+query/storage race7.754/1.529s, full host PG/S3 integration31.237s, selected
+pinned-native query/Live/authority/snapshot/retention/compaction59.530s, Linux
+ARM64 query/storage unit0.469/0.075s, actual child contracts0.956s and fresh
+final-image Chromium3.1s pass. Correctness checks may overlap each other, never
+the native or service measurements. Logs use `.tools/mixed-staging-{unit,
+codegen,race,integration,native-contracts,browser}.log`. No API/schema change
+or backup-GC bypass accompanied this candidate. Its implementation, candidate-
+specific tests and architectural contract edits were restored to HEAD after
+measurement; `.tools/mixed-staging-rejected.diff` preserves their exact patch.
+
+The paired real-service diagnostic uses one worker,20s warmup/300s load/90s drain
+limit, per-role CPU1/512MiB/swap0 and fresh isolated PG/MinIO installations, with
+no competing tests/builds. Baseline04ec2c2 binary is the unchanged788451d product;
+candidate reports788451d-dirty with the binary identity above. Baseline build/
+runtime image IDs are7132b6e65cda…/294f02808dfe…; the fresh candidate runtime
+is `sha256:bc13a5016d2349f4f6902dbc67f006e2cd1abf3afdf729cb6823054c14d4740b`.
+This explicitly uses diagnostic image reuse, not official completion evidence.
+Reports are `.tools/comparison-report-1.uHEzNW` and `.tools/comparison-report-1.EYcDw9`;
+logs are `.tools/mixed-staging-service-{before,after}.log`.
+
+| Real service measurement | Baseline | Rejected candidate |
+|---|---:|---:|
+| Rows / histogram p95 |291/600ms|298/644ms|
+| Rows / histogram durable-job p95 |157/423ms|145/479ms|
+| Rows / histogram pre/post-job overhead p95 |174/177ms|174/177ms|
+| ACK / visibility p95 |371/721ms|372/751ms|
+| Maximum selected files |613|635|
+| Final backlog / drain |0/1,002ms|0/1,005ms|
+| Sampled whole-installation peak |809,280,469B|805,411,223B|
+| Worker cgroup peak |68,308,992B|67,506,176B|
+| S3 PUT count / bytes |5,963/34,258,231B|5,965/34,165,676B|
+| S3 HEAD count |51,972|51,360|
+| S3 full GET count / bytes |14,492/82,957,868B|14,463/82,576,977B|
+| S3 Range count / bytes |2,050/19,128,710B|1,995/18,674,965B|
+| PG WAL |74,917,016B|74,932,648B|
+
+Both return the exact33,600 public records with60 successful queries, zero
+conflicts/OOM/budget overruns, and passing backlog/maintenance/resource checks.
+Backlog slopes are−0.058382/−0.698678 per minute, maxima12/18. Main maintenance
+all-attempt time15,282/15,171ms against77,200/76,800ms observed idle passes.
+Cold/warm same-snapshot regex takes860/613→884/635ms; Range575/3→601/3 and
+6,736,690/24,599→6,935,671/24,630B. Ten-second idle adds zero query work, and
+post-load maintenance1,670/1,661ms against8,300ms idle passes in both runs.
+Both commands exit1 because histogram still exceeds500ms. Per-query service
+allocations are not measured; lower sampled memory and some S3 counts are not
+attributed as improvements. Fresh identities, retries and scheduling differ:
+baseline10,771 envelopes/41,369,661B SHA
+`178b8f999e6eed7b0f6492a01092a3a183e892e7f8a01c6808d551b64caeaa3a`,
+candidate10,978/44,850,672B SHA
+`ccd11ac430ee0efbf07786defce4f66d919923a3d5e95dd6ab1629bef206416c`.
+This single pair does not prove the transport change alone caused regression,
+but it provides no basis to ship it as the required service optimization.
+R3 remains open; its latest official404/874ms result and pending2/4 profiles
+are unchanged. No R4 release or physical-GC override follows from this experiment.
+After restoration, unit/layout/architecture/vet, byte-identical codegen and
+pinned ARM64 query tests pass again (`mixed-staging-retained-{unit,codegen,native}.log`).
+The retained change adds only the mixed-size benchmark and its documentation;
+no production source differs from788451d. The unused legacy fixture wrapper was
+removed after measurement without changing generated inputs or execution.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

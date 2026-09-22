@@ -432,6 +432,13 @@ but histogram still exceeds500ms. The command exits1 before corrected2/4-worker
 profiles. Keep R3 and R4 incomplete; retain the full measured tradeoffs in
 quality.md rather than treating these passes as release completion.
 
+A larger warm-cache staging experiment was not adopted. Its mixed256-file
+native benchmark reduced median74.009→66.452ms and allocations14.2→6.2MB, but
+the matched short-service rows/histogram p95 changed291/600→298/644ms with both
+histograms still failing500ms. Retain the new benchmark and negative evidence;
+the product keeps64KiB/file and8MiB/task staging. Do not treat this rejected
+candidate as an implemented improvement or rerun it without a new hypothesis.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env
