@@ -55,6 +55,11 @@ PostgreSQL/WAL/S3 recovery gate pass on Linux ARM64; sustained
 resource and provider release evidence remain open.
 Pure-Go checks do not rebuild DuckDB.
 
+The latest scoped R3 optimization conservatively prunes first-page row scans
+after full catalog verification. Its matched short profile improves rows p95
+from893 to312ms and stops backlog growth, but histogram p95 remains995ms against
+the500ms target. It does not close G07 or establish a production release.
+
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the
 [`work plan`](docs/implementation/work-plan.md) breaks remaining work into ordered

@@ -79,7 +79,7 @@ func (s Submission) Submit(ctx context.Context, token [32]byte, snapshot model.Q
 	if err != nil {
 		return job, false, err
 	}
-	plan, err := BuildExecutionPlan(PlanScope{QueryID: job.Authority.QueryID, TenantID: snapshot.TenantID,
+	plan, err := BuildExecutionPlan(PlanScope{Snapshot: &snapshot, QueryID: job.Authority.QueryID, TenantID: snapshot.TenantID,
 		SnapshotID: snapshot.SnapshotID, Generation: s.Generation, OperationHash: hash, Operation: encoded,
 		DeadlineUS: job.Deadline.UnixMicro()}, files)
 	if err == nil {
@@ -139,7 +139,7 @@ func (s Submission) SubmitAlert(ctx context.Context, alertID string, snapshot mo
 	if err != nil {
 		return job, err
 	}
-	plan, err := BuildExecutionPlan(PlanScope{QueryID: job.Authority.QueryID, TenantID: snapshot.TenantID, SnapshotID: snapshot.SnapshotID, Generation: s.Generation, OperationHash: hash, Operation: encoded, DeadlineUS: job.Deadline.UnixMicro()}, files)
+	plan, err := BuildExecutionPlan(PlanScope{Snapshot: &snapshot, QueryID: job.Authority.QueryID, TenantID: snapshot.TenantID, SnapshotID: snapshot.SnapshotID, Generation: s.Generation, OperationHash: hash, Operation: encoded, DeadlineUS: job.Deadline.UnixMicro()}, files)
 	if err == nil {
 		err = s.Control.SealQueryPlan(ctx, control.SealQueryPlanCommand{Authority: job.Authority, PlanSHA256: plan.SHA256, Tasks: plan.Tasks, ScanCount: plan.ScanCount, ManifestBytes: plan.ManifestBytes})
 	}

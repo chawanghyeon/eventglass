@@ -17,7 +17,7 @@ import and missing-object failure. R1's CPU1/512MiB/swap0 containment gate also
 passes. R2's autoscale control, fair claims and bounded Kubernetes/KEDA baseline
 also pass. R3's latest1/2/4-worker official-duration profiles pass the former
 target map, but audited ACK sampling and maintenance-budget omissions require
-corrected measurements. The latest clean0004b4f budgeted short diagnostic still
+corrected measurements. The latest clean64d6038 budgeted short diagnostic still
 misses query and load-backlog targets, although that run has no cancellation
 budget overrun. Independent fixed-work capacity now passes the clean4ced580
 128-cycle matrix with three fresh installations per1/2/4-worker profile.
@@ -27,7 +27,13 @@ accumulation before upload and a symlink output-validation gap. Their bounded
 streaming correction now passes the actual10,000-day ACK/publication boundary
 under CPU1/512MiB/swap0, unit/race/native contracts, integration, resource,
 browser/crash and the complete10k/100k/1m/10m native oracle. This scoped
-correction does not complete sustained-load service validation. R3
+correction does not complete sustained-load service validation. A subsequent
+query-owned first-page pruning path has unit/native/PG/S3/browser evidence,
+retains all catalog HEAD and authority checks, and conservatively falls back for
+cursors/filters/insufficient proof. The matched short service profile improves
+rows p95=893→312ms and passes the backlog target, but histogram995ms still misses
+500ms. Its planning-only improvement is not a full-service SLO or memory-headroom
+claim. R3
 remains the first incomplete packet and R4 remains dependency-blocked. Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises

@@ -49,7 +49,8 @@ func (coordinator Coordinator) Execute(ctx context.Context, authority control.Qu
 		return coordinator.fail(ctx, authority, err)
 	}
 	execution, err := BuildExecutionPlan(PlanScope{
-		QueryID: authority.QueryID, TenantID: authority.TenantID, SnapshotID: planContext.Snapshot.SnapshotID,
+		Snapshot: &planContext.Snapshot,
+		QueryID:  authority.QueryID, TenantID: authority.TenantID, SnapshotID: planContext.Snapshot.SnapshotID,
 		Generation: authority.StorageGeneration, OperationHash: planContext.OperationHash,
 		Operation: planContext.Operation, DeadlineUS: planContext.Deadline.UnixMicro(),
 	}, files)

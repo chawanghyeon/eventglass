@@ -30,6 +30,9 @@ const (
 var ErrQueryLimit = errors.New("query limit exceeded")
 
 type PlanScope struct {
+	// Optional authenticated planning context. Never part of a task manifest;
+	// missing context conservatively scans the full verified catalog.
+	Snapshot      *model.QuerySnapshot
 	QueryID       string
 	TenantID      int64
 	SnapshotID    string
@@ -68,6 +71,12 @@ func BuildExecutionPlan(scope PlanScope, files []model.CatalogFile) (ExecutionPl
 	partitions, err := partitionCatalog(files, scanFileLimit(scope.Operation))
 	if err != nil {
 		return ExecutionPlan{}, err
+	}
+	if selected := pruneFirstPageRows(scope, files); len(selected) != len(files) {
+		partitions, err = partitionCatalog(selected, scanFileLimit(scope.Operation))
+		if err != nil {
+			return ExecutionPlan{}, err
+		}
 	}
 	plan := ExecutionPlan{}
 	appendTask := func(task model.QueryPlannedTask) error {

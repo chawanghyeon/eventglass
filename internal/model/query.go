@@ -60,6 +60,10 @@ type QuerySnapshot struct {
 }
 
 type CatalogFile struct {
+	// Derived by the authorized catalog read for this snapshot, never stored
+	// in an object or trusted from a serialized worker manifest.
+	AllProjectsSelected bool `json:"-"`
+
 	FileID             string
 	BundleID           string
 	ObjectKey          string

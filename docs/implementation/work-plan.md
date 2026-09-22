@@ -281,6 +281,22 @@ R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipp
 cloud test or an emulator. If expensive/performance targets miss, state measured
 miss and revise implementation; do not relabel target as achieved by design.
 
+The clean64d6038 short mixed-load baseline still misses rows/histogram p95
+(893/1,166ms) and backlog slope(+0.698678/min). The next bounded optimization
+keeps full catalog integrity/authorization checks and prunes only first-page
+constant-true row scans using a proven limit-plus-one threshold. Unit/race,
+native contracts, real durable PG/S3 pagination/authorization/missing-object
+checks and the production-image browser pass. Matched planning-only costs
+decrease, but allocation counts and benchmark cgroup peak increase; do not claim
+extra memory headroom or service SLO completion from that local measurement.
+See query.md for the exact proof/fallback contract and quality.md for evidence.
+The same20s/300s/90s real-service pair measures rows p95=893→312ms and backlog
+slope+0.698678→−0.720254/min, with59 successful queries and exact published counts
+on both sides. Histogram p95=1,166→995ms still misses500ms; the command correctly
+exits1. Whole-installation sampled peak and full-GET bytes increase slightly.
+R3 therefore stays incomplete, including corrected official-duration profiles
+and maximum-size maintenance resource evidence; R4 is not released.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

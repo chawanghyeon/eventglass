@@ -144,6 +144,8 @@
       "ui": "connected",
       "tests": [
         "tests/integration/query_api_test.go",
+        "tests/integration/query_pruning_test.go",
+        "internal/query/rows_pruning_test.go",
         "internal/api/query_error_test.go",
         "internal/query/planning_budget_test.go"
       ]
@@ -361,7 +363,7 @@
     {
       "id": "sustained-performance",
       "packet": "R3",
-      "description": "Latest ARM64 1/2/4-worker official-duration baseline passes former targets, but included warmup ACK samples and lacked maintenance accounting. The latest corrected short diagnostic has zero observed maintenance overruns but still misses query/backlog targets. Independent fixed-work capacity/efficiency passes the clean4ced580 nine-installation matrix; bounded conversion/shared-disk corrections pass actual10,000-day publication and the full native oracle. Maximum-size maintenance and official corrected mixed-load runs remain pending. R3 is incomplete."
+      "description": "Latest ARM64 1/2/4-worker official-duration baseline passes former targets, but included warmup ACK samples and lacked maintenance accounting. Conservative first-page pruning preserves full catalog HEAD/authority checks; its matched corrected short diagnostic passes rows at312ms and backlog, but histogram995ms still exceeds500ms. Independent fixed-work capacity/efficiency passes the clean4ced580 nine-installation matrix; bounded conversion/shared-disk corrections pass actual10,000-day publication and the full native oracle. Maximum-size maintenance and official corrected mixed-load runs remain pending. R3 is incomplete."
     },
     {
       "id": "release",

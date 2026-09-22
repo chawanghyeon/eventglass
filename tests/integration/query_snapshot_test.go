@@ -237,8 +237,20 @@ func TestSnapshotRetriesReaderLaneRaceAndCatalogUsesCapturedGeneration(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 1 || files[0].ObjectKey != "v1/query/analytics.parquet" || len(files[0].BlockSHA256) != 1 {
+	if len(files) != 1 || files[0].ObjectKey != "v1/query/analytics.parquet" || len(files[0].BlockSHA256) != 1 || !files[0].AllProjectsSelected {
 		t.Fatalf("catalog=%#v", files)
+	}
+	// An intersecting bundle is not proof that every row belongs to the
+	// snapshot's requested projects, even when the principal is a tenant admin.
+	if _, err := fixture.pool.Exec(ctx, `INSERT INTO projects(tenant_id,project_id,scrub_revision) VALUES($1,$2,1)`, fixture.tenantID, fixture.projectID+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.pool.Exec(ctx, `INSERT INTO bundle_projects(tenant_id,bundle_id,project_id) VALUES($1,$2,$3)`, fixture.tenantID, files[0].BundleID, fixture.projectID+1); err != nil {
+		t.Fatal(err)
+	}
+	files, err = operations.CatalogPage(ctx, command)
+	if err != nil || len(files) != 1 || files[0].AllProjectsSelected {
+		t.Fatalf("partial project catalog=%#v err=%v", files, err)
 	}
 	command.StartUS, command.EndUS = 300, 400
 	files, err = operations.CatalogPage(ctx, command)

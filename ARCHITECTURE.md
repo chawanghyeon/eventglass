@@ -73,6 +73,12 @@ Generated HTTP DTOs may be imported only by api, never by app/query/control.
 Query owns deterministic pre-seal partitioning by file count, compressed bytes
 and serialized manifest size. Oversized metadata groups split before task IDs
 are sealed; neither app dispatch nor worker retry replaces a sealed partition.
+Query may conservatively prune first-page constant-true row scans after full
+catalog verification. Control derives complete requested-project coverage in
+the authorized catalog read; the proof is planning-only and not serialized into
+worker manifests. Query reconstructs the exact cursor-free operation and proves
+the limit-plus-one bound from complete file scope/time/cut metadata. It retains
+all equal-time candidates and uses the same path for submission and takeover.
 `app.DurableQuerySyncExecutor` is an optional colocated helper, not a requirement
 for sync/detail/Live. API-only and combined roles use the same durable protocol.
 The api export interface accepts engine protocol values; app injects the

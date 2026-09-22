@@ -111,7 +111,9 @@ func catalogPageRows(ctx context.Context, tx pgx.Tx, command CatalogCommand, ret
 		COALESCE((SELECT array_agg(pfb.sha256 ORDER BY pfb.block_index) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),ARRAY[]::text[]),
 		COALESCE((SELECT min(pfb.block_index) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),-1),
 		COALESCE((SELECT max(pfb.block_index) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),-1),
-		(SELECT count(*) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id)
+		(SELECT count(*) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),
+		NOT EXISTS (SELECT 1 FROM bundle_projects bp WHERE bp.tenant_id=b.tenant_id AND bp.bundle_id=b.bundle_id
+			AND NOT EXISTS (SELECT 1 FROM snapshot_projects sp WHERE sp.tenant_id=bp.tenant_id AND sp.project_id=bp.project_id AND sp.snapshot_id=$2))
 		FROM snapshot_lanes sl
 		JOIN bundles b ON b.tenant_id=sl.tenant_id AND b.lane_id=sl.lane_id
 		JOIN files f ON f.tenant_id=b.tenant_id AND f.bundle_id=b.bundle_id AND f.role='analytics'
@@ -143,7 +145,7 @@ func catalogPageRows(ctx context.Context, tx pgx.Tx, command CatalogCommand, ret
 			&file.MinEventTimeUS, &file.MaxEventTimeUS, &file.MinReceivedTimeUS, &file.MaxReceivedTimeUS,
 			&file.MinBatchSeq, &file.MaxBatchSeq, &file.LaneID, &file.Kind, &file.BlockSHA256, &firstBlock, &lastBlock, &blockCount,
 			&file.PayloadFileID, &file.PayloadObjectKey, &file.PayloadBytes, &file.PayloadSHA256,
-			&file.PayloadBlockSHA256, &payloadFirstBlock, &payloadLastBlock, &payloadBlockCount); err != nil {
+			&file.PayloadBlockSHA256, &payloadFirstBlock, &payloadLastBlock, &payloadBlockCount, &file.AllProjectsSelected); err != nil {
 			return nil, err
 		}
 		if blockCount < 1 || firstBlock != 0 || lastBlock != blockCount-1 || len(file.BlockSHA256) != blockCount {

@@ -155,7 +155,7 @@ Coordinator seals immutable partitions before dispatch, with planning state,
 catalog paging and metadata quotas specified in [correctness C06](correctness.md#c06--query-planning-and-merging-are-bounded-including-metadata): sorted file_id lists,
 up to256 analytics files or target64MiB compressed; detail remains capped at8
 analytics/payload pairs. A larger analytics file is its own task. Each
-analytics file belongs to exactly one scan partition. Payload files are excluded
+selected analytics file belongs to exactly one scan partition. Payload files are excluded
 except detail. Row-group splitting remains disabled unless independently proven.
 The R3 CPU1 small-file experiments raised the file-count bound from32 to128,
 then256 to avoid three native tasks for a tiny129–256-file scan;
@@ -167,6 +167,21 @@ The4,096-scan and16MiB-total caps apply during construction, including these
 splits and reducers. This is not execution-time adaptive splitting: a sealed
 task is never replaced or reinterpreted on retry. This is a measured tuning
 limit, not an official R3 SLO pass.
+For first-page constant-true row operations only, query may exclude files whose
+maximum primary sort time is strictly below a proven limit-plus-one threshold.
+Only files fully inside requested projects, kinds, selected time range, retention
+floor and lane cut contribute exact row counts to that proof. Control computes
+complete project coverage with a set predicate in the authorized catalog page,
+not per-file database calls. This transient Boolean is never serialized/trusted
+from a task manifest. Query reconstructs the exact existing cursor-free operation
+from the captured dataset/snapshot before applying the optimization; cursors,
+filters, Live, detail, aggregates and unknown operation forms keep the full scan.
+Partly matching files can still be candidates, but cannot supply the threshold.
+Equal primary times always remain because secondary keys are not cataloged.
+All original paired catalog HEAD checks and metadata/cardinality ceilings apply
+before pruning, even to files the native scan will not need. Snapshot pins,
+authorization rechecks, row predicates and immutable retry partitions do not
+change. Submission and coordinator takeover invoke the same query-owned proof.
 Catalog loading additionally counts serialized file metadata against16MiB
 before verifying each page, so a catalog that cannot fit a plan does not retain
 all32,768 files or issue all their HEAD requests first. Interactive/Live, alerts

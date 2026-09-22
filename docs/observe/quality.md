@@ -1670,6 +1670,97 @@ compiled test binaries and container/image observations are retained in
 `.tools/conversion-process-bench.lRH9ZU/{before,after}.log`; the candidate image
 is `sha256:5c716a36e557b89c9b28316048af4556955684db515c3b4f2b72ae13fab67ec2`.
 
+### Conservative first-page scan pruning
+
+The clean64d6038 one-worker20s/300s/90s diagnostic still fails: rows/histogram
+p95=893/1,166ms (server656/927ms), ACK p95=370ms, visibility p95=1,351ms,
+backlog slope+0.698678/min and final backlog0. All59 queries complete and public
+counts match32,000 logs+1,600 errors, including warmup. The profile retains
+its failed targets; successful drain/cold/warm/idle/OOM checks do not close R3.
+Evidence: `.tools/comparison-report-1.xBNSbV` and
+`.tools/r3-query-baseline-64d6038.log`.
+
+The next candidate preserves full paired catalog HEAD verification, authorization,
+snapshot pins, row predicates and fixed retry partitions, but query can prove
+that older files cannot affect a constant-true first page. Control derives
+complete requested-project coverage in the same bounded catalog page query.
+Only fully matching file row counts establish the limit-plus-one threshold;
+partly matching files do not contribute, and equal-time candidates always stay.
+Exact reconstruction of the existing cursor-free operation excludes cursors,
+filters, detail, Live and aggregates. This is query-owned pre-seal pruning, not
+a new HTTP fast path or an engine/service replacement.
+
+Actual Go1.27.1 ARM64 unit/vet/layout, race, generated-contract parity, pinned
+native contracts, PG/S3 and production-image browser checks pass. The native
+integration gate27.359s includes actual durable ingestion of four two-row bundles:
+both descending sorts scan one file on the first page, keep all four files for
+cursor pages and return every expected row in the independently expected batch
+order. All eight catalog HEADs remain on every page. A missing older object
+fails before planning even though it could be pruned; membership removal denies
+before S3 access. Real catalog tests distinguish intersecting versus complete
+project scope. Unit tests cover boundaries, partial scope/cuts/retention,
+lookahead, equal times, overflow, changed operations, deterministic retry and
+300 independently generated row sets. Existing cancellation/join tests pass.
+The initial revocation assertion expected403 rather than the existing missing-
+membership unauthenticated result; only that test expectation was corrected.
+Evidence: `.tools/rows-pruning-{unit,race,codegen,contracts,integration-final,browser}.log`.
+
+A matched planning-only benchmark runs full-scan and pruning branches on the
+same verified catalog and candidate binary, not different service workloads.
+Each side uses Linux ARM64 CPU1/512MiB/swap0, GOMAXPROCS1, Go soft limit96MiB,
+read-only root and denied network, five one-second samples per file count.
+
+| Files | Median full/pruned ms | Median full/pruned B/op | Full/pruned allocs/op |
+|---|---:|---:|---:|
+|256|0.395199 /0.237312|434,027 /357,749|465 /1,022|
+|1,024|1.636284 /0.423364|2,819,751 /1,049,587|533 /1,053|
+|8,192|12.324695 /1.658564|27,572,696 /7,577,045|1,016 /1,314|
+
+Planning latency decreases40.0–86.5% and allocated bytes17.6–72.5%, but allocation
+counts increase. Whole benchmark cgroup peak also increases62,844,928→132,157,440B;
+both have zero memory.max/OOM/kill events. Therefore this is not a memory-headroom
+improvement. PG/S3/native execution are excluded, requests/transfers are0 on both
+sides, and no service throughput/SLO or competitor advantage follows. Raw logs
+and the compiled binary are retained in `.tools/rows-pruning-bench.YjkErx`.
+
+The following real mixed-load comparison uses the same fresh-installation
+20s/300s/90s one-worker profile, pinned engine, CPU1/512MiB/swap0 roles and
+100 logs/s+5 errors/s offered load. No heavy checks/builds overlap either timed
+run. Baseline is clean64d6038; candidate is its pruning working tree, recorded
+as64d6038-dirty, runtime image
+`sha256:c8648b45e7a002207ec52e7203dac68af474e123f8259a06e410b72dced170cf`.
+This is a scoped optimization comparison, not an official-duration pass.
+
+| Metric | Full-scan baseline | Pruning candidate |
+|---|---:|---:|
+|Rows p95 /server p95 ms|893 /656|312 /164|
+|Histogram p95 /server p95 ms|1,166 /927|995 /803|
+|ACK p95 /visibility p95 ms|370 /1,351|371 /821|
+|Load backlog slope jobs/min; final backlog|+0.698678;0|−0.720254;0|
+|Query task work /work ms|205 /28,561|132 /16,753|
+|First /last /max planned files|103 /863 /872|6 /7 /663|
+|Whole-installation sampled peak bytes|792,211,749|794,107,573|
+|API /worker observed cgroup peak bytes|155,848,704 /71,643,136|146,874,368 /68,775,936|
+|S3 HEAD requests|70,914|62,677|
+|S3 PUT requests /bytes|5,999 /33,038,143|5,954 /33,411,734|
+|S3 full GET requests /bytes|13,923 /76,768,475|14,281 /80,217,970|
+|S3 Range requests /bytes|2,185 /19,593,114|2,082 /19,084,481|
+
+Both complete59 measured queries with no query failures, exact32,000 log/1,600
+error public counts including warmup, zero OOM and no maintenance-budget overrun.
+Offered/accepted work is unchanged, so this is not a maximum-throughput increase.
+Query objects combine rows and histograms; only the former uses pruning.
+Compaction trajectories differ (182→202 work phases) and all I/O counters include
+foreground/maintenance work, so neither total S3 deltas nor histogram changes
+can be attributed solely to the proof. Some transfers and whole-installation
+peak increase. The candidate passes row/ACK/visibility/backlog targets, but
+histogram995ms still exceeds500ms and the overall comparison exits1. Cold/warm
+all-history regex, exact same-snapshot rows,10-second idle and three worker
+cgroup incarnations pass; cold/warm Range requests are562/3. R3 remains open.
+Evidence: `.tools/rows-pruning-comparison.log` and
+`.tools/comparison-report-1.Miw90V`; use retained directories rather than an
+older official-profile convenience JSON when checking this quick diagnostic.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

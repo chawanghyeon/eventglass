@@ -23,9 +23,9 @@ var (
 	ErrCatalogLimit         = errors.New("catalog limit exceeded")
 )
 
-// Every catalog file appears in a scan manifest. Reject a catalog that cannot
-// possibly fit the existing plan budget before retaining more pages or issuing
-// their HEAD requests. The encoder reuses one file buffer, not a second catalog.
+// Bound the full catalog before any optional first-page pruning, retaining the
+// original metadata admission ceiling even when a later plan scans fewer files.
+// The encoder reuses one file buffer, not a second catalog.
 type catalogMetadataBudget struct{ remaining int }
 
 func (budget *catalogMetadataBudget) Write(encoded []byte) (int, error) {
