@@ -214,13 +214,17 @@ counters on the private metrics endpoint. A bounded native query burst keeps
 its ready-work slots, but an empty claim is checked only once per scheduling
 sweep; other progress or the idle interval starts a fresh sweep. These are app
 dispatch rules, not replacements for control's durable claims or query's work.
-The native worker loop also owns one conversion tenant cursor. After a successful
+The native worker loop also owns separate conversion and query tenant cursors. After a successful
 claim (including an execution that later fails), control orders equally occupied
 tenants cyclically after that ID, then uses the existing retry/age/job order
 within a tenant. Empty/failed claims leave the cursor unchanged. The hint resets
 on restart and does not persist queue state, skip admission, or grant authority.
-Running-work preference and SKIP LOCKED remain; cross-worker/query fairness still
-needs separate evidence. No unbounded per-tenant app map is introduced.
+Running-work preference and SKIP LOCKED remain; cross-worker fairness still
+needs separate evidence. No unbounded per-tenant app map is introduced. Query
+claims keep deadline/query ordering within a tenant. Control filters queries
+already at the running-task cap before selection and rechecks that cap after
+locking the query row. The synchronous helper remains restricted to its own
+query; it neither reads nor changes the background loop's cursor.
 App also owns native process groups: TERM, escalation to KILL after100ms, leader
 join and descendant reaping precede permit/scratch release. Linux uses a
 subreaper and waits only on the task's private group, never another command's

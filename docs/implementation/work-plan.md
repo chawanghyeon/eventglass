@@ -410,6 +410,16 @@ roles and has OOM0. The standalone synthetic round-robin test is removed.
 This is not a throughput claim or full fairness closure: query scheduling,
 cross-worker skew and sustained service SLOs still need evidence before R3/R4.
 
+The subsequent query audit reproduces two actual PG defects: a saturated older
+query hides another runnable query, and completing a task loses the next
+tenant's turn. Candidate capacity filtering plus the unchanged locked cap check
+and a separate bounded app cursor repair them. Twelve concurrent claim callers
+and subsequent sweeps reach exactly four tasks per query; targeted synchronous
+help does not steal work. An actual single-worker PG/S3/native fixture changes
+A/A/B to A/B/A while preserving exact results and cross-tenant denial. These
+are correctness checks, not a measured throughput improvement; multi-worker
+skew and corrected official-duration SLOs still keep R3/R4 incomplete.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

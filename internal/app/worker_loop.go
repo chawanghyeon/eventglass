@@ -258,10 +258,11 @@ func (runtime *Runtime) runOneQuery(ctx context.Context) (bool, error) {
 	if runtime.queryControl == nil || runtime.queryWorker == nil {
 		return false, nil
 	}
-	task, err := runtime.queryControl.ClaimQueryTask(ctx, runtime.installation.InstallationID, runtime.installation.StorageGeneration, runtime.workerOwner)
+	task, err := runtime.queryControl.ClaimQueryTaskAfterTenant(ctx, runtime.installation.InstallationID, runtime.installation.StorageGeneration, runtime.workerOwner, runtime.queryAfterTenant)
 	if err != nil || task == nil {
 		return false, err
 	}
+	runtime.queryAfterTenant = task.Authority.TenantID
 	err = runtime.withQueryHeartbeat(ctx, task.Authority, func(taskContext context.Context) error {
 		return runtime.queryWorker.Execute(taskContext, *task)
 	})

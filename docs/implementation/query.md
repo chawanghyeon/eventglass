@@ -213,6 +213,17 @@ and a slot is immediately available, otherwise202. Sync deadline30s, async5min,
 both at most snapshot max lifetime. Plan byte threshold is routing, not a promise
 about scan latency. Empty input executes reducer's empty result without a child.
 
+Background claims first prefer tenants with fewer leased running tasks, then
+rotate equally occupied tenants after the app loop's last committed query claim.
+Within a tenant, deadline/query order remains. This bounded non-durable cursor
+resets on restart, advances even when execution subsequently fails, and does
+not advance for an empty/rejected claim. The synchronous helper only claims its
+specified query through the same control transaction, without using that cursor.
+The candidate read excludes queries already at the running-task cap; a fresh
+count after locking the query row remains the authoritative concurrent limit.
+SKIP LOCKED races can defer work to the next sweep. These rules do not promise
+strict global round-robin order across replicas.
+
 Each task has60s lease/15s heartbeat/fence and an output object named by task
 attempt. Complete atomically records the single winning output if query active,
 deadline valid and live authority matches. Expired/canceled outputs are orphans.

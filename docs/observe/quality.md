@@ -2741,6 +2741,65 @@ native cache were preserved; removed images can be rebuilt. Logs are
 under the same prefix. This control/model gate does not run native workload
 throughput or prove multi-worker fairness.
 
+### Actual single-worker query turns and saturated-query progress
+
+Actual PG regressions on the preceding claim policy reproduce two defects:
+an older query already running four tasks hides another query's ready task,
+and after a task completes the older tenant wins again despite another ready
+tenant. `.tools/query-scheduling-before.log` retains both failures. The fix
+filters full queries during candidate selection, retaining the fresh locked
+count as the concurrency authority, and adds an independent app-owned last-query
+tenant cursor. No extra SQL round trip, unbounded map, task limit, transaction
+owner or HTTP contract is introduced. Targeted synchronous help stays confined
+to its own query. These are scheduling corrections, not a throughput claim.
+
+`.tools/query-scheduling-boundaries.log` passes real PG tests in2.140s: negative
+cursor, canceled context, stale generation, maximum-ID wrap, completed-slot
+reuse and12 concurrent callers plus bounded following sweeps reaching exactly
+four running tasks for each of two queries. Existing expired-task recovery and
+shared admission tests pass too. These use metadata-only plans, not native/S3
+execution. SKIP LOCKED can defer a raced query to the next sweep; the test does
+not assume every concurrent caller must win.
+
+`TestPublicQueryEndToEndTenantTurnsActualWorker` separately submits two A queries
+and one B query using actual Parquet/S3 fixtures and the ordinary authorized
+Submission/Awaiter path before starting the real product worker. A private-schema
+trigger bounds claim observations at16. After joining the worker, final results
+must contain the exact three expected record IDs and correct project in every
+query; a different tenant/session must not retrieve B's result. This is actual
+query execution, not durable-ingest proof or a replacement test dispatcher.
+Before `.tools/query-native-before.zjwP39` produces A/A/B and fails only the turn
+assertion after the result/authorization oracle. After
+`.tools/query-native-after.rZANjQ` produces A/B/A and passes. Whole correctness
+test time0.69/0.48s and cgroup peak156,651,520/99,958,784B include setup and all
+children; these single observations do not establish speed or RSS improvement.
+Both have OOM0. This test does not measure S3 cost or sustained throughput.
+
+Both use Go1.27.1 Linux ARM64, CPU1/512MiB/swap0, non-root/read-only,128MiB
+scratch, GOMEMLIMIT96MiB/GOMAXPROCS1, isolated PG/MinIO and the unchanged pinned
+DuckDB library SHA recorded above. The test helpers compile from current source;
+the baseline actual product binary was preserved before rebuilding, SHA
+`2b5f7edf9e5a7ecda820cc817a3393e859480f5bf0c4fcc9cd31c0d93dd38e27`.
+Candidate product SHA is
+`517c3d57cbd6c8af52529bd37e54fcd8df8ee5d57c335df83b793f6bdb4843e0`, build image
+`sha256:b6cff67573bd6f627a2f27a809d7baa71895b0b2ac6af3adbb9271f1cefb6b2b`.
+Identical native test-source SHA is
+`2eb524802f290e8e712a388f257c3f70626e97a6213eed2f9e5333ddd5e39be8`.
+Sustained service profiles are not rerun for this correctness-only increment.
+Multi-worker skew, corrected official-duration query SLOs and R4 stay open;
+physical GC still requires fresh signed coordinated-backup evidence.
+
+Executed regression checks pass: ARM64 unit/layout/architecture/vet and
+byte-identical codegen; app race4.556s and control race (cached); full host
+PG/S3 integration30.189s; selected pinned-native query/Live/authorization/
+snapshot/retention/compaction57.589s, including the new worker test; child
+contracts1.411s; fresh production-image Chromium2.9s. Logs use
+`.tools/query-scheduling-{unit-retry,race,codegen,integration,contracts,browser}.log`.
+The first unit invocation failed only because the sandbox denied localhost
+binds (`unit.log`); the unchanged check passed with local-network permission.
+Correctness checks can overlap and their times are not paired benchmarks.
+No schema/API change required regenerated contracts or capability-gate changes.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

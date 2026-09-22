@@ -414,7 +414,14 @@ the app cursor, even if execution subsequently fails. Empty/rejected claims do
 not advance it. The cursor resets on restart and is not durable authority.
 Control still owns generation checks, lease/retry eligibility, SKIP LOCKED and
 fenced updates. Real single-worker PG/S3/native tests cover the transition after
-prepared/completed/expired work; query and multi-worker fairness remain R3 work.
+prepared/completed/expired work. Query workers use a separate cursor with the
+same lifetime, preserving deadline/query ordering within a tenant. A query at
+its running-task cap cannot hide another eligible query: candidate selection
+filters it out, and a fresh count after the query-row lock still enforces the
+cap under races. SKIP LOCKED may defer contested work until the next sweep.
+The synchronous request helper stays targeted to its own query, outside this
+background cursor. Actual single-worker searches check A/B/A turns, exact
+results and cross-tenant rejection; multi-worker skew remains R3 work.
 
 The implemented `deploy/kubernetes/base.yaml` baseline selects Linux ARM64 at
 release scheduling time and fixes resource requests/limits, startup/

@@ -134,7 +134,13 @@ round-robin algorithm was removed because it never called product scheduling.
 The integration gate instead runs `TestConversionTenantTurnsActualWorker`, using
 actual two-tenant ACK/publication, a bounded private-schema claim audit and the
 pinned engine's complete analytics/payload ID oracle. Its single-worker result
-does not close multi-worker or query fairness requirements.
+does not close multi-worker fairness requirements. The same native gate runs
+`TestPublicQueryEndToEndTenantTurnsActualWorker`: actual Parquet/S3 fixtures,
+authorized Submission/Awaiter, the product worker, exact result identities and
+cross-tenant result denial verify background query turns. This is not a durable
+ingest or throughput test. PostgreSQL tests separately exercise a saturated
+older query, targeted helper isolation, concurrent per-query caps, cancellation,
+stale generation and cursor wrap; metadata-only plans are labeled as such.
 
 `./scripts/check comparison` runs the R3 end-to-end comparison against fresh
 PostgreSQL and MinIO installations with 1, 2, and 4 ARM64 workers. The official

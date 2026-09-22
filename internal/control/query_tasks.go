@@ -96,7 +96,13 @@ func (operations *QueryOperations) ClaimQueryCoordinator(ctx context.Context, in
 }
 
 func (operations *QueryOperations) ClaimQueryTask(ctx context.Context, installationID string, generation int64, owner string) (*QueryTask, error) {
-	return operations.claimQueryTask(ctx, installationID, generation, owner, "")
+	return operations.claimQueryTask(ctx, installationID, generation, owner, "", 0)
+}
+
+// ClaimQueryTaskAfterTenant rotates equally occupied tenants after the worker's
+// last committed claim. This scheduling hint carries no query authority.
+func (operations *QueryOperations) ClaimQueryTaskAfterTenant(ctx context.Context, installationID string, generation int64, owner string, afterTenant int64) (*QueryTask, error) {
+	return operations.claimQueryTask(ctx, installationID, generation, owner, "", afterTenant)
 }
 
 // ClaimQueryTaskForQuery uses the same durable scheduler and fencing path as a
@@ -107,11 +113,11 @@ func (operations *QueryOperations) ClaimQueryTaskForQuery(ctx context.Context, i
 	if uuid.Validate(queryID) != nil {
 		return nil, errors.New("invalid target query")
 	}
-	return operations.claimQueryTask(ctx, installationID, generation, owner, queryID)
+	return operations.claimQueryTask(ctx, installationID, generation, owner, queryID, 0)
 }
 
-func (operations *QueryOperations) claimQueryTask(ctx context.Context, installationID string, generation int64, owner, targetQueryID string) (*QueryTask, error) {
-	if installationID == "" || generation <= 0 || owner == "" || len(owner) > 128 {
+func (operations *QueryOperations) claimQueryTask(ctx context.Context, installationID string, generation int64, owner, targetQueryID string, afterTenant int64) (*QueryTask, error) {
+	if installationID == "" || generation <= 0 || owner == "" || len(owner) > 128 || afterTenant < 0 {
 		return nil, errors.New("invalid query task claim")
 	}
 	var target any
@@ -135,6 +141,7 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 	err = tx.QueryRow(ctx, `SELECT q.query_id::text,q.tenant_id,q.snapshot_id::text,q.deadline
 		FROM query_jobs q WHERE q.state IN ('queued','running') AND q.deadline>clock_timestamp()
 		AND ($1::uuid IS NULL OR q.query_id=$1::uuid)
+		AND (SELECT count(*) FROM query_tasks active WHERE active.tenant_id=q.tenant_id AND active.query_id=q.query_id AND active.state='running')<$2
 		AND EXISTS (SELECT 1 FROM query_tasks t WHERE t.query_id=q.query_id AND t.tenant_id=q.tenant_id
 			AND t.state='queued' AND t.retry_at<=clock_timestamp() AND t.attempt<3
 			AND NOT EXISTS (SELECT 1 FROM query_task_inputs i
@@ -142,8 +149,10 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 				AND p.stage=i.producer_stage AND p.level=i.producer_level AND p.partition_id=i.producer_partition_id
 				WHERE i.tenant_id=t.tenant_id AND i.query_id=t.query_id AND i.consumer_stage=t.stage
 				AND i.consumer_level=t.level AND i.consumer_partition_id=t.partition_id AND p.state<>'succeeded'))
-		ORDER BY (SELECT count(*) FROM query_tasks active WHERE active.tenant_id=q.tenant_id AND active.state='running' AND active.lease_until>clock_timestamp()),q.deadline,q.query_id
-		FOR UPDATE OF q SKIP LOCKED LIMIT 1`, target).Scan(&queryID, &tenantID, &snapshotID, &deadline)
+		ORDER BY (SELECT count(*) FROM query_tasks active WHERE active.tenant_id=q.tenant_id AND active.state='running' AND active.lease_until>clock_timestamp()),
+		  CASE WHEN $3::bigint>0 THEN (q.tenant_id<=$3)::int ELSE 0 END,
+		  CASE WHEN $3::bigint>0 THEN q.tenant_id ELSE 0 END,q.deadline,q.query_id
+		FOR UPDATE OF q SKIP LOCKED LIMIT 1`, target, MaxRunningQueryTasks, afterTenant).Scan(&queryID, &tenantID, &snapshotID, &deadline)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Recovery is durable work even when admission finds no next task.
 		// Rolling back here would resurrect an exhausted or expired attempt.
@@ -153,6 +162,8 @@ func (operations *QueryOperations) claimQueryTask(ctx context.Context, installat
 		return nil, err
 	}
 	var running int
+	// The candidate filter avoids a full query hiding other runnable work; the
+	// fresh count after the query-row lock is still the authority under races.
 	if err := tx.QueryRow(ctx, `SELECT count(*) FROM query_tasks WHERE tenant_id=$1 AND query_id=$2 AND state='running'`, tenantID, queryID).Scan(&running); err != nil {
 		return nil, err
 	}
