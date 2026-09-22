@@ -2270,6 +2270,13 @@ an initial unprivileged host attempt failed on localhost bind permissions and
 is not counted as a pass. Logs use `.tools/maintenance-accounting-` with
 `unit`, `codegen`, `race`, `contracts`, `integration`, `browser`, `comparison`
 and `resource` suffixes. The unrelated full capacity matrix was not rerun.
+Commit45d45ee contains this joined-cleanup/post-load accounting correction.
+Its commit message inadvertently repeats the preceding c09e8eb selector change
+and measurements; that message is not evidence for45d45ee. This section and
+the following corrective documentation commit record its actual scope/results.
+Published history is retained rather than rewritten. The secret-scan baseline
+only tracks the moved line of the unchanged source-design checksum, not a new
+credential exemption.
 
 ## Release and workflow
 
