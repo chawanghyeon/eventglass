@@ -246,6 +246,17 @@ Double metrics are finite JSON numbers; reduce in the fixed C06 tree order and
 test DESIGN tolerance. Final integer overflow or nonfinite output422, never
 coerced string Infinity or float fallback.
 
+Histogram empty-bucket completion without dimensions reuses a materialized
+native aggregate CTE (at most2,000 buckets, each with at most8 metric states).
+It never materializes the original input rows. The existing mandatory scope and
+user predicate run once, with the same bound parameters; the gap anti-join reads
+only bucket keys from that computed state. A populated bucket whose numeric
+operands are all missing still retains its excluded count, not an empty state.
+Grouped histograms and requests that omit empty buckets keep their ordinary
+scan. Empty-input operations and exact reducer/finalization contracts are unchanged.
+Pinned-engine physical-plan tests must show one Parquet scan, and maximum-bucket,
+negative-epoch, scope/filter and integer-state tests must verify actual output.
+
 Group keys encode type tags and canonical values. Missing and explicit null are
 separate tags; integer1/double1.0/string"1" remain separate. Normalize -0 double
 to0 for grouping; no NaN. Non-scalar group values422 unsupported_group_type.

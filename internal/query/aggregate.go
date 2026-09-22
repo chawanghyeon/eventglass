@@ -79,9 +79,12 @@ func BuildAggregateOperation(spec AggregateOperationSpec) (engine.QueryOperation
 	}
 	fillEmptyBuckets := spec.Histogram != nil && spec.Histogram.EmptyBuckets && len(spec.GroupBy) == 0
 	if fillEmptyBuckets {
-		bucket := histogramBucketSQL(spec.Plan, spec.Histogram.IntervalUS)
-		scan += ` UNION ALL SELECT ` + strings.Join(emptySelect, ",") + aggregateEmptySource(spec) +
-			` WHERE NOT EXISTS (SELECT 1 FROM input_rows r WHERE ` + spec.Plan.Where.Text + ` AND ` + bucket + `=bucket_start_us)`
+		// Histogram-only grouping has at most2,000 buckets. Retain that bounded
+		// metric state, not raw rows, so filling gaps does not decode Parquet
+		// and evaluate the complete scope/user predicate a second time.
+		scan = `WITH histogram_groups AS MATERIALIZED (` + scan + `) SELECT * FROM histogram_groups UNION ALL SELECT ` +
+			strings.Join(emptySelect, ",") + aggregateEmptySource(spec) +
+			` WHERE NOT EXISTS (SELECT 1 FROM histogram_groups g WHERE g.bucket_start_us=buckets.bucket_start_us)`
 	}
 	reduce := `SELECT ` + strings.Join(reduceSelect, ",") + ` FROM input_rows r`
 	if len(groupReduce) > 0 {
@@ -91,9 +94,6 @@ func BuildAggregateOperation(spec AggregateOperationSpec) (engine.QueryOperation
 	empty += aggregateEmptySource(spec)
 	arguments := append(groupArgs, metricArgs...)
 	arguments = append(arguments, spec.Plan.Where.Args...)
-	if fillEmptyBuckets {
-		arguments = append(arguments, spec.Plan.Where.Args...)
-	}
 	scanArguments, err := encodeQueryArguments(arguments)
 	if err != nil {
 		return engine.QueryOperation{}, err

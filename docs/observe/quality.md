@@ -1761,6 +1761,89 @@ Evidence: `.tools/rows-pruning-comparison.log` and
 `.tools/comparison-report-1.Miw90V`; use retained directories rather than an
 older official-profile convenience JSON when checking this quick diagnostic.
 
+### Histogram empty buckets without repeated input scanning
+
+On the476b071 product baseline, a regression reproduces two references to the
+scoped source and pinned DuckDB2.0 `EXPLAIN (FORMAT JSON)` confirms two physical
+Parquet scans. Completing empty buckets re-evaluated the whole source predicate
+instead of reusing the aggregate. The correction retains only histogram state
+in an explicit native materialized CTE: without dimensions it has at most2,000
+buckets and8 metric states per bucket. No raw-row materialization, metadata-only
+counting, new query service or skipped integrity/authentication checks are added.
+Grouped/no-gap requests, reducer state and empty-input semantics stay unchanged.
+
+The generated and physical-plan regressions now pass with one source scan.
+Actual native tests cover negative epoch, exact half-open bounds, tenant/project/
+kind/retention/lane/user predicates, missing-only populated buckets, integer
+count/excluded/limb state, empty input and the2,000-bucket maximum under32MiB
+native memory. The initial numeric fixture omitted its required declared integer
+type; the test was corrected without relaxing product validation. Unit/vet/
+architecture, race and generated-contract parity pass; full pinned-native tests
+and vet pass (engine69.398s, subprocess contracts0.851s). Real PG/S3 query/Live/
+alert/authority/retry checks pass27.378s and production-image Chromium passes2.7s.
+Evidence: `.tools/histogram-{rescan-before-unit,rescan-before-native,native,unit,race,codegen,contracts,integration,browser}.log`.
+
+The same final benchmark/fixture/oracle code is compiled against the frozen old
+query builder and corrected builder. Each profile uses five one-second samples,
+Linux ARM64 CPU1/512MiB/swap0, GOMAXPROCS1, Go soft limit96MiB, native memory/
+spill256MiB, non-root/read-only and denied network. Input hashes frame each file
+as BE64 byte length followed by its bytes in fixture index order. Both sides
+have identical hashes, sizes and independently verified counts in every bucket:
+32 files/3,200 rows/56,635B hash
+`9067dec9a48e3b394acb04939145a3ba76f8dcee7ea4437bb6e657634426ba6c`;
+256 files/25,600 rows/452,834B hash
+`9de7c2916d63adc0313f45439fca47b5d6d7e34bddef870a3ebc33c5cc6956c6`.
+
+| Files | Median before/after ms | Before/after B/op | Before/after allocs/op |
+|---|---:|---:|---:|
+|32|34.237677 /27.220350|1,114,798 /1,102,826|794 /678|
+|256|91.531703 /64.120128|1,294,638 /1,282,430|1,696 /1,580|
+
+Native operation latency falls20.5%/29.9% (about29.2→36.7 and10.9→15.6 native
+operations/s respectively). These operations include native open/COPY/output
+inspection, but not a process supervisor, PG, S3 or service queuing. Go B/op
+excludes native allocations. Whole benchmark cgroup peaks, including fixture
+setup and independent verification, are90,177,536→89,292,800B; both have zero
+memory.max/OOM/kill events. This small peak difference is not broad memory-
+headroom evidence. S3/network requests and bytes are0 on both sides. The earlier
+exploratory baseline lacks the final hash/bucket oracle and is not substituted
+for this pair. Retained final artifacts:
+`.tools/histogram-before-final.vaPGhL` and `.tools/histogram-after-final.uBoGMK`.
+These native measurements alone do not close the mixed-load R3 SLO or R4 release.
+
+The subsequent freshly built1-worker20s/300s/90s diagnostic retains evidence in
+`.tools/comparison-report-1.CZky1f` (`.tools/histogram-comparison.log`). Its matched
+baseline is the preceding `.tools/comparison-report-1.Miw90V`, not an older
+convenience report. Both use the same fixture definition and logical load;
+timestamps, submitted-envelope hashes and compaction scheduling differ. This
+single service pair is not a repeated statistical estimate:
+
+| Measurement | Before | After |
+|---|---:|---:|
+|Rows p95 /server p95 ms|312 /164|344 /168|
+|Histogram p95 /server p95 ms|995 /803|848 /655|
+|ACK /visibility p95 ms|371 /821|371 /799|
+|Load backlog slope per minute /final backlog|−0.720254 /0|−0.744368 /0|
+|Query work /busy ms|132 /16,753|134 /14,419|
+|Maximum query files /bytes|663 /7,393,897|682 /7,602,007|
+|S3 HEAD requests|62,677|64,933|
+|S3 PUT requests /bytes|5,954 /33,411,734|5,962 /33,018,065|
+|S3 full GET requests /bytes|14,281 /80,217,970|14,274 /79,220,960|
+|S3 Range GET requests /bytes|2,082 /19,084,481|2,077 /18,920,588|
+|PG WAL bytes|80,312,256|79,790,152|
+|Sampled whole-installation peak bytes|794,107,573|785,737,840|
+|API /worker cgroup peak bytes|146,874,368 /68,775,936|145,653,760 /66,129,920|
+
+All59 measured queries succeed and the public oracle returns32,000 logs/1,600
+errors. Maintenance makes progress, with73,600ms observed spare time, zero
+budget overruns and zero OOM. The expected cancellation probe accounts for the
+one canceled query job, not a measured query failure. Cold/warm all-history
+regex measures919/697ms, Range604/3, with equal snapshot/rows, three observed
+worker incarnations and no query work during10s idle. The histogram target is
+still false and the command exits1; corrected official-duration profiles and
+maximum-size maintenance evidence remain required. No overall throughput or
+production memory-headroom claim follows from these diagnostic samples.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

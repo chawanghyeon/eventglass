@@ -95,6 +95,21 @@ func TestBuildAggregateOperationEmitsNegativeEpochEmptyBuckets(t *testing.T) {
 	}
 }
 
+func TestHistogramEmptyBucketsDoNotRescanScopedInput(t *testing.T) {
+	plan := aggregateTestPlan(t, -1, 1_000_001)
+	operation, err := BuildAggregateOperation(AggregateOperationSpec{Plan: plan,
+		Metrics: []AggregateMetric{{Name: "events", Op: "count"}}, Histogram: &AggregateHistogram{IntervalUS: 1_000_000, EmptyBuckets: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(operation.ScanSQL, "FROM input_rows"); got != 1 {
+		t.Fatalf("histogram reads scoped input %d times; empty buckets must use the aggregate state", got)
+	}
+	if len(operation.ScanArguments) != len(plan.Where.Args) {
+		t.Fatalf("scope rebound for empty buckets: %d arguments, want %d", len(operation.ScanArguments), len(plan.Where.Args))
+	}
+}
+
 func aggregateTestPlan(t *testing.T, startUS, endUS int64) CompiledPlan {
 	t.Helper()
 	root := &Node{Op: "constant", Constant: true}

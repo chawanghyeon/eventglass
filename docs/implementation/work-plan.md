@@ -297,6 +297,14 @@ exits1. Whole-installation sampled peak and full-GET bytes increase slightly.
 R3 therefore stays incomplete, including corrected official-duration profiles
 and maximum-size maintenance resource evidence; R4 is not released.
 
+The next correction reproduces two physical Parquet scans for histogram gap
+filling and reuses bounded aggregate state instead. Native scope/metric/empty/
+maximum-bucket regressions, contracts, real PG/S3 and browser checks pass.
+Matched32/256-file native latency improves20.5%/29.9%; the same short-service
+profile measures histogram p95=995→848ms, rows312→344ms, no growing backlog and
+zero OOM. The500ms histogram target still fails, so this is not R3 completion.
+See quality.md for exact artifacts, inputs, resources and S3 accounting.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env
