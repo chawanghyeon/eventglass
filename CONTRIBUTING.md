@@ -119,6 +119,17 @@ samples and runtime logs in a unique `.tools/comparison-report-N.*` directory;
 the convenience `comparison-workers-N*.json` files represent only the latest
 run. Reports also accumulate private role-operation counters across the worker
 restart to distinguish empty claims from work time.
+Up to4,096 individual successful query samples retain HTTP total, job interval,
+pre/post-job wall time, selected bytes/files, scan/reduce counts and attempts.
+After the query loop joins, one bounded PostgreSQL read correlates the samples
+with their persisted jobs; it adds no request-path queries. All local containers
+share the kernel clock, and mismatched/inverted intervals fail diagnostics.
+Pre-job includes auth/snapshot/catalog work and retries; the job interval also
+includes queueing and publication; post-job includes polling and result export.
+These are wall-time boundaries, not exclusive CPU timings or a pure HEAD test.
+Partition/reservation and completed-compaction input counts are sampled once
+at load end before drain, with bounded output; these observations are not an
+atomic history and do not replace SLOs or foreground-pressure/accounting checks.
 ACK latency samples exclude the five-minute warmup; the gate requires exactly
 six measured original requests per load second. Warmup and duplicate/retry
 traffic still contribute to actual input provenance and storage costs. Legacy

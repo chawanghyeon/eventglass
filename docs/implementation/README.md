@@ -32,9 +32,13 @@ query-owned first-page pruning path has unit/native/PG/S3/browser evidence,
 retains all catalog HEAD and authority checks, and conservatively falls back for
 cursors/filters/insufficient proof. The matched short service profile improves
 rows p95=893→312ms and passes the backlog target, but histogram995ms still misses
-500ms. Subsequent histogram state reuse reached344/848ms, but the latest
-20s/300s/90s diagnostic after maximum-maintenance hardening regresses to
-516/1,324ms: both query SLOs remain open. Separately, typed sizing, bounded native
+500ms. Subsequent histogram state reuse reached344/848ms; a diagnostic after
+maximum-maintenance hardening regressed to516/1,324ms. Repeating that runtime
+with job-boundary diagnostics gives341/949ms, exposing run-to-run variation.
+Control now ranks actual bounded compaction prefixes instead of lexical
+error/log priority. Its matched20s/300s/90s candidate measures315/714ms with
+fewer HEADs; histogram still misses500ms, while RSS/full-GET bytes and post-load
+latencies increase. Corrected official query SLOs remain open. Separately, typed sizing, bounded native
 writer fan-in and app-owned retry admission pass two maximum-pair actual-worker
 resource executions, with zero OOM or budget overrun but no memory headroom.
 These local results are not full-service SLO or release claims. R3

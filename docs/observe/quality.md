@@ -2064,6 +2064,124 @@ query work, but maintenance still reads548 objects/3,827,791B. Restart, cache,
 public counts and resource checks pass; R3 requires both query SLOs, diagnosis
 of this trajectory, and corrected official-duration profiles. R4 is not released.
 
+### Bounded compaction selection and query boundary evidence
+
+The diagnostic workload now retains at most4,096 per-query wall-time boundaries
+and correlates them with durable jobs/tasks in one post-load PG read. It records
+pre-job/job/post-job time, files/bytes, scan/reduce counts and attempts, plus
+load-end partition and maintenance input counts. It adds no request-path SQL.
+Clock mismatch, duplicate/missing jobs and inverted intervals fail rather than
+silently clamping. These intervals include waits and result export; they are not
+exclusive CPU phases or pure catalog HEAD timings.
+
+Repeating the unchanged0eba7e8 runtime with this instrumentation gives
+rows/histogram341/949ms, compared with its previous516/1,324ms. This variation
+precludes attributing that earlier regression to the maintenance memory cap
+from one pair alone. Slow histograms select515–726 files in three scans plus a
+reducer: the three slowest HTTP/job/pre/post intervals are1,228/946/224/57,
+1,092/796/251/44 and949/749/163/36ms (integer rounding). At load end, all16 lanes
+have active compactions;15 reserve error inputs while log partitions hold11–24
+unreserved small bundles. Lexical kind order can indefinitely prefer8 error
+inputs over64 eligible logs in the same lane, independent of expected reduction.
+
+Real PG regression tests reproduce that choice, lower-lane8 versus64/129 inputs,
+and64 larger files whose32MiB prefix has only8 inputs versus16 tiny files. Control
+now ranks the actual bounded prefix by file reduction then rewrite bytes, keeping
+the old minimum/target/ceilings and all reservation/pressure/fence checks. Only
+the winning at-most128 rows reach Go. Active queued/running/prepared lanes,
+cancel, next-candidate reservability and quiet seven-input partitions are tested.
+Before fails the expected choice assertions; after passes. Evidence includes
+`.tools/compaction-selection-before.v2xRuc`, `.tools/compaction-selection-after.z6x2c2`
+and the matched cost reruns below. This changes no native memory, execution
+budget, query authority or physical GC interlock.
+
+The same logical168-bundle catalog (8/32/128 per lane, two files each) measures
+selector cost separately. Fresh UUIDs mean this is not byte-identical catalog
+input. Same Go1.27.1, pinned native library, actual PG, CPU1/512MiB/swap0,
+Go96MiB/GOMAXPROCS1, non-root/read-only, five samples of ten calls after warmup,
+150ms between samples outside timing; no competing builds or load. The old
+source is taken exactly from0eba7e8 and compiled in the same current build image.
+Each call still makes two PG queries; no S3 operation occurs. Before picks8
+inputs, after128, so this is the cost of the better candidate, not faster
+production of the same selected result.
+
+| Selector observation | Before | After |
+| --- | ---: | ---: |
+| Median ms/call |2.031350|2.229509|
+| Derived calls/s |492.3|448.5|
+| Median Go B/allocations per call |5,809 /180|69,153 /2,213|
+| Process maximum RSS including fixtures |32,088,064B|35,209,216B|
+| Cgroup peak / OOM |33,918,976B /0|34,705,408B /0|
+
+Cost evidence: `.tools/compaction-selection-before.M6OBDT` and
+`.tools/compaction-selection-after.jV9sqM`. The before command exits1 because its
+separate choice assertions intentionally fail; the cost test itself passes.
+An initial cost retry found the old image tag had been replaced, before starting
+PG or timing; the exact committed source was then compiled as described above.
+
+The matched service diagnostic uses one worker,20s warmup/300s load/90s drain,
+the same fixture definition,100 logs+5 errors/s offered load, role CPU1/512MiB
+with zero swap, and actual isolated PG/MinIO. This is not a capacity increase or
+official-duration result. Before reuses the verified0eba7e8 runtime, executable
+SHA256 `e141e6204a6c40f872288b28925c48a90941c8f70e63996f3e8c770dd9dcd07e`;
+after is freshly built with executable SHA256
+`cd5b8ce6f829269f9134c48b7779ecbeeda50162745af9326015f687ef330e72`.
+Both use library SHA256
+`84ad753acc1390e13ce56e728d75d379bebeedec7f3df58ce071c1b373e4c79f`.
+Reports: `.tools/comparison-report-1.kawvFg/report.json` and
+`.tools/comparison-report-1.p9oSqK/report.json`; logs:
+`.tools/query-boundary-diagnostic.log` and `.tools/compaction-selection-comparison.log`.
+Both commands correctly exit1: histogram still misses500ms. Both return32,000
+logs+1,600 errors, all59 measured queries, no conflicts, final backlog0,
+accounted maintenance with no overrun, and zero OOM across all incarnations.
+
+| Service observation | Before | After |
+| --- | ---: | ---: |
+| Rows / histogram p95 |341 /949ms|315 /714ms|
+| Rows / histogram job p95 |147 /749ms|148 /565ms|
+| ACK / visibility p95 |375 /834ms|370 /769ms|
+| Maximum selected files |726|626|
+| Load-end error / log bundles |435 /266|331 /200|
+| Compaction work steps / all-attempt ms |203 /13,312|237 /15,588|
+| Conversion work ms / measured idle ms |221,456 /75,400|217,217 /79,900|
+| Scheduler all-attempt ms |581|589|
+| S3 HEAD |59,673|51,867|
+| S3 PUT count / bytes |5,950 /33,640,765B|5,976 /35,849,052B|
+| S3 full GET count / bytes |14,249 /80,517,201B|14,672 /87,137,918B|
+| S3 Range count / bytes |2,021 /18,676,080B|2,018 /19,385,895B|
+| PG WAL |79,980,840B|79,163,552B|
+| Sampled whole-installation peak |795,491,695B|858,437,711B|
+| Post-load cold / warm regex |854 /613ms|1,347 /797ms|
+| Post-load cold / warm Range calls |581 /3|474 /2|
+
+Actual submitted envelopes differ:10,913/47,140,535B with SHA256
+`efe9de2622a2af94816658f9c51535d2a32e6eb849dff574aa238ef215339cf8`, versus
+10,814/37,948,635B with SHA256
+`7fe23a714ccb8f0b4c54f2d91843d0198c6e0cf290e517938c892e09d4a99746`.
+Fresh installation IDs, timing and retries differ despite the same logical
+profile. Histograms improve24.8% in this pair, but allocations/RSS/full-GET bytes
+and post-load latency increase. Do not generalize this into whole-service,
+memory or cost superiority. Backlog max12→18 and slope−0.2354→−0.5825/min both
+pass the existing tolerance; no query work is created during the10s idle phase.
+Cold/warm results preserve the same snapshot and exact rows within each run.
+The remaining histogram SLO and corrected official1/2/4-worker profiles keep R3
+open, and R4 remains unreleased.
+
+Root ARM64 unit/layout/architecture/vet and byte-identical generated-contract
+checks pass. Control/query/app race tests pass1.381/7.726/4.510s. The fresh
+ARM64 comparison build runs the complete pinned-native `go test -count=1 ./...`
+and `go vet ./...` with the static-library tag and actual child executable:
+engine152.442s and process contracts0.863s pass. This executes the Dockerfile's
+contract commands in the existing build image without exporting another large
+test image; no alternate native library is used. Separate required-environment
+PG/MinIO integration passes25.994s on ARM64; actual native search/Live,
+authorization, planning/snapshot, compaction/mixed+expired retention and bounded
+candidate tests pass47.869s with no skipped test in that selected native run.
+The final non-root/read-only ARM64 image's actual Chromium operator flow passes
+2.6s. Logs are `.tools/compaction-selection-{unit,codegen,race,contracts,
+integration,browser}.log`. These correctness checks do not turn the failed
+histogram target into a successful R3 gate or claim R4 completion.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

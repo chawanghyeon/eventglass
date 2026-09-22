@@ -183,6 +183,12 @@ fence/attempt or releasing its reserved inputs. GC's backup/snapshot interlocks
 are unchanged. Candidate selection excludes lanes with active maintenance so
 an unreservable lane cannot hide other eligible work; reservation still resolves
 concurrent schedulers through the existing lane lock and unique constraint.
+Control ranks each eligible partition's bounded input prefix by expected file
+reduction, then rewrite bytes, rather than letting lexical kind/lane order
+starve another partition. The existing32MiB target, minimum8 small inputs,
+128-input/256MiB ceilings and deterministic within-partition order remain;
+at most128 candidate rows cross from PostgreSQL into Go. This is a selection
+heuristic, not a larger maintenance grant or a cross-tenant fairness guarantee.
 Bounded operation logs report counts, failures and duration
 without raw error text.
 The same fixed role labels expose call/work/failure and elapsed/work-time

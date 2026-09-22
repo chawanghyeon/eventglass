@@ -37,7 +37,10 @@ type comparisonState struct {
 }
 
 type comparisonReport struct {
-	PostLoad                                        *postLoadEvidence `json:",omitempty"`
+	QueryMeasurements                               []queryMeasurementEvidence `json:",omitempty"`
+	LoadEndPartitions                               []partitionEvidence        `json:",omitempty"`
+	LoadEndCompactions                              []compactionEvidence       `json:",omitempty"`
+	PostLoad                                        *postLoadEvidence          `json:",omitempty"`
 	Operations                                      map[string]comparisonOperation
 	Revision, Architecture, FixtureDefinitionSHA256 string
 	SubmittedInput                                  submittedInput
@@ -211,6 +214,9 @@ func TestSustainedComparison(t *testing.T) {
 	case <-time.After(20 * time.Second):
 		t.Fatal("mixed query loop did not join")
 	}
+	if err := collectQueryDiagnostics(context.Background(), pool, state.TenantID, &report); err != nil {
+		t.Fatal(err)
+	}
 
 	drainStarted := time.Now()
 	report.MaxConversionBacklog, report.FinalBacklog = drainBacklog(t, pool, drain)
@@ -273,7 +279,7 @@ func TestSustainedComparison(t *testing.T) {
 	writeReport(t, reportPath, report)
 	for name, passed := range report.Targets {
 		if !passed {
-			t.Errorf("R3 target failed: %s report=%+v", name, report)
+			t.Errorf("R3 target failed: %s (full evidence: %s)", name, reportPath)
 		}
 	}
 	t.Logf("R3 workers=%d accepted=%d ack_p95_ms=%d query_p95_ms=%d visible_p95_ms=%d wal_bytes=%d s3_objects=%d s3_bytes=%d", workers, report.Accepted, report.ACKP95MS, report.QueryP95MS, report.VisibilityP95MS, report.PGWALBytes, report.S3Objects, report.S3StoredBytes)
@@ -468,6 +474,20 @@ func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, s
 				continue
 			}
 			mu.Lock()
+			if len(report.QueryMeasurements) >= maxQueryMeasurements {
+				mu.Unlock()
+				result <- errors.New("query diagnostic sample limit exceeded")
+				return
+			}
+			kind := "rows"
+			if histogram {
+				kind = "histogram"
+			}
+			report.QueryMeasurements = append(report.QueryMeasurements, queryMeasurementEvidence{
+				Kind: kind, StartedAt: measurement.StartedAt, TotalMS: measurement.Total.Milliseconds(),
+				Objects: measurement.Objects, ScannedBytes: measurement.ScannedBytes,
+				snapshotID: measurement.SnapshotID, total: measurement.Total, server: measurement.Server,
+			})
 			if len(*latencies) == 0 {
 				report.QueryObjectsFirst = measurement.Objects
 			}
@@ -518,6 +538,8 @@ func searchFailureCode(err error) string {
 }
 
 type searchMeasurement struct {
+	SnapshotID   string
+	StartedAt    time.Time
 	Total        time.Duration
 	Server       time.Duration
 	Visibility   time.Duration
@@ -638,7 +660,7 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		}
 		visible = lag
 	}
-	return searchMeasurement{Total: queryLatency, Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible, Objects: objects, ScannedBytes: scannedBytes}, nil
+	return searchMeasurement{SnapshotID: wire.SnapshotID, StartedAt: started, Total: queryLatency, Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible, Objects: objects, ScannedBytes: scannedBytes}, nil
 }
 
 func releaseComparisonSnapshot(ctx context.Context, client *http.Client, baseURL string, tenantID int64, snapshotID, csrf string) error {

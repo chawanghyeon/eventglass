@@ -331,6 +331,20 @@ and OOM0 pass. R3 must now resolve both query SLOs and the maintenance/query
 trajectory before corrected official-duration runs; native-only speedup and
 maximum-byte progress do not close it. R4 remains incomplete.
 
+Job-boundary diagnostics then repeat the same0eba7e8 runtime at341/949ms,
+showing that the previous single-run regression is not a causal attribution.
+Slow histograms use multiple scans over hundreds of files; lexical error/log
+candidate selection can leave a larger log partition waiting in the same lane.
+Control now compares each partition's actual32MiB/128-input/256MiB-bounded prefix,
+preferring file reduction then rewrite bytes. Real PG tests reproduce the former
+choice and verify limits, cancellation, active-lane exclusion and reservability.
+The matched short candidate records315/714ms, HEAD59,673→51,867 and exact public
+counts, but histogram still fails500ms. Selector allocations, sampled whole RSS,
+full-GET bytes and post-load cold/warm latency increase. No budget, fence, native
+limit or query authorization changes. R3 remains first incomplete: resolve the
+remaining histogram SLO and run corrected official-duration profiles. See
+quality.md for source identities, scope, costs and failures.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

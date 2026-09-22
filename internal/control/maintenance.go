@@ -115,11 +115,32 @@ func (operations *MaintenanceOperations) FindCompactionCandidate(ctx context.Con
 	if pressured {
 		return CompactionCandidate{}, ErrMaintenanceNoWork
 	}
-	rows, err := operations.pool.Query(ctx, `SELECT b.tenant_id,b.lane_id,b.schema_version,b.grouping_version,b.event_day::text,b.kind,b.bundle_id::text,sum(f.bytes)
+	// Compare the same bounded prefix that a task may actually reserve, not
+	// lexical tenant/lane/kind order or an unbounded partition's total count.
+	// Otherwise a steady stream of errors can indefinitely displace a larger
+	// log compaction in the same lane. Rank expected file reduction first and
+	// rewrite bytes second; retain the old deterministic order for exact ties.
+	// PostgreSQL selects one partition; at most 128 rows cross into this process.
+	rows, err := operations.pool.Query(ctx, `WITH eligible AS MATERIALIZED (
+		SELECT b.tenant_id,b.lane_id,b.schema_version,b.grouping_version,b.event_day,b.kind,b.bundle_id,b.valid_from_generation,sum(f.bytes) AS bytes
 		FROM bundles b JOIN files f ON f.tenant_id=b.tenant_id AND f.bundle_id=b.bundle_id
 		WHERE b.valid_to_generation IS NULL AND b.reserved_by IS NULL
 		AND NOT EXISTS(SELECT 1 FROM maintenance_tasks m WHERE m.tenant_id=b.tenant_id AND m.lane_id=b.lane_id AND m.state IN ('queued','running','prepared'))
-		GROUP BY b.bundle_id HAVING max(f.bytes)<$1 ORDER BY b.tenant_id,b.lane_id,b.schema_version,b.grouping_version,b.event_day,b.kind,b.valid_from_generation,b.bundle_id`, SmallCompactionFile)
+		GROUP BY b.bundle_id HAVING max(f.bytes)<$1
+	), ordered AS (
+		SELECT *,row_number() OVER candidate_order AS ordinal,
+		COALESCE(sum(bytes) OVER (candidate_order ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),0) AS preceding_bytes
+		FROM eligible WINDOW candidate_order AS (PARTITION BY tenant_id,lane_id,schema_version,grouping_version,event_day,kind ORDER BY valid_from_generation,bundle_id)
+	), bounded AS MATERIALIZED (
+		SELECT * FROM ordered WHERE ordinal<=$2 AND (ordinal<=8 OR preceding_bytes<$3) AND preceding_bytes+bytes<=$4
+	), preferred AS (
+		SELECT tenant_id,lane_id,schema_version,grouping_version,event_day,kind FROM bounded
+		GROUP BY tenant_id,lane_id,schema_version,grouping_version,event_day,kind HAVING count(*)>=8
+		ORDER BY count(*) DESC,sum(bytes),tenant_id,lane_id,schema_version,grouping_version,event_day,kind LIMIT 1
+	)
+	SELECT b.tenant_id,b.lane_id,b.schema_version,b.grouping_version,b.event_day::text,b.kind,b.bundle_id::text,b.bytes
+	FROM bounded b JOIN preferred USING(tenant_id,lane_id,schema_version,grouping_version,event_day,kind)
+	ORDER BY b.ordinal LIMIT $2`, SmallCompactionFile, MaxCompactionInputs, TargetCompactionBytes, MaxCompactionInputBytes)
 	if err != nil {
 		return CompactionCandidate{}, err
 	}
