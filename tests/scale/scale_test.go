@@ -36,28 +36,6 @@ func TestOneTwoFourWorkersProduceSameResultsAndBoundConnections(t *testing.T) {
 	}
 }
 
-func TestTenantRoundRobinDispatch(t *testing.T) {
-	queues := map[int][]int{1: {1, 2, 3, 4}, 2: {1}, 3: {1, 2}}
-	var order []int
-	for len(queues) > 0 {
-		tenants := make([]int, 0, len(queues))
-		for tenant := range queues {
-			tenants = append(tenants, tenant)
-		}
-		sort.Ints(tenants)
-		for _, tenant := range tenants {
-			order = append(order, tenant)
-			queues[tenant] = queues[tenant][1:]
-			if len(queues[tenant]) == 0 {
-				delete(queues, tenant)
-			}
-		}
-	}
-	if fmt.Sprint(order[:3]) != "[1 2 3]" {
-		t.Fatalf("first round=%v", order)
-	}
-}
-
 func TestKubernetesBoundsMatchRuntimeContracts(t *testing.T) {
 	manifest, err := os.ReadFile("../../deploy/kubernetes/base.yaml")
 	if err != nil {

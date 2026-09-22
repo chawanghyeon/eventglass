@@ -405,6 +405,17 @@ with jittered probes every5s; don't hide stalled age. Tenant round-robin claims
 max1 child/tenant/worker and max4 global query tasks/query; document that global
 fairness is approximate until G07 measures skew across replicas.
 
+Conversion workers carry a single last-claimed tenant ID in their native loop.
+Among equally occupied tenants, claims rotate to the next larger ID and wrap;
+within that tenant the existing retry/creation/job ordering remains. Zero keeps
+the initial age-based choice; gaps, removed tenants and maximum IDs are valid
+cursor positions without arithmetic increments. Only a committed claim changes
+the app cursor, even if execution subsequently fails. Empty/rejected claims do
+not advance it. The cursor resets on restart and is not durable authority.
+Control still owns generation checks, lease/retry eligibility, SKIP LOCKED and
+fenced updates. Real single-worker PG/S3/native tests cover the transition after
+prepared/completed/expired work; query and multi-worker fairness remain R3 work.
+
 The implemented `deploy/kubernetes/base.yaml` baseline selects Linux ARM64 at
 release scheduling time and fixes resource requests/limits, startup/
 readiness/liveness, grace30s, private PG/S3/gateway network, non-root read-only

@@ -2666,6 +2666,81 @@ above. Logs use `.tools/compaction-tiers-{unit,codegen,integration,contracts,
 browser,comparison}.log` and `.tools/compaction-tier-native-*.log`. No API/schema,
 native engine/limit, ingest/query ownership, authority or backup interlock changed.
 
+### Actual single-worker conversion tenant turns
+
+The prior claim order preferred tenants without running jobs, then globally old
+retry/creation times. Real PG tests reproduce selecting the same older tenant
+after its preceding job prepares, publishes or expires; the existing test only
+covered a still-running predecessor. The original failed assertions are retained
+in `.tools/tenant-turns-before.log`; the cursor fix passes those transitions and
+negative cursor, maximum-ID wrap, missing-ID gap, retry-time, canceled claim and
+stale-generation checks. Rejected claims leave attempt counts unchanged.
+
+App's joined native loop now retains one last-claimed conversion tenant ID.
+Control's existing claim transaction rotates equally occupied tenants after it,
+then applies the original per-tenant retry/age/job ordering. The cursor changes
+only after a committed claim, including one whose execution later fails; no
+unbounded map, extra query, schema or persistent queue state is introduced.
+Running-work preference, SKIP LOCKED, generation, lease and fencing stay intact.
+Restart resets this hint. It is not cross-worker fairness or query scheduling.
+
+The new `TestConversionTenantTurnsActualWorker` runs actual durable ingest of
+12 older-tenant and4 newer-tenant one-record batches, then starts the real product
+worker. A private-schema trigger (maximum64 rows) records conversion claims,
+excluding publication claims. After all16 jobs publish and the worker joins,
+the pinned engine independently reads both S3 Parquet roles and compares all IDs
+to submitted normalized records, not catalog counts. It is wired into the native
+integration gate. The standalone test-local round-robin algorithm is removed
+from `tests/scale`; it never exercised product code and cannot prove scheduling.
+
+Before `.tools/tenant-native-before.KdVXaZ` has claim order
+`A A A A A A A A A A A B A B B B`: tenant B first appears at turn12. After
+`.tools/tenant-native-after.EBLaAa` has `A B A B A B A B A A A A A A A A`:
+B first appears at turn2 and the first four available rounds alternate. Both
+return all16 exact IDs in analytics and payload with no retry or OOM. Baseline
+fails only the turn-order assertion after the ID oracle; candidate passes.
+Elapsed2.64/2.04s and cgroup137,183,232/79,085,568B are whole correctness-test
+observations including setup/child/oracle, not matched throughput/RSS benchmarks;
+do not infer a speedup or memory saving from these single runs.
+
+Both run Linux ARM64 CPU1/512MiB/swap0, non-root/read-only,128MiB tmpfs,
+GOMEMLIMIT96MiB/GOMAXPROCS1 with private PG/MinIO and the unchanged pinned engine.
+Test helpers are compiled from current sources; actual worker subprocesses are
+the explicitly identified product binaries, never a substituted test dispatcher.
+Baseline product SHA `2048f7984ba32f02f2b0d921d96a426d218abdf3aecf5480c3c1f62892d0b71b`
+was exported from the retained comparison runtime after its old untagged build
+image was unavailable. Candidate SHA is
+`2b5f7edf9e5a7ecda820cc817a3393e859480f5bf0c4fcc9cd31c0d93dd38e27`, build image
+`sha256:9f684c82ce00442595c5099341941080437936130133d5133d8d8df3389d29f9`.
+Test-source SHA is `f2d23d2f0d84be2bd9987fee5ca699a90998aa1627645aa783dda9844efba6aa`.
+The first fixture mistakenly reused an SDK source event ID, correctly receiving
+a conflict before worker startup; `.eE7mmq`/`.TaTSLx` are rejected setup attempts,
+not product failures or fairness evidence. Both retained runs use the corrected
+unique-source-ID fixture. The temporary export container was removed; product
+data and user containers were untouched.
+
+ARM64 unit/layout/architecture/vet, app/control race4.495/1.354s, full host PG/S3
+31.664s, selected pinned-native query/Live/authority/retention/snapshot/compaction
+57.353s, child contracts1.500s and fresh production-image Chromium2.8s pass.
+The new actual-worker test separately passes as above. Correctness checks may
+overlap; these are not performance comparisons. Logs use
+`.tools/tenant-turns-{unit,race,integration,contracts,browser}.log` and
+`.tools/tenant-native-{before-fixed,after-fixed}.log`.
+API/schema, native budgets, query authorization and the backup GC interlock are
+unchanged. Sustained SLOs have not been rerun for this correctness change;
+single-worker query fairness, replica skew and remaining official profiles are
+still R3 requirements. R4 and release claims remain incomplete.
+
+The ARM64 `scale` control/model gate and byte-identical codegen also pass. Its
+first build export failed with Colima disk exhaustion before tests ran. Four
+obsolete unreferenced Eventglass verification images (one with two tags) plus
+the failed partial scale image were removed, then the unchanged check passed.
+Source/evidence, user containers/volumes, current product images and the pinned
+native cache were preserved; removed images can be rebuilt. Logs are
+`.tools/tenant-turns-scale.log` (failed export), `scale-retry.log` and `codegen.log`
+under the same prefix. This control/model gate does not run native workload
+throughput or prove multi-worker fairness.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

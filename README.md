@@ -81,6 +81,9 @@ Size-cohort compaction avoids repeatedly rewriting a quiet large pair with tiny
 arrivals. Actual mixed-size workflow median149.0→132.0ms and GET2.48MB→92KB
 are scoped savings; the short service306/558ms still fails histogram500ms and
 does not improve on303/548ms. Quiet cohorts may retain more files. R3 stays open.
+An app-owned conversion cursor fixes repeated older-tenant selection after work
+finishes. Real single-worker PG/S3/native tests preserve all IDs and rotate ready
+tenants; query and multi-worker fairness are still unverified, not release claims.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the

@@ -51,6 +51,13 @@ func (operations *PublicationOperations) ClaimConversion(ctx context.Context, in
 	return ClaimConversionJob(ctx, operations.pool, installationID, generation, owner, lease)
 }
 
+// ClaimConversionAfterTenant preserves durable admission/fencing while rotating
+// equally occupied tenants after the caller's last successful claim. The cursor
+// is a worker-local scheduling hint, never authority or durable queue state.
+func (operations *PublicationOperations) ClaimConversionAfterTenant(ctx context.Context, installationID string, generation int64, owner string, lease time.Duration, afterTenant int64) (*ConversionJob, error) {
+	return claimConversionJob(ctx, operations.pool, installationID, generation, owner, lease, afterTenant)
+}
+
 func (operations *PublicationOperations) Heartbeat(ctx context.Context, authority JobAuthority, lease time.Duration) (time.Time, error) {
 	return HeartbeatConversionJob(ctx, operations.pool, authority, lease)
 }

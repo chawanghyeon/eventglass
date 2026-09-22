@@ -289,10 +289,12 @@ func queryFailureCode(err error) string {
 }
 
 func (runtime *Runtime) runOneConversion(ctx context.Context) (bool, error) {
-	job, err := runtime.publication.ClaimConversion(ctx, runtime.installation.InstallationID, runtime.installation.StorageGeneration, runtime.workerOwner, workerLease)
+	job, err := runtime.publication.ClaimConversionAfterTenant(ctx, runtime.installation.InstallationID, runtime.installation.StorageGeneration, runtime.workerOwner, workerLease, runtime.conversionAfterTenant)
 	if err != nil || job == nil {
 		return false, err
 	}
+	// Even a failed execution consumed its turn. Empty/failed claims do not.
+	runtime.conversionAfterTenant = job.TenantID
 	err = runtime.withJobHeartbeat(ctx, job.Authority, func(taskContext context.Context) error {
 		return runtime.converter.ConvertAndPrepare(taskContext, *job)
 	})

@@ -401,6 +401,15 @@ the short service pair measures303/548→306/558ms and still fails histogram500m
 More quiet files and selector cost2.157→2.554ms are explicit tradeoffs. R3 remains
 incomplete; official-duration query/fairness/scaling and R4 work remain required.
 
+The conversion fairness audit reproduced repeated selection of the older tenant
+after its previous work prepared, completed or expired. A bounded app-owned
+last-tenant cursor now rotates equally occupied tenants through the existing
+control transaction. The actual one-worker12+4-job fixture changes the second
+tenant's first claim from turn12 to turn2, preserves all16 IDs in both Parquet
+roles and has OOM0. The standalone synthetic round-robin test is removed.
+This is not a throughput claim or full fairness closure: query scheduling,
+cross-worker skew and sustained service SLOs still need evidence before R3/R4.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

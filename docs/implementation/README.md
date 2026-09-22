@@ -64,6 +64,9 @@ Separately, typed sizing, bounded native
 writer fan-in and app-owned retry admission pass two maximum-pair actual-worker
 resource executions, with zero OOM or budget overrun but no memory headroom.
 These local results are not full-service SLO or release claims. R3
+also now has a real one-worker conversion fairness regression: an app-owned
+cursor prevents an older queue taking consecutive equally occupied turns after
+completion. Query and multi-worker skew still need verification. R3
 remains the first incomplete packet and R4 remains dependency-blocked. Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises

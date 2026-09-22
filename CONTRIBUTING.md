@@ -128,8 +128,13 @@ zero overruns. This scoped eventual-progress check does not replace sustained
 mixed-load SLOs; reaching the cgroup limit with reclaim is not memory headroom.
 
 `./scripts/check scale` verifies autoscale decisions, the PG64 replica budget,
-tenant round-robin dispatch, identical 1/2/4 worker logical results and the
-Kubernetes/KEDA bounds on Linux ARM64. It is not a throughput benchmark.
+synthetic 1/2/4-worker logical equivalence and Kubernetes/KEDA bounds on Linux
+ARM64. It is not a real dispatch or throughput benchmark. The old test-local
+round-robin algorithm was removed because it never called product scheduling.
+The integration gate instead runs `TestConversionTenantTurnsActualWorker`, using
+actual two-tenant ACK/publication, a bounded private-schema claim audit and the
+pinned engine's complete analytics/payload ID oracle. Its single-worker result
+does not close multi-worker or query fairness requirements.
 
 `./scripts/check comparison` runs the R3 end-to-end comparison against fresh
 PostgreSQL and MinIO installations with 1, 2, and 4 ARM64 workers. The official

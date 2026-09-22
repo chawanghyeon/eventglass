@@ -42,7 +42,11 @@ type PublicationJob struct {
 }
 
 func ClaimConversionJob(ctx context.Context, pool *pgxpool.Pool, installationID string, generation int64, owner string, lease time.Duration) (*ConversionJob, error) {
-	if pool == nil || installationID == "" || generation <= 0 || owner == "" || lease <= 0 || lease > 5*time.Minute {
+	return claimConversionJob(ctx, pool, installationID, generation, owner, lease, 0)
+}
+
+func claimConversionJob(ctx context.Context, pool *pgxpool.Pool, installationID string, generation int64, owner string, lease time.Duration, afterTenant int64) (*ConversionJob, error) {
+	if pool == nil || installationID == "" || generation <= 0 || owner == "" || lease <= 0 || lease > 5*time.Minute || afterTenant < 0 {
 		return nil, errors.New("invalid conversion job claim")
 	}
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
@@ -62,14 +66,16 @@ func ClaimConversionJob(ctx context.Context, pool *pgxpool.Pool, installationID 
 		SELECT j.job_id FROM jobs j
 		WHERE j.kind='convert' AND j.storage_generation=$1 AND j.prepared_output_id IS NULL AND j.fence<$2 AND j.attempt<$3
 		  AND ((state='queued' AND retry_at<=clock_timestamp()) OR (state='running' AND lease_until<=clock_timestamp()))
-		ORDER BY (SELECT count(*) FROM jobs active WHERE active.tenant_id=j.tenant_id AND active.state='running' AND active.lease_until>clock_timestamp()),j.retry_at,j.created_at,j.job_id
+		ORDER BY (SELECT count(*) FROM jobs active WHERE active.tenant_id=j.tenant_id AND active.state='running' AND active.lease_until>clock_timestamp()),
+		  CASE WHEN $6::bigint>0 THEN (j.tenant_id<=$6)::int ELSE 0 END,
+		  CASE WHEN $6::bigint>0 THEN j.tenant_id ELSE 0 END,j.retry_at,j.created_at,j.job_id
 		FOR UPDATE OF j SKIP LOCKED LIMIT 1
 	)
 	UPDATE jobs j SET state='running',attempt=j.attempt+1,fence=j.fence+1,owner=$4,
 		lease_until=clock_timestamp()+($5::bigint * interval '1 microsecond'),updated_at=clock_timestamp()
 	FROM candidate WHERE j.job_id=candidate.job_id
 	RETURNING j.job_id::text,j.tenant_id,j.lane_id,j.batch_seq,j.attempt,j.fence,j.lease_until`,
-		generation, int64(math.MaxInt64), int32(math.MaxInt32), owner, leaseMicroseconds).Scan(
+		generation, int64(math.MaxInt64), int32(math.MaxInt32), owner, leaseMicroseconds, afterTenant).Scan(
 		&job.Authority.JobID, &job.TenantID, &job.LaneID, &job.BatchSeq, &job.Attempt, &job.Authority.Fence, &job.LeaseUntil)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil

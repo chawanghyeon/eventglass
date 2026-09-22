@@ -47,6 +47,10 @@ type Runtime struct {
 	converter      *ingest.DurableConversionWorkflow
 	publisher      *ingest.DurablePublicationWorkflow
 	workerOwner    string
+	// Only the joined native worker loop owns this bounded scheduling cursor.
+	// Restart resets preference; PostgreSQL remains the claim/fence authority.
+	conversionAfterTenant int64
+
 	handler        http.Handler
 	metricsHandler http.Handler
 	installation   control.RuntimeInstallation
