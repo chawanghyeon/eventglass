@@ -82,6 +82,21 @@ class GoLayoutTests(unittest.TestCase):
         for script in ("cache-native", "build-image"):
             self.assertIn(extract, (ROOT / "scripts" / script).read_text())
 
+    def test_maintenance_resource_runner_is_bounded_and_real(self):
+        source = (ROOT / "scripts/check-maintenance-resource").read_text()
+        for required in (
+            "./scripts/build-image", "--platform linux/arm64", "--network none",
+            "--cpus 1 --memory 512m --memory-swap 512m", "--user 65532:65532",
+            "--read-only", "GOMEMLIMIT=96MiB", "GOMAXPROCS=1",
+            "--wait --wait-timeout 60 postgres minio", "EVENTGLASS_INTEGRATION_REQUIRED=1",
+            "^TestMaintenanceMaximumBundleResource$", "memory.peak", "memory.events",
+            "docker volume rm", "tr '[:upper:]' '[:lower:]'",
+        ):
+            self.assertIn(required, source)
+        self.assertLess(source.index("go test -tags="), source.index("--cpus 1"))
+        self.assertNotIn("--tmpfs /scratch", source)
+        self.assertNotIn("REUSE_IMAGES", source)
+
     def test_image_helper_rejects_unverified_overrides_before_docker(self):
         for args in (
             ["--platform", "linux/amd64"], ["--file=elsewhere"], ["-felsewhere"],

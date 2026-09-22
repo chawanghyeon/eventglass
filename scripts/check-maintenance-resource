@@ -1,0 +1,69 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+case "$(uname -m)" in arm64|aarch64) ;; *) echo 'maintenance resource verification supports ARM64 only' >&2; exit 1 ;; esac
+artifacts=$(mktemp -d "$ROOT/.tools/maintenance-resource.XXXXXX")
+suffix=$(printf '%s' "${artifacts##*.}" | tr '[:upper:]' '[:lower:]')
+project="eventglass-maintenance-$suffix"
+container="$project-worker"
+volume="$project-scratch"
+image=eventglass-go:maintenance-resource-build
+database_url='postgres://eventglass:local-test-only@postgres:5432/eventglass?sslmode=disable' # pragma: allowlist secret -- disposable fixture
+if docker container inspect "$container" >/dev/null 2>&1 || docker volume inspect "$volume" >/dev/null 2>&1; then
+  echo 'refusing existing maintenance resource targets' >&2
+  exit 1
+fi
+cleanup() {
+  docker rm -f "$container" >/dev/null 2>&1 || true
+  docker compose -p "$project" -f deploy/compose.yaml down --volumes --remove-orphans >/dev/null 2>&1 || true
+  docker volume rm "$volume" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+./scripts/build-image --target build --load --tag "$image"
+docker run --rm --platform linux/arm64 --network none -v "$artifacts:/artifacts" "$image" \
+  go test -tags=duckdb_use_static_lib -c -o /artifacts/maintenance.test ./tests/integration
+{
+  date -u '+started_at=%Y-%m-%dT%H:%M:%SZ'
+  git rev-parse HEAD
+  git status --short
+  docker image inspect --format '{{.Id}} {{.Architecture}}' "$image"
+  docker info --format 'host_arch={{.Architecture}} host_cpus={{.NCPU}} host_memory={{.MemTotal}}'
+  docker run --rm --platform linux/arm64 --network none "$image" sha256sum \
+    /out/eventglass-go /opt/duckdb/lib/libduckdb_bundle.a /src/tests/integration/maintenance_native_test.go
+  printf '%s\n' 'cpu=1 memory=512MiB swap=0 GOMEMLIMIT=96MiB GOMAXPROCS=1 native_memory=256MiB native_spill=2GiB scratch=disk_volume non_root=true read_only=true'
+} >"$artifacts/environment.txt"
+docker compose -p "$project" -f deploy/compose.yaml up -d --wait --wait-timeout 60 postgres minio
+docker compose -p "$project" -f deploy/compose.yaml run --rm minio-init
+docker volume create --label eventglass.test=maintenance-resource "$volume" >/dev/null
+docker run --rm --platform linux/arm64 --network none --mount "source=$volume,target=/scratch" \
+  --entrypoint chown "$image" 65532:65532 /scratch
+printf 'Maintenance resource evidence: %s\n' "$artifacts"
+status=0
+docker run --name "$container" --platform linux/arm64 --network "${project}_default" \
+  --user 65532:65532 --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 --read-only \
+  --mount "source=$volume,target=/scratch" -v "$artifacts:/artifacts:ro" \
+  -e TMPDIR=/scratch -e GOMEMLIMIT=96MiB -e GOGC=100 -e GOMAXPROCS=1 \
+  -e EVENTGLASS_INTEGRATION_REQUIRED=1 -e EVENTGLASS_TEST_BINARY=/out/eventglass-go \
+  -e EVENTGLASS_DATABASE_URL="$database_url" \
+  -e EVENTGLASS_S3_ENDPOINT=http://minio:9000 -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
+  -e AWS_ACCESS_KEY_ID=eventglass-local -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+  --entrypoint sh "$image" -c '
+    /artifacts/maintenance.test -test.run "^TestMaintenanceMaximumBundleResource$" -test.v -test.count=1 -test.timeout=12m
+    result=$?
+    for field in memory.peak memory.max memory.swap.max memory.events; do
+      printf "%s\n" "$field"
+      cat "/sys/fs/cgroup/$field"
+    done
+    test "$(cat /sys/fs/cgroup/memory.max)" = 536870912 || exit 1
+    test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0 || exit 1
+    awk '\''/^(oom|oom_kill|oom_group_kill) / && $2 != 0 { exit 1 }'\'' /sys/fs/cgroup/memory.events || exit 1
+    exit "$result"
+  ' >"$artifacts/run.log" 2>&1 || status=$?
+docker inspect --format '{{json .State}}' "$container" >"$artifacts/state.json"
+cat "$artifacts/run.log"
+exit "$status"

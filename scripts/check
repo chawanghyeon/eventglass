@@ -231,11 +231,12 @@ case "${1:-}" in
   crash) crash ;;
   web) web ;;
   resource) docker_required resource; ./scripts/check-resource ;;
+  maintenance-resource) docker_required maintenance-resource; ./scripts/check-maintenance-resource ;;
   scale) docker_required scale; ./scripts/check-scale ;;
   comparison) docker_required comparison; ./scripts/check-comparison ;;
   capacity) docker_required capacity; EVENTGLASS_COMPARISON_MODE=capacity ./scripts/check-comparison ;;
   native-oracle) docker_required native-oracle; ./scripts/check-native-oracle ;;
   recovery) docker_required recovery; ./scripts/check-recovery ;;
   release) docker_required release; missing "release verification" ;;
-  *) echo "usage: ./scripts/check {unit|codegen|architecture|focused PACKAGE|journal-bench|perf|contracts|integration|sdk|crash|web|recovery|resource|scale|comparison|capacity|native-oracle|release}" >&2; exit 2 ;;
+  *) echo "usage: ./scripts/check {unit|codegen|architecture|focused PACKAGE|journal-bench|perf|contracts|integration|sdk|crash|web|recovery|resource|maintenance-resource|scale|comparison|capacity|native-oracle|release}" >&2; exit 2 ;;
 esac

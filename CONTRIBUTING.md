@@ -14,6 +14,7 @@ The active product is the root Go module. Use Go 1.27.1 exactly and run commands
 ./scripts/check integration
 ./scripts/check recovery
 ./scripts/check resource
+./scripts/check maintenance-resource
 ./scripts/check scale
 ./scripts/check comparison
 ./scripts/check capacity
@@ -88,6 +89,17 @@ for development feedback; completion evidence uses the default. The gate checks
 the target logical log/error mix, cgroup peak/OOM counters, native OOM and cancel
 cleanup, permit ownership and scratch reclamation. It does not replace R3's
 30-minute end-to-end PostgreSQL/S3 load.
+
+`./scripts/check maintenance-resource` separately exercises the existing durable
+ingest/publication/compaction/retention workflow with a250–256MiB paired input
+and replacement. It compiles before observation, runs the real native children
+with their supervisor under CPU1/512MiB/swap0, non-root/read-only, and uses an
+isolated disk volume rather than charging retained fixture files to tmpfs.
+PostgreSQL and MinIO are disposable and outside that worker cgroup. The runner
+retains image/native/source identities, phase timings, actual S3 counts/bytes,
+kernel peak/OOM observations and its exit state under `.tools/maintenance-resource.*`.
+This resource check does not exercise the app dispatcher's rolling20% admission
+budget and must not be reported as proof that maximum rewrites finish within it.
 
 `./scripts/check scale` verifies autoscale decisions, the PG64 replica budget,
 tenant round-robin dispatch, identical 1/2/4 worker logical results and the

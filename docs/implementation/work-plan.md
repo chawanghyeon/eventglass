@@ -305,6 +305,14 @@ profile measures histogram p95=995→848ms, rows312→344ms, no growing backlog 
 zero OOM. The500ms histogram target still fails, so this is not R3 completion.
 See quality.md for exact artifacts, inputs, resources and S3 accounting.
 
+The separate maximum-pair resource runner now passes real durable ACK/native/
+S3/compaction/retention over265,537,875 input bytes and266,086,088 replacement
+bytes under CPU1/512MiB/swap0. It preserves pinned reads, identity, half-open
+retention, revocation/retry and cleanup. Its cgroup reaches512MiB with reclaim
+pressure but OOM0; no headroom claim is made. This closes that scoped resource
+execution, not maximum-byte progress under the app's rolling20% dispatcher.
+The latter and corrected official mixed-load SLOs remain outstanding.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

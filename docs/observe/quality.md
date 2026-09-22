@@ -1844,6 +1844,53 @@ still false and the command exits1; corrected official-duration profiles and
 maximum-size maintenance evidence remain required. No overall throughput or
 production memory-headroom claim follows from these diagnostic samples.
 
+### Maximum paired maintenance resource path
+
+`./scripts/check maintenance-resource` now builds the current root ARM64 binary,
+compiles the test before observation and runs real durable ingestion, native
+conversion, S3 publication, compaction and mixed/full retention under one
+CPU1/512MiB/swap0 cgroup. It retains only isolated disk-backed scratch, with the
+existing native256MiB/spill2GiB and role-owned3.5GiB disk admission (4GiB minus
+512MiB safety reserve), shared with conversion. The process is non-root,
+read-only, GOMAXPROCS1 and GOMEMLIMIT96MiB. Disposable PostgreSQL/MinIO are outside
+this worker cgroup; this is not a whole-installation512MiB claim.
+
+The14-batch/896-record seeded high-entropy fixture produces265,537,875 actual
+paired input bytes. The replacement has133,023,607 analytics and133,062,481
+payload bytes (266,086,088 total); both input/output must fall within250–256MiB
+and existing per-file128MiB checks remain active. The executed native children
+use the unchanged pinned library SHA
+`84ad753acc1390e13ce56e728d75d379bebeedec7f3df58ce071c1b373e4c79f`.
+Compaction including actual downloads, uploads and Prepare takes6.859335s;
+mixed retention takes1.248170s, fully expired metadata-only retirement0.001346s.
+The full test passes19.88s. Exact paired identities, pinned old snapshots,
+half-open retention, canceled/stale requests, completed retry, revoked read
+authority, zero residual scratch/reservations and absence of physical GC pass.
+The canceled request in this fixture is canceled before execution; it does not
+replace the separately executed mid-native-cancellation resource regressions.
+
+Actual S3 totals are PUT46/641,741,372B, HEAD46, full GET126/2,347,278,883B and
+Range0/0B, including fixture creation and independent old/new pair reads.
+Kernel memory.peak is536,875,008B (4KiB above the configured536,870,912B limit),
+with5,513 memory.max pressure events and zero OOM/kill events. This reaches the
+512MiB limit: it proves completion with
+reclaim in this profile, not memory headroom. File cache is included in cgroup
+usage. There is no before/after speedup or service-throughput claim.
+
+Evidence is `.tools/maintenance-resource.AazeXE/{environment.txt,run.log,state.json}`
+and `.tools/maintenance-resource-final.log`; image
+`sha256:9520dc25db169f0ba00f1a29ebd68ade47d17d84cfa71ae4f4f3764505508898`.
+The first runner attempt stopped before creating test services because a random
+Compose project suffix contained uppercase characters; lowercasing that suffix
+fixes the harness. The successful run uses actual objects, not a raw-download
+substitute or fabricated manifest. It invokes existing maintenance workflows
+with joined heartbeat supervision, **not** the app's rolling20% dispatcher.
+Maximum-byte progress under that dispatcher still requires separate evidence;
+the6.9s work duration alone cannot prove eventual admission/retry success.
+R3's service histogram/official-duration gates and R4 remain incomplete.
+The earlier passing `.tools/maintenance-resource.K01kbI` used separate4GiB
+test budgets; it is superseded by the final shared role-budget run above.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

@@ -21,7 +21,6 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/maintenance"
 	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/query"
-	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/sdk"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 	"github.com/google/uuid"
@@ -39,11 +38,22 @@ func TestMaintenanceEndToEndLargeBundleRetention(t *testing.T) {
 	runNativeRetention(t, 8, 64, true)
 }
 
-func runNativeRetention(t *testing.T, batchCount, perBatch int, large bool) {
+// Invoked separately by the resource runner; its whole process and real native
+// children share CPU1/512MiB/swap0 and use disk-backed, isolated scratch.
+func TestMaintenanceMaximumBundleResource(t *testing.T) {
+	inputs, replacement := runNativeRetention(t, 14, 64, true)
+	for name, bytes := range map[string]int64{"inputs": inputs, "replacement": replacement} {
+		if bytes < 250<<20 || bytes > 256<<20 {
+			t.Fatalf("%s=%d must exercise the final 6MiB of the 256MiB paired boundary", name, bytes)
+		}
+	}
+}
+
+func runNativeRetention(t *testing.T, batchCount, perBatch int, large bool) (int64, int64) {
 	t.Helper()
 	environment := requiredEnvironment(t, "EVENTGLASS_TEST_BINARY")
 	fixture := setupAcceptFixture(t, 1780)
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 	store := integrationStore(t, "maintenance-native-"+uuid.NewString())
 	ingestOps, err := control.NewIngestOperations(fixture.pool)
@@ -59,9 +69,13 @@ func runNativeRetention(t *testing.T, batchCount, perBatch int, large bool) {
 		t.Fatal(err)
 	}
 	gate := app.NewNativeTaskGate()
+	resources, err := app.ResourcesForRoles(map[app.Role]bool{app.RoleWorker: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	scratch := filepath.Join(t.TempDir(), "work")
 	converter := ingest.DurableConversionWorkflow{Control: publication, Store: store,
-		Runner: app.ProcessConversionRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"], Gate: gate}, InstallationID: acceptInstallationID, ScratchDir: scratch, Disk: resource.NewBudget(4 << 30)}
+		Runner: app.ProcessConversionRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"], Gate: gate}, InstallationID: acceptInstallationID, ScratchDir: scratch, Disk: resources.Disk}
 	publisher := ingest.DurablePublicationWorkflow{Control: publication, Store: store}
 	workflow := integrationWorkflow(t, fixture, ingestOps, store, "native-retention")
 	received := make([]int64, batchCount)
@@ -116,20 +130,28 @@ func runNativeRetention(t *testing.T, batchCount, perBatch int, large bool) {
 	if len(inputs) != batchCount {
 		t.Fatalf("published inputs: %v", inputs)
 	}
+	var inputBytes int64
+	if err := fixture.pool.QueryRow(ctx, `SELECT sum(f.bytes) FROM files f JOIN bundles b USING(bundle_id) WHERE b.tenant_id=$1 AND b.valid_to_generation IS NULL`, fixture.tenantID).Scan(&inputBytes); err != nil {
+		t.Fatal(err)
+	}
 	_, err = ops.ReserveCompaction(ctx, control.ReserveCompactionCommand{InstallationID: acceptInstallationID, StorageGeneration: 1, TaskID: uuid.NewString(), TenantID: fixture.tenantID, LaneID: 0, BundleIDs: inputs})
 	if err != nil {
 		t.Fatal(err)
 	}
-	disk := resource.NewBudget(4 << 30)
+	disk := resources.Disk
 	runner := app.ProcessCompactionRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"], Gate: gate}
 	compactor := maintenance.Workflow{Control: ops, Store: store, Runner: runner, InstallationID: acceptInstallationID, ScratchDir: scratch, Disk: disk}
 	task, err := ops.ClaimCompaction(ctx, acceptInstallationID, "native-compactor", time.Minute)
 	if err != nil || task == nil {
 		t.Fatalf("compaction claim: %+v %v", task, err)
 	}
-	if err := compactor.CompactAndPrepare(ctx, *task); err != nil {
+	started := time.Now()
+	if err := maintenanceWithHeartbeat(ctx, ops, task.Authority, func(taskCtx context.Context) error {
+		return compactor.CompactAndPrepare(taskCtx, *task)
+	}); err != nil {
 		t.Fatalf("compact %d batches: %v", batchCount, err)
 	}
+	t.Logf("real compaction inputs=%d bytes=%d elapsed=%s", batchCount, inputBytes, time.Since(started))
 	prepared, err := ops.ClaimCompaction(ctx, acceptInstallationID, "native-swap", time.Minute)
 	if err != nil || prepared == nil || !prepared.Prepared {
 		t.Fatalf("prepared claim: %+v %v", prepared, err)
@@ -255,9 +277,13 @@ func runNativeRetention(t *testing.T, batchCount, perBatch int, large bool) {
 			t.Fatalf("stale retention: %v", err)
 		}
 		before := store.OperationCounts()
-		if err := retainer.Execute(ctx, *claim); err != nil {
+		started := time.Now()
+		if err := maintenanceWithHeartbeat(ctx, ops, claim.Authority, func(taskCtx context.Context) error {
+			return retainer.Execute(taskCtx, *claim)
+		}); err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("real retention pass=%d input_bytes=%d elapsed=%s", index, current.Bytes+current.PayloadBytes, time.Since(started))
 		if index == 1 && store.OperationCounts() != before {
 			t.Fatal("fully expired retirement performed unnecessary S3 I/O")
 		}
@@ -315,4 +341,30 @@ func runNativeRetention(t *testing.T, batchCount, perBatch int, large bool) {
 		t.Fatalf("revoked pinned read: %v", err)
 	}
 	t.Logf("real ingest/publication/compaction/mixed+expired retention passed; pinned paired identities stable; no physical GC; S3=%+v", store.OperationCounts())
+	return inputBytes, original[0].Bytes + original[0].PayloadBytes
+}
+
+func maintenanceWithHeartbeat(ctx context.Context, operations *control.MaintenanceOperations, authority control.MaintenanceAuthority, run func(context.Context) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				done <- nil
+				return
+			case <-ticker.C:
+				if err := operations.HeartbeatCompaction(ctx, authority, time.Minute); err != nil {
+					cancel()
+					done <- err
+					return
+				}
+			}
+		}
+	}()
+	err := run(ctx)
+	cancel()
+	return errors.Join(err, <-done)
 }
