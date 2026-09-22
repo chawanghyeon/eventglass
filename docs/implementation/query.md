@@ -167,6 +167,17 @@ The4,096-scan and16MiB-total caps apply during construction, including these
 splits and reducers. This is not execution-time adaptive splitting: a sealed
 task is never replaced or reinterpreted on retry. This is a measured tuning
 limit, not an official R3 SLO pass.
+Aggregate workers may stage verified warm single-block inputs<=64KiB into their
+private task directory, bounded to8MiB/task with an additional reservation in
+the existing shared disk budget. This uses existing block bytes and hashes,
+not catalog-derived answers. The cache probe never starts/joins a provider
+flight; cold or corrupt entries, larger files and overflow remain on the lazy
+Range gateway. It cannot add speculative S3 reads when native predicates prune
+an input. Rows/detail retain their previous lazy path. A warm/cold mixed task
+may pass both private file paths and capability URLs to the same native runner.
+One64KiB staging buffer is copied at a time; pins survive through native join,
+and files are removed before releasing the task disk permit. Retries prepare
+fresh private files from the same immutable manifest, not a new partition.
 For first-page constant-true row operations only, query may exclude files whose
 maximum primary sort time is strictly below a proven limit-plus-one threshold.
 Only files fully inside requested projects, kinds, selected time range, retention

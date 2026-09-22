@@ -41,7 +41,11 @@ fewer HEADs; histogram still misses500ms, while RSS/full-GET bytes and post-load
 latencies increase. A later joined-cleanup/accounting correction measures416/949ms;
 its replacement-worker maintenance counters now pass the independently recomputed
 post-load gate, but histogram still fails. Compiler work is outside worker startup
-and measured phases. Corrected official query SLOs remain open. Separately, typed sizing, bounded native
+and measured phases. Bounded staging of verified warm aggregate inputs then
+measures295/566ms in the same short service profile; histogram still fails500ms.
+The isolated same-input native scan improves111.6→62.3ms, with higher RSS, and
+service S3 byte costs do not uniformly improve. Corrected official query SLOs
+remain open. Separately, typed sizing, bounded native
 writer fan-in and app-owned retry admission pass two maximum-pair actual-worker
 resource executions, with zero OOM or budget overrun but no memory headroom.
 These local results are not full-service SLO or release claims. R3

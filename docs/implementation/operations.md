@@ -67,6 +67,10 @@ Shared disk budget4GiB with512MiB unused safety reserve. Spill cap2GiB, cache ca
 are not independent quotas summing beyond available disk. Before native work,
 reserve estimated input/output+spill allowance; evict unpinned cache first, fail
 resource_exhausted if insufficient. Track actual growth and kill task on excess.
+Aggregate query tasks also reserve8MiB for optional warm small-input staging;
+only already cached, verified files<=64KiB qualify, with8MiB total. Cold/large
+inputs stay on the Range gateway. The reservation is part of the same shared
+disk pool, and remains through native join and private-file cleanup.
 No accidental use of system /tmp outside app's owned directory. Startup reaps
 only task directories bearing a validated ownership marker; never broad rm/globs.
 

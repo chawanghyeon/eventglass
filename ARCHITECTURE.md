@@ -73,6 +73,14 @@ Generated HTTP DTOs may be imported only by api, never by app/query/control.
 Query owns deterministic pre-seal partitioning by file count, compressed bytes
 and serialized manifest size. Oversized metadata groups split before task IDs
 are sealed; neither app dispatch nor worker retry replaces a sealed partition.
+Query may stage already-cached aggregate inputs<=64KiB into private task files,
+with an additional8MiB shared-disk reservation and at most8MiB staged per task.
+Storage's read-only cache probe verifies the bytes and pins the entry without
+starting/joining a provider flight. Cold, corrupt, large and excess inputs keep
+the lazy verified gateway; rows/detail are unchanged. At most one64KiB buffer
+is copied at a time. Pins remain until native join; staged files remain until
+the existing task-directory cleanup before the disk permit is released.
+This is local input transport, not a different plan, authorization or reducer.
 Query may conservatively prune first-page constant-true row scans after full
 catalog verification. Control derives complete requested-project coverage in
 the authorized catalog read; the proof is planning-only and not serialized into

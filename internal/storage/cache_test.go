@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -11,6 +12,77 @@ import (
 
 	"github.com/chawanghyeon/eventglass/internal/resource"
 )
+
+func TestReadCachedDoesNotInterfereWithProviderFlight(t *testing.T) {
+	data := []byte("verified")
+	cache, err := NewBlockCache(filepath.Join(t.TempDir(), "cache"), int64(len(data)), resource.NewBudget(1024))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	key := CacheBlockKey{InstallationID: "installation", ObjectID: "object", ContentSHA256: digestHex(data)}
+	started, finish := make(chan struct{}), make(chan struct{})
+	joined := make(chan error, 1)
+	go func() {
+		_, release, _, err := cache.Read(context.Background(), key, int64(len(data)), digestHex(data), func(context.Context) ([]byte, error) {
+			close(started)
+			<-finish
+			return data, nil
+		})
+		if release != nil {
+			release()
+		}
+		joined <- err
+	}()
+	<-started
+	for range 10 {
+		got, release, hit, err := cache.ReadCached(context.Background(), key, int64(len(data)), digestHex(data))
+		if err != nil || hit || got != nil || release != nil {
+			t.Errorf("nonblocking cache miss: hit=%v error=%v", hit, err)
+		}
+	}
+	close(finish)
+	if err := <-joined; err != nil {
+		t.Fatal(err)
+	}
+	got, release, hit, err := cache.ReadCached(context.Background(), key, int64(len(data)), digestHex(data))
+	if err != nil || !hit || !bytes.Equal(got, data) {
+		t.Fatalf("completed cache read: hit=%v error=%v", hit, err)
+	}
+	defer release()
+	other := key
+	other.ObjectID = "other"
+	if _, _, _, err := cache.Read(context.Background(), other, int64(len(data)), digestHex(data), func(context.Context) ([]byte, error) { return data, nil }); !errors.Is(err, resource.ErrLimited) {
+		t.Fatalf("cached read did not pin: %v", err)
+	}
+}
+
+func TestReadCachedRejectsCancellationDrainAndInvalidIdentity(t *testing.T) {
+	data := []byte("verified")
+	cache, err := NewBlockCache(filepath.Join(t.TempDir(), "cache"), 1024, resource.NewBudget(1024))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cache.Close()
+	key := CacheBlockKey{InstallationID: "installation", ObjectID: "object", ContentSHA256: digestHex(data)}
+	_, release, _, err := cache.Read(context.Background(), key, int64(len(data)), digestHex(data), func(context.Context) ([]byte, error) { return data, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, _, err := cache.ReadCached(ctx, key, int64(len(data)), digestHex(data)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled cached read=%v", err)
+	}
+	if _, _, _, err := cache.ReadCached(context.Background(), CacheBlockKey{}, 1, digestHex(data)); err == nil {
+		t.Fatal("invalid identity accepted")
+	}
+	cache.Close()
+	if _, _, _, err := cache.ReadCached(context.Background(), key, int64(len(data)), digestHex(data)); !errors.Is(err, resource.ErrDraining) {
+		t.Fatalf("drained cached read=%v", err)
+	}
+}
 
 func TestBlockCacheSingleflightPinsEvictionAndRestart(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "cache")

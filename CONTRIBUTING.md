@@ -127,6 +127,14 @@ share the kernel clock, and mismatched/inverted intervals fail diagnostics.
 Pre-job includes auth/snapshot/catalog work and retries; the job interval also
 includes queueing and publication; post-job includes polling and result export.
 These are wall-time boundaries, not exclusive CPU timings or a pure HEAD test.
+`BenchmarkHistogramGateway` in `internal/query` isolates local-file, warm HTTP
+gateway and actual warm small-input preparation on the same pinned-native
+256-file fixture. Compile with `duckdb_use_static_lib` before timing; compare
+`warm-gateway` and `warm-staged` in separate fresh CPU1/512MiB/no-swap containers
+with GOMEMLIMIT96MiB/GOMAXPROCS1. Five samples of three iterations include
+preparation/cleanup and verify every histogram bucket. It records Go allocation,
+process RSS/HWM and gateway/source requests/bytes. Its source is isolated files,
+not S3 or PG; it cannot substitute for the full service comparison or auth tests.
 Partition/reservation and completed-compaction input counts are sampled once
 at load end before drain, with bounded output; these observations are not an
 atomic history and do not replace SLOs or foreground-pressure/accounting checks.

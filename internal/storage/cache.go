@@ -98,6 +98,47 @@ func NewBlockCache(directory string, maxBytes int64, disk *resource.Budget) (*Bl
 	return cache, nil
 }
 
+// ReadCached returns a verified pinned block only when already present. A miss
+// never starts, joins or fails another caller's provider load. This lets query
+// stage warm small inputs without speculative I/O or interfering with flights.
+func (cache *BlockCache) ReadCached(ctx context.Context, key CacheBlockKey, expectedSize int64, expectedSHA string) ([]byte, func(), bool, error) {
+	encoded, err := encodeCacheKey(key)
+	if err != nil || expectedSize <= 0 || expectedSize > DefaultBlockSize || len(expectedSHA) != sha256.Size*2 {
+		return nil, nil, false, errors.Join(errors.New("invalid cached block request"), err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, false, err
+	}
+	cache.mu.Lock()
+	if cache.closed {
+		cache.mu.Unlock()
+		return nil, nil, false, resource.ErrDraining
+	}
+	entry := cache.entries[encoded]
+	if entry == nil {
+		cache.mu.Unlock()
+		return nil, nil, false, nil
+	}
+	entry.pins++
+	entry.lastUsed = time.Now()
+	cache.mu.Unlock()
+	release := cache.release(encoded, entry)
+	data, err := os.ReadFile(entry.path)
+	if err != nil || int64(len(data)) != expectedSize || digestHex(data) != expectedSHA {
+		release()
+		cache.invalidate(encoded, entry)
+		return nil, nil, false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		release()
+		return nil, nil, false, err
+	}
+	cache.mu.Lock()
+	cache.hits++
+	cache.mu.Unlock()
+	return data, release, true, nil
+}
+
 func (cache *BlockCache) Read(ctx context.Context, key CacheBlockKey, expectedSize int64, expectedSHA string, load func(context.Context) ([]byte, error)) ([]byte, func(), bool, error) {
 	encoded, err := encodeCacheKey(key)
 	if err != nil || expectedSize <= 0 || expectedSize > DefaultBlockSize || len(expectedSHA) != sha256.Size*2 || load == nil {

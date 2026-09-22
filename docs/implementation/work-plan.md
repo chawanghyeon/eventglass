@@ -361,6 +361,18 @@ profile measures416/949ms, not a speedup; histogram alone fails. Post-load
 maintenance1,639ms against8,200ms idle passes, with exact cold/warm rows and
 zero idle query work. Corrected official profiles still remain required.
 
+The subsequent verified warm small-input transport stays within query/storage:
+cache-only<=64KiB aggregate inputs may use private native input files, with8MiB
+total and an additional shared-disk reservation. Cold/corrupt/large inputs and
+rows/detail keep the lazy gateway. No provider prefetch, altered plan/scope or
+early pin/file release is allowed. Matched256-file native medians111.645→62.293ms
+reduce loopback514→0 and Go allocation, but RSS increases. The fresh short service
+pair measures416/949→295/566ms; histogram still misses500ms. Exact counts,
+backlog, main/post-load budgets and OOM pass; full-GET/Range bytes and whole
+installation memory increase, so no cost/memory superiority is claimed.
+R3 remains first incomplete: finish the histogram SLO and corrected official
+profiles, then the dependent R4 evidence. Detailed identities/costs are in quality.md.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

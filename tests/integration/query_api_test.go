@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,8 +42,9 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	observedRunner := &aggregateInputObserver{runner: app.ProcessQueryRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"]}}
 	worker := &query.Workflow{Disk: disk, Cache: cache,
-		Control: operations, Store: store, Runner: app.ProcessQueryRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"]},
+		Control: operations, Store: store, Runner: observedRunner,
 		InstallationID: acceptInstallationID, ScratchDir: filepath.Join(t.TempDir(), "worker"),
 	}
 	startIndependentQueryWorker(t, ctx, operations, worker)
@@ -136,6 +138,9 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 	decodeWire(t, aggregate.Result, &aggregateWire)
 	if len(aggregateWire.Groups) != 10 {
 		t.Fatalf("histogram groups=%d", len(aggregateWire.Groups))
+	}
+	if observedRunner.local.Load() == 0 || observedRunner.remote.Load() != 0 || store.OperationCounts().RangeRequests != warmFinished.RangeRequests {
+		t.Fatalf("warm small aggregate did not use verified staged input: local=%d remote=%d", observedRunner.local.Load(), observedRunner.remote.Load())
 	}
 
 	recordID := strings.Repeat("a", 64)
@@ -249,6 +254,26 @@ func TestPublicQueryEndToEnd(t *testing.T) {
 	t.Logf("query evidence cold: HEAD=%d full_GET=%d full_bytes=%d range_GET=%d range_bytes=%d elapsed_ms=%d", coldFinished.HeadRequests-before.HeadRequests, coldFinished.FullGetRequests-before.FullGetRequests, coldFinished.FullGetBytes-before.FullGetBytes, coldFinished.RangeRequests-before.RangeRequests, coldFinished.RangeBytes-before.RangeBytes, coldElapsed.Milliseconds())
 	t.Logf("query evidence warm: HEAD=%d full_GET=%d full_bytes=%d range_GET=%d range_bytes=%d elapsed_ms=%d", warmFinished.HeadRequests-coldFinished.HeadRequests, warmFinished.FullGetRequests-coldFinished.FullGetRequests, warmFinished.FullGetBytes-coldFinished.FullGetBytes, warmFinished.RangeRequests-coldFinished.RangeRequests, warmFinished.RangeBytes-coldFinished.RangeBytes, warmElapsed.Milliseconds())
 	t.Logf("query evidence total: HEAD=%d full_GET=%d full_bytes=%d range_GET=%d range_bytes=%d", after.HeadRequests-before.HeadRequests, after.FullGetRequests-before.FullGetRequests, after.FullGetBytes-before.FullGetBytes, after.RangeRequests-before.RangeRequests, after.RangeBytes-before.RangeBytes)
+}
+
+// Observes the real child request; never replaces native execution or its
+// summary. The independent worker may update these counters concurrently.
+type aggregateInputObserver struct {
+	runner        app.ProcessQueryRunner
+	local, remote atomic.Int64
+}
+
+func (observer *aggregateInputObserver) Run(ctx context.Context, request engine.QueryRequest) (engine.QuerySummary, error) {
+	if request.Operation.Kind == "aggregate" {
+		for _, path := range request.InputPaths {
+			if filepath.IsAbs(path) {
+				observer.local.Add(1)
+			} else {
+				observer.remote.Add(1)
+			}
+		}
+	}
+	return observer.runner.Run(ctx, request)
 }
 
 type limitExportRunner struct{}

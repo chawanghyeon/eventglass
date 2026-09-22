@@ -63,7 +63,10 @@ S3 HEADs, but histogram still misses500ms; RSS/full-GET bytes and post-load
 cold/warm latency increase. A later joined-cleanup/accounting correction measures
 416/949ms; it adds full replacement-worker maintenance verification and removes
 compilation from startup/measurement. Histogram still fails, so this is not a
-performance improvement. Official-duration measurements remain required.
+performance improvement. A subsequent bounded warm-input transport reduces a
+matched256-file native scan111.6→62.3ms and short-service rows/histogram416/949
+→295/566ms. Histogram still misses500ms; RSS and some S3 transfer costs increase.
+Official-duration measurements remain required.
 Two separate maximum-pair real-dispatcher runs pass with zero OOM or
 budget overrun. These scoped results do not close G07 or establish a release.
 

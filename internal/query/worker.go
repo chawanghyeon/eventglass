@@ -83,7 +83,7 @@ func (workflow Workflow) Execute(ctx context.Context, task control.QueryTask) (r
 	}
 	// The runner joins its child before returning. Remove owned files before
 	// releasing their shared disk reservation, including failure/cancellation.
-	inputs, payloads, releaseInputs, err := workflow.prepareQueryInputs(ctx, task, manifest, operation)
+	inputs, payloads, releaseInputs, err := workflow.prepareQueryInputs(ctx, task, manifest, operation, taskDirectory)
 	if err != nil {
 		return err
 	}
@@ -133,6 +133,9 @@ func (workflow Workflow) Execute(ctx context.Context, task control.QueryTask) (r
 
 func queryDiskReservation(task control.QueryTask, manifest TaskManifest, operation engine.QueryOperation) (int64, error) {
 	bytes := engine.DefaultNativeSpillBytes + engine.MaxQueryOutputBytes
+	if operation.Kind == "aggregate" {
+		bytes += maxStagedAggregateBytes
+	}
 	if len(manifest.Files) > MaxFilesPerScan || operation.Kind == "detail" && len(manifest.Files) > MaxDetailFilesPerScan || len(task.Inputs) > ReduceFanIn {
 		return 0, engine.ErrQueryExecutionInvalid
 	}
@@ -151,7 +154,7 @@ func queryDiskReservation(task control.QueryTask, manifest TaskManifest, operati
 	return bytes, nil
 }
 
-func (workflow Workflow) prepareQueryInputs(ctx context.Context, task control.QueryTask, manifest TaskManifest, operation engine.QueryOperation) ([]string, []string, func() (int64, error), error) {
+func (workflow Workflow) prepareQueryInputs(ctx context.Context, task control.QueryTask, manifest TaskManifest, operation engine.QueryOperation, taskDirectory string) ([]string, []string, func() (int64, error), error) {
 	if workflow.Cache == nil {
 		return nil, nil, nil, errors.Join(engine.ErrQueryExecutionInvalid, errors.New("query range cache is required"))
 	}
@@ -224,8 +227,25 @@ func (workflow Workflow) prepareQueryInputs(ctx context.Context, task control.Qu
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	releaseStaged := func() int64 { return 0 }
+	if operation.Kind == "aggregate" {
+		staged, release, err := workflow.stageAggregateInputs(ctx, taskDirectory, manifests)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		releaseStaged = release
+		for index, capability := range inputs {
+			if path := staged[capability]; path != "" {
+				inputs[index] = path
+			}
+		}
+		if len(staged) == len(inputs) {
+			return inputs, payloads, func() (int64, error) { return releaseStaged(), nil }, nil
+		}
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		releaseStaged()
 		return nil, nil, nil, err
 	}
 	server := &http.Server{Handler: gateway, ReadHeaderTimeout: 5 * time.Second}
@@ -233,7 +253,9 @@ func (workflow Workflow) prepareQueryInputs(ctx context.Context, task control.Qu
 	go func() { serveDone <- server.Serve(listener) }()
 	baseURL := "http://" + listener.Addr().String() + "/objects/"
 	for index := range inputs {
-		inputs[index] = baseURL + inputs[index]
+		if !filepath.IsAbs(inputs[index]) {
+			inputs[index] = baseURL + inputs[index]
+		}
 	}
 	for index := range payloads {
 		payloads[index] = baseURL + payloads[index]
@@ -250,7 +272,7 @@ func (workflow Workflow) prepareQueryInputs(ctx context.Context, task control.Qu
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			serveErr = nil
 		}
-		return gateway.CacheBytes(), errors.Join(shutdownErr, serveErr)
+		return gateway.CacheBytes() + releaseStaged(), errors.Join(shutdownErr, serveErr)
 	}, nil
 }
 

@@ -128,7 +128,7 @@ func TestEmptyReducerDoesNotStartCapabilityGateway(t *testing.T) {
 	}
 	workflow := Workflow{Disk: disk, Cache: cache, InstallationID: "installation"}
 	task := control.QueryTask{Authority: control.QueryTaskAuthority{Key: model.QueryTaskKey{Stage: model.QueryTaskReduce}}}
-	inputs, payloads, release, err := workflow.prepareQueryInputs(context.Background(), task, TaskManifest{}, engine.QueryOperation{Kind: "rows"})
+	inputs, payloads, release, err := workflow.prepareQueryInputs(context.Background(), task, TaskManifest{}, engine.QueryOperation{Kind: "rows"}, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

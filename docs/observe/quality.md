@@ -2278,6 +2278,110 @@ Published history is retained rather than rewritten. The secret-scan baseline
 only tracks the moved line of the unchanged source-design checksum, not a new
 credential exemption.
 
+### Warm small aggregate input transport
+
+The next R3 experiment isolates local HTTP overhead instead of weakening catalog
+verification or increasing query concurrency. The pinned native benchmark uses
+the same256 Parquet inputs/25,600 records/452,834B, framed input SHA
+`9de7c2916d63adc0313f45439fca47b5d6d7e34bddef870a3ebc33c5cc6956c6`.
+Its unchanged engine initially measures approximately54ms on local files versus
+112ms through the actual warm block-cache gateway, despite zero source reads
+and514 loopback requests per scan (`.tools/query-gateway-baseline.ECyIW4`).
+
+Query now copies only already-cached, verified aggregate inputs<=64KiB into its
+private task directory, with an8MiB/task bound and additional8MiB shared-disk
+reservation. `BlockCache.ReadCached` is a non-loading/non-waiting probe: it
+rechecks size/hash, pins valid bytes and never creates or interferes with a
+provider flight. Cold/corrupt/large/excess inputs use the existing lazy gateway;
+rows/detail are unchanged. No S3 prefetch, skipped HEADs, new query plan, changed
+scope predicate, reducer or native limit is introduced. Pins survive until
+native join, and cleanup precedes disk release, including cancellation/failure.
+The initial prototype fetched small cold inputs; that variant was replaced
+before service measurement so predicates that prune inputs cause no extra I/O.
+
+The final comparison uses one test binary but separate fresh non-root/read-only
+CPU1/512MiB/swap0 containers, GOMEMLIMIT96MiB/GOMAXPROCS1, native192MiB and
+256MiB spill. Compilation precedes observation. Five samples of three iterations
+include actual query-owned staging, file removal and native execution; every
+bucket is checked against an independent count, including empties. Source reads
+are real isolated file Range reads, not S3 or PG, and cache warming is excluded.
+Evidence is `.tools/query-small-inputs-measured.mv0Kwa/{warm-gateway,warm-staged}.log`.
+
+| Scoped warm256-file scan | Gateway | Staged warm input |
+|---|---:|---:|
+| Median execution |111.645ms|62.293ms|
+| Reciprocal scan rate |8.96/s|16.05/s|
+| Go allocation/op |4,198,773B|2,191,130B|
+| Go allocations/op |20,872|7,918|
+| Median observed process RSS |68,485,120B|76,677,120B|
+| Maximum process HWM |83,169,280B|88,543,232B|
+| Container memory.peak |86,327,296B|93,220,864B|
+| Loopback requests/op |514|0|
+| Source Range requests/bytes in measured loop |0/0|0/0|
+| OOM/kill |0/0|0/0|
+
+This reduces scoped median time44.2% and Go allocation, but process RSS and
+container peak increase. RSS is sampled after the timed loop; HWM/peak include
+fixture/cache setup and all five samples. The reciprocal rate is not ingestion
+or distributed service throughput. S3 counts are zero in both local profiles.
+
+The fresh service measurement uses the same20s/300s/90s logical105-record/s
+one-worker profile and precompiled harness as the preceding correction. Product
+executable SHA is `fc5231a7f2848f921245924b3ca413918b3684c8e5504761bc82234509db650a`;
+the unchanged library is `84ad753acc1390e13ce56e728d75d379bebeedec7f3df58ce071c1b373e4c79f`.
+Before evidence is `.tools/comparison-report-1.rV0OM9/report.json`, candidate
+`.tools/comparison-report-1.VCMPUF/report.json` (runner `.tools/small-inputs-comparison.log`).
+
+| Whole service short profile | Before | Candidate |
+|---|---:|---:|
+| Rows/histogram p95 |416/949ms|295/566ms|
+| Histogram durable-job p95 |720ms|396ms|
+| ACK/visibility p95 |374/868ms|374/735ms|
+| Maximum query files |756|561|
+| Completed compactions |187|239|
+| All maintenance attempts / measured idle |12,730/64,300ms|15,632/78,300ms|
+| Query work time |14,848ms|8,827ms|
+| Sampled whole-installation peak |769,727,134B|864,623,260B|
+| Worker cgroup peak |70,086,656B|70,410,240B|
+| S3 PUT count/bytes |5,947/33,613,229B|5,942/35,510,791B|
+| S3 HEAD count |63,526|50,177|
+| S3 full GET count/bytes |14,203/80,279,287B|14,600/86,426,496B|
+| S3 Range count/bytes |1,990/18,523,640B|2,035/19,630,435B|
+| PG WAL |75,997,200B|74,702,512B|
+
+Both runs return exact33,600 public records, final backlog0 and no public query
+failures or OOM. Candidate backlog max14/slope−0.359175/min passes. Main and
+post-load maintenance accounting both pass with no overrun; post-load attempts
+1,681ms versus8,300ms idle. Cold/warm all-history regex742/545ms, Range505/2,
+6,082,486/16,585B retains identical snapshot/rows;10s idle adds no query work.
+Candidate actual submitted bodies are10,893 envelopes/43,630,817B, framed SHA
+`8974fe17f45e40ab5576f6729bc829174032d3d5276976f3ec8247aea4297b8c`.
+UUIDs, timing, retries and compaction trajectories differ between installations;
+the service pair is not identical byte input or a sole-cause attribution.
+Higher RSS and full-GET/Range bytes forbid a memory/cost superiority claim.
+Histogram566ms still fails500ms, so the runner exits1 and R3 remains incomplete.
+Corrected official1/2/4 profiles and R4 evidence remain required.
+
+ARM64 unit/layout/architecture/vet and byte-identical code generation pass.
+App/storage/query race checks pass4.501/1.539/8.865s. Tests cover cache probes
+during a real blocked provider flight, pin eviction, invalid identity, canceled
+and drained cache, corrupt/truncated cached files,64KiB and8MiB boundaries,
+mixed local/lazy inputs, exclusive private files and joined cancellation.
+A new cancellation fixture initially supplied a non-private scratch directory;
+its waiting test was diagnosed/stopped and corrected to the product's private
+directory contract, then the bounded full race run passed. This was a fixture
+failure, not successful product cancellation evidence from that first attempt.
+Actual PG/S3 integration passes27.806s and the selected pinned-native
+search/Live/authority/snapshot/maintenance suite47.861s without skips. The latter
+observes the real aggregate child's local warm input and no extra Range read,
+not a substituted runner result. Full static-library native tests/vet also pass
+in the fresh build image with latest query/storage tests mounted read-only;
+process contracts1.834s pass. The final ARM64 non-root/read-only Chromium flow
+passes2.7s. Logs use `.tools/small-inputs-{unit-all,codegen,race,integration,
+contracts,browser,comparison}.log`. No API schema changed. Physical GC, native
+limits, authorization and transaction fences are unchanged; source-design SHA
+remains the frozen original. No release is declared by these scoped results.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency
