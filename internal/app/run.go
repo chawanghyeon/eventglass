@@ -302,7 +302,7 @@ func NewRuntime(ctx context.Context, config Config) (*Runtime, error) {
 			return fail(err)
 		}
 		runtime.publication, runtime.workerOwner = operations, owner
-		runtime.converter = &ingest.DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{Gate: nativeTasks}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker")}
+		runtime.converter = &ingest.DurableConversionWorkflow{Control: operations, Store: store, Runner: ProcessConversionRunner{Gate: nativeTasks}, InstallationID: installation.InstallationID, ScratchDir: filepath.Join(config.ScratchDir, "worker"), Disk: resources.Disk}
 		runtime.publisher = &ingest.DurablePublicationWorkflow{Control: operations, Store: store}
 		maintenanceOperations, err := database.MaintenanceOperations()
 		if err != nil {

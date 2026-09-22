@@ -11,6 +11,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/model"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 	"github.com/google/uuid"
 )
@@ -34,7 +35,13 @@ type DurableConversionWorkflow struct {
 	Runner         ConversionRunner
 	InstallationID string
 	ScratchDir     string
+	Disk           *resource.Budget
 }
+
+// The streaming child retains one output pair, not one pair per event day.
+// Reserve journal, bounded staging, occurrence/manifest pages, protocol scratch
+// and the existing native spill allowance together with cache/query consumers.
+const conversionDiskReservation = engine.DefaultNativeSpillBytes + 2*engine.MaxBundleFileBytes + storage.MaxJournalBytes + maxConversionStageBytes + 2*model.MaxManifestBytes + (1 << 20)
 
 type publicationCommitControl interface {
 	LoadPublicationObjects(context.Context, control.JobAuthority, string) ([]control.PublicationObject, error)
@@ -65,22 +72,36 @@ func (workflow DurablePublicationWorkflow) VerifyAndPublish(ctx context.Context,
 	})
 }
 
-func (workflow DurableConversionWorkflow) ConvertAndPrepare(ctx context.Context, job control.ConversionJob) error {
+func (workflow DurableConversionWorkflow) ConvertAndPrepare(ctx context.Context, job control.ConversionJob) (retErr error) {
 	if workflow.Control == nil || workflow.Store == nil || workflow.Runner == nil || workflow.InstallationID == "" || workflow.ScratchDir == "" || job.Authority.InstallationID != workflow.InstallationID {
 		return errors.New("invalid durable conversion workflow")
+	}
+	if workflow.Disk == nil {
+		return errors.New("conversion disk budget is required")
 	}
 	if err := storage.EnsurePrivateDirectory(workflow.ScratchDir); err != nil {
 		return err
 	}
-	taskDirectory, err := os.MkdirTemp(workflow.ScratchDir, "conversion-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(taskDirectory)
 	work, err := workflow.Control.LoadConversion(ctx, job.Authority)
 	if err != nil {
 		return err
 	}
+	permit, err := workflow.Disk.Acquire(conversionDiskReservation)
+	if err != nil {
+		return err
+	}
+	taskDirectory, err := os.MkdirTemp(workflow.ScratchDir, "conversion-")
+	if err != nil {
+		permit.Release()
+		return err
+	}
+	defer func() {
+		cleanupErr := os.RemoveAll(taskDirectory)
+		if cleanupErr == nil {
+			permit.Release()
+		}
+		retErr = errors.Join(retErr, cleanupErr)
+	}()
 	journalPath := filepath.Join(taskDirectory, "journal.jsonl.zst")
 	if err := workflow.Store.DownloadToFile(ctx, work.JournalObjectKey, journalPath, work.JournalBytes, work.JournalSHA256, storage.MaxJournalBytes); err != nil {
 		return err

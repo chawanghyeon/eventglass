@@ -100,6 +100,25 @@ exit0 plus terminal response/complete manifest; either alone is insufficient. Re
 symlinks/path traversal/unknown fields/operations. stdout is protocol only;
 stderr bounded64KiB and sanitized. Child cannot select arbitrary filesystem roots.
 
+Current conversion wire names are `bundle`, `summary`, and a versioned/indexed
+`continue` acknowledgment, each with the4-byte/1MiB framing above. A missing,
+truncated, repeated or count-inconsistent terminal frame fails the task even
+when the process exits successfully. The supervisor verifies regular-file type,
+declared size, fullSHA and blockSHA before invoking the consumer. It reaps on
+consumer/protocol failure and does not acknowledge a failed upload. Other
+single-response operations retain their existing strict JSON protocol; this
+conversion implementation is not evidence that every operation has migrated to
+the framed format.
+
+Conversion reserves2457MiB from the shared disk budget before creating its task
+directory: native spill2GiB, one output pair256MiB, journal24MiB, selected
+stage64MiB, occurrence/manifest allowances64MiB and protocol overhead1MiB.
+Staging rejects overflow before writing excess bytes. Successful pair consumers
+may retain files only by moving them to their own accounted storage before
+returning. Reservations are released only after joined work and successful
+task-directory cleanup; this conservative admission calculation is not an
+observed filesystem or RSS measurement.
+
 Parent constructs capability allowlist from exact catalog manifests. Gateway
 binds loopback with per-task256-bit random handles, validates method/path/range/
 task deadline, and logs no handle. Revoke on cancellation/expiry; every block

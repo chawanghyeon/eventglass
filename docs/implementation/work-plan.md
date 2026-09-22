@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1–R2 have implementations and scoped tests. R3 remains the first incomplete packet: its latest1/2/4-worker official-duration runs pass the former targets, but corrected ACK/maintenance evidence and independent capacity/efficiency are still required.
+G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1–R2 have implementations and scoped tests. R3 remains the first incomplete packet: its latest1/2/4-worker official-duration runs pass the former targets, but corrected ACK/maintenance service measurements still require verification. Independent fixed-work capacity/efficiency passes on4ced580; the subsequent bounded conversion/shared-disk correction and full native oracle also have scoped passes.
 M2 physical GC stays frozen whenever M4's signed coordinated backup attestation is absent or older than 24 hours.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
@@ -95,7 +95,7 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 |---|---|---|
 | R1 / M4 — complete | tests/resource Linux cgroup harness; scripts/check resource | CPU1/512MiB/swap0 profile verifies maximum input, two-minute 100 logs/s+5 errors/s logical mix through normalization and actual conversion/query children, no growing cycle backlog, cgroup OOM=0, bounded child OOM/cancel/join, exact permit drain and zero scratch residue. This is containment evidence, not R3's 30-minute end-to-end SLO. |
 | R2 / R1 — complete | app autoscale metrics/control; deploy/kubernetes/KEDA; scripts/check scale | Private fixed-label backlog metrics and storage availability, EWMA prior, two-sample scale-out, dependency freeze, 300s stable scale-in capped at25%, warm min1/max20 and PG64 total bound. Conversion/query claims prefer tenants without running work. Linux ARM64 1/2/4 control harness produced the same checksum; manifests enforce non-root/read-only/CPU1/512MiB/bounded scratch and KEDA timing. This is control evidence, not R3 throughput. |
-| R3 / R2 — executable, audit pending | tests/comparison independent oracle/load/cost report; scripts/check comparison | Actual10k/100k/1m/10m SDK/native oracle,5min warmup/30min load/10min drain, SIGKILL/restart, cold/warm/idle, per-role ARM64 cgroup and whole-installation PG/S3 dated costs are implemented. Cleanf415e55 official-duration1/2/4-worker runs pass the former target map with220,500 accepted each and zero final backlog/conflicts/OOM. However, ACK samples included warmup and no spare-maintenance budget was enforced. Regression tests reproduce these defects, and new app-owned bounded admission, control claim-pressure revalidation and joined process-group cancellation address them. Corrected official runs and independent capacity/efficiency remain required. Historical failed profiles remain in quality.md. **G07 remains incomplete.** |
+| R3 / R2 — executable, audit pending | tests/comparison independent oracle/load/cost report; scripts/check comparison | Actual10k/100k/1m/10m SDK/native oracle,5min warmup/30min load/10min drain, SIGKILL/restart, cold/warm/idle, per-role ARM64 cgroup and whole-installation PG/S3 dated costs are implemented. Cleanf415e55 official-duration1/2/4-worker runs pass the former target map with220,500 accepted each and zero final backlog/conflicts/OOM. However, ACK samples included warmup and no spare-maintenance budget was enforced. Regression tests reproduce these defects, and new app-owned bounded admission, control claim-pressure revalidation and joined process-group cancellation address them. Corrected official runs remain required; independent fixed-work capacity/efficiency passes all nine128-cycle installations on4ced580. The subsequent conversion streaming/shared-disk correction passes the actual10,000-day publication boundary, resource/cancellation/retry checks and full native oracle. Historical failed profiles remain in quality.md. **G07 remains incomplete.** |
 | R4 / R3 | deploy backend locks; scripts/check release; operator/upgrade guides; SBOM/notices | Authorized AWS + proven selfhost smoke/restore, ARM64 provenance, secret/license scans, schema/journal compatibility and rollback rehearsal, declared SDK matrix; **G08 complete; only then advertise release** |
 
 R3 remains the first incomplete packet. A further 20s/300s/90s ARM64
@@ -258,11 +258,23 @@ existing publication pipeline. A32-cycle/3,360-record diagnostic passes all
 three profiles:1/2/4 workers drain192 jobs in23.203/12.301/7.400s, respectively
 144.809/273.149/454.054 records/s (speedup1/1.886/3.136). Every project's public
 log/error counts match, with complete PG/S3/role cgroup observations and OOM0.
-This is one sample per profile on a dirty harness tree, not an official capacity
-or live-ingestion SLO pass. Run the clean128-cycle matrix with three independent
-installations per worker count. All four subsequent native-oracle containers
-passed on0bf0956, but editing its dispatcher mid-run caused the outer command
-to fail; a complete frozen-source rerun also remains required. See quality.md
+This quick result is one sample per profile on a dirty harness tree. The later
+clean4ced580128-cycle matrix passes all nine fresh installations with13,440
+records/768 jobs each: median1/2/4-worker throughput134.533/256.474/454.039
+records/s, relative speedup1/1.906/3.375 and efficiency1/.953/.844. This closes
+that fixed-work measurement, not the live-ingestion/search SLO. A subsequent
+audit reproduced missing conversion disk admission and16 files present before
+the first upload of an8-day acknowledged batch. Bounded streaming and file
+boundary corrections now pass actual10,000-day ACK/publication under CPU1/
+512MiB/swap0, exact per-day identity, one outstanding pair, cancellation/retry,
+shared-disk release, native contracts, integration, resource, browser and crash
+checks. Matched process-only benchmarks reduce supervisor allocation bytes by
+50.1–51.4%, with only0.07–2.06% latency median differences and no measured cgroup
+headroom improvement; this does not establish a service throughput speedup.
+All four earlier native-oracle containers passed on0bf0956, but editing its
+dispatcher mid-run caused that outer command to fail. The new frozen-source
+10k/100k/1m/10m rerun now completes with exit0, including the outer command.
+Corrected official-duration mixed-load SLOs remain required. See quality.md
 for retained evidence, memory and actual S3 transfer scope.
 
 R4 cannot be closed by MinIO-only tests, a docs-only runbook, mocked S3, a skipped

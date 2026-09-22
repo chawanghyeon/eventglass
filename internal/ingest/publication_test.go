@@ -14,6 +14,7 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/model"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
@@ -113,7 +114,7 @@ func TestDurableConversionWorkflowUploadsPairsAndPreparesPagedManifest(t *testin
 	}}
 	storeFixture := &workflowStoreFixture{journal: journal, objects: make(map[string][]byte)}
 	workflow := DurableConversionWorkflow{
-		Control: controlFixture, Store: storeFixture, Runner: workflowRunnerFixture{}, InstallationID: job.Authority.InstallationID, ScratchDir: filepath.Join(t.TempDir(), "worker"),
+		Control: controlFixture, Store: storeFixture, Runner: workflowRunnerFixture{}, InstallationID: job.Authority.InstallationID, ScratchDir: filepath.Join(t.TempDir(), "worker"), Disk: resource.NewBudget(4 << 30),
 	}
 	if err := workflow.ConvertAndPrepare(context.Background(), job); err != nil {
 		t.Fatal(err)

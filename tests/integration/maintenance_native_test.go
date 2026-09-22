@@ -61,7 +61,7 @@ func runNativeRetention(t *testing.T, batchCount, perBatch int, large bool) {
 	gate := app.NewNativeTaskGate()
 	scratch := filepath.Join(t.TempDir(), "work")
 	converter := ingest.DurableConversionWorkflow{Control: publication, Store: store,
-		Runner: app.ProcessConversionRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"], Gate: gate}, InstallationID: acceptInstallationID, ScratchDir: scratch}
+		Runner: app.ProcessConversionRunner{BinaryPath: environment["EVENTGLASS_TEST_BINARY"], Gate: gate}, InstallationID: acceptInstallationID, ScratchDir: scratch, Disk: resource.NewBudget(4 << 30)}
 	publisher := ingest.DurablePublicationWorkflow{Control: publication, Store: store}
 	workflow := integrationWorkflow(t, fixture, ingestOps, store, "native-retention")
 	received := make([]int64, batchCount)

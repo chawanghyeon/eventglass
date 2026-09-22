@@ -70,11 +70,13 @@ docker_required() {
 integration() {
   docker_required integration
   project="eventglass-go-integration-$$"
+  conversion_artifacts=$(mktemp -d "$ROOT/.tools/integration-conversion.XXXXXX")
   cleanup() {
     docker compose -p "$project" -f deploy/compose.yaml down --volumes --remove-orphans >/dev/null 2>&1 || true
+    rm -rf "$conversion_artifacts"
   }
   trap cleanup EXIT INT TERM
-  docker compose -p "$project" -f deploy/compose.yaml up -d postgres minio
+  docker compose -p "$project" -f deploy/compose.yaml up -d --wait --wait-timeout 60 postgres minio
   docker compose -p "$project" -f deploy/compose.yaml run --rm minio-init
   postgres_address=$(docker compose -p "$project" -f deploy/compose.yaml port postgres 5432 | tail -n 1)
   minio_address=$(docker compose -p "$project" -f deploy/compose.yaml port minio 9000 | tail -n 1)
@@ -96,6 +98,30 @@ integration() {
     -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
     -w /src eventglass-go:integration-build \
     go test -tags=duckdb_use_static_lib -count=1 -run '^(TestPublicQueryEndToEnd|TestMaintenanceEndToEnd)' -v ./tests/integration
+  # Compile outside the bounded runtime: compiler memory is not worker memory.
+  docker run --rm --platform linux/arm64 --network none \
+    -v "$conversion_artifacts:/tests" eventglass-go:integration-build \
+    go test -tags=duckdb_use_static_lib -c -o /tests/conversion.test ./tests/integration
+  docker run --rm --platform linux/arm64 --network "${project}_default" \
+    --user 65532:65532 --cpus 1 --memory 512m --memory-swap 512m --pids-limit 256 \
+    --read-only --tmpfs /tmp:rw,nosuid,nodev,size=384m,mode=1777 \
+    -v "$conversion_artifacts:/tests:ro" -e GOGC=100 -e GOMEMLIMIT=96MiB -e GOMAXPROCS=1 \
+    -e EVENTGLASS_INTEGRATION_REQUIRED=1 -e EVENTGLASS_TEST_BINARY=/out/eventglass-go \
+    -e EVENTGLASS_DATABASE_URL="postgres://eventglass:local-test-only@postgres:5432/eventglass?sslmode=disable" \
+    -e EVENTGLASS_S3_ENDPOINT=http://minio:9000 -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
+    -e AWS_ACCESS_KEY_ID=eventglass-local -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+    --entrypoint sh eventglass-go:integration-build -c '
+      /tests/conversion.test -test.run "^TestConversionEndToEnd" -test.v -test.count=1 -test.timeout=30m
+      result=$?
+      for field in memory.peak memory.max memory.swap.max memory.events; do
+        printf "%s\n" "$field"
+        cat "/sys/fs/cgroup/$field"
+      done
+      test "$(cat /sys/fs/cgroup/memory.max)" = 536870912 || exit 1
+      test "$(cat /sys/fs/cgroup/memory.swap.max)" = 0 || exit 1
+      awk '\''/^(oom|oom_kill|oom_group_kill) / && $2 != 0 { exit 1 }'\'' /sys/fs/cgroup/memory.events || exit 1
+      exit "$result"
+    '
 }
 
 crash() {

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -26,6 +27,17 @@ type ChildResponse struct {
 }
 
 func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
+	buffered := bufio.NewReader(input)
+	prefix, err := buffered.Peek(1)
+	if err != nil {
+		return err
+	}
+	// A bounded big-endian frame starts with zero. Other one-result operations
+	// retain their existing strict JSON protocol; conversion needs backpressure.
+	if prefix[0] == 0 {
+		return runConversionStream(ctx, buffered, output)
+	}
+	input = buffered
 	decoder := json.NewDecoder(io.LimitReader(input, (1<<20)+1))
 	decoder.DisallowUnknownFields()
 	var request ChildRequest
@@ -51,17 +63,7 @@ func RunChild(ctx context.Context, input io.Reader, output io.Writer) error {
 		}
 		return json.NewEncoder(output).Encode(response)
 	case "convert":
-		if request.Conversion == nil || request.Compaction != nil || request.Query != nil || request.QueryExport != nil {
-			return errors.New("convert request requires conversion input")
-		}
-		encoder := json.NewEncoder(output)
-		summary, err := Convert(ctx, *request.Conversion, func(bundle ConvertedBundle) error {
-			return encoder.Encode(ConversionMessage{Version: ConversionProtocolVersion, Type: "bundle", Bundle: &bundle})
-		})
-		if err != nil {
-			return err
-		}
-		return encoder.Encode(ConversionMessage{Version: ConversionProtocolVersion, Type: "summary", Summary: &summary})
+		return errors.New("conversion requires the framed acknowledgement protocol")
 	case "compact":
 		if request.Compaction == nil || request.Conversion != nil || request.Query != nil || request.QueryExport != nil {
 			return errors.New("compact request requires only compaction input")

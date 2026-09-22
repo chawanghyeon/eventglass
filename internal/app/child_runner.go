@@ -1,7 +1,6 @@
 package app
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/chawanghyeon/eventglass/internal/engine"
+	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
@@ -25,6 +25,9 @@ type ProcessConversionRunner struct {
 }
 
 func (runner ProcessConversionRunner) Run(ctx context.Context, request engine.ConversionRequest, emit func(engine.ConvertedBundle) error) (engine.ConversionSummary, error) {
+	if emit == nil {
+		return engine.ConversionSummary{}, errors.New("conversion consumer is required")
+	}
 	release, err := runner.Gate.acquire(ctx)
 	if err != nil {
 		return engine.ConversionSummary{}, err
@@ -33,99 +36,113 @@ func (runner ProcessConversionRunner) Run(ctx context.Context, request engine.Co
 	request.NativeMemoryBytes = runner.Gate.memoryLimit(request.NativeMemoryBytes)
 	binary := runner.BinaryPath
 	if binary == "" {
-		var err error
 		binary, err = os.Executable()
 		if err != nil {
 			return engine.ConversionSummary{}, err
 		}
 	}
-	response, err := os.CreateTemp(filepath.Dir(request.StagePath), "child-response-*.jsonl")
+	inputReader, inputWriter, err := os.Pipe()
 	if err != nil {
 		return engine.ConversionSummary{}, err
 	}
-	responsePath := response.Name()
-	defer func() {
-		_ = response.Close()
-		_ = os.Remove(responsePath)
-	}()
-	input, err := json.Marshal(engine.ChildRequest{Operation: "convert", Conversion: &request})
+	defer inputReader.Close()
+	defer inputWriter.Close()
+	outputReader, outputWriter, err := os.Pipe()
 	if err != nil {
 		return engine.ConversionSummary{}, err
 	}
+	defer outputReader.Close()
+	defer outputWriter.Close()
 	command := exec.Command(binary, "engine-child")
-	command.Stdin = bytes.NewReader(input)
-	command.Stdout = response
+	command.Stdin = inputReader
+	command.Stdout = outputWriter
 	var stderr boundedBuffer
 	command.Stderr = &stderr
 	command.Env = childEnvironment(os.Environ())
-	if err := runNativeChild(ctx, command); err != nil {
-		cleanupChildOutputs(request.OutputDirectory)
-		if ctx.Err() != nil {
-			return engine.ConversionSummary{}, ctx.Err()
-		}
-		return engine.ConversionSummary{}, fmt.Errorf("engine child failed: %w", err)
+	childContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	joined := make(chan error, 1)
+	go func() {
+		err := runNativeChild(childContext, command)
+		// Unblock protocol I/O after start failure or exit without a terminal
+		// frame. These copies are not the child's file descriptors.
+		_ = inputReader.Close()
+		_ = outputWriter.Close()
+		joined <- err
+	}()
+	err = engine.WriteConversionFrame(inputWriter, engine.ChildRequest{Operation: "convert", Conversion: &request})
+	var summary engine.ConversionSummary
+	if err == nil {
+		summary, err = consumeConversionFrames(ctx, outputReader, inputWriter, request, emit)
 	}
-	if err := response.Sync(); err != nil {
-		cleanupChildOutputs(request.OutputDirectory)
-		return engine.ConversionSummary{}, err
-	}
-	if _, err := response.Seek(0, io.SeekStart); err != nil {
-		cleanupChildOutputs(request.OutputDirectory)
-		return engine.ConversionSummary{}, err
-	}
-	summary, err := consumeChildMessages(response, request, nil)
 	if err != nil {
-		cleanupChildOutputs(request.OutputDirectory)
-		return engine.ConversionSummary{}, err
+		cancel()
 	}
-	if _, err := response.Seek(0, io.SeekStart); err != nil {
+	_ = inputWriter.Close()
+	childErr := <-joined
+	if err = errors.Join(err, childErr, ctx.Err()); err != nil {
+		// Partial uploads remain unprepared intents. Reap the whole process
+		// group before removing an unfinished pair or releasing its permit.
 		cleanupChildOutputs(request.OutputDirectory)
-		return engine.ConversionSummary{}, err
-	}
-	emittedSummary, err := consumeChildMessages(response, request, emit)
-	if err != nil {
-		cleanupChildOutputs(request.OutputDirectory)
-		return engine.ConversionSummary{}, err
-	}
-	if emittedSummary != summary {
-		cleanupChildOutputs(request.OutputDirectory)
-		return engine.ConversionSummary{}, errors.New("engine child response changed between validation and emission")
+		return engine.ConversionSummary{}, fmt.Errorf("engine conversion failed: %w", err)
 	}
 	return summary, nil
 }
 
-func consumeChildMessages(input io.Reader, request engine.ConversionRequest, emit func(engine.ConvertedBundle) error) (engine.ConversionSummary, error) {
-	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 64<<10), maxChildMessageBytes)
+func consumeConversionFrames(ctx context.Context, input io.Reader, control io.Writer, request engine.ConversionRequest, emit func(engine.ConvertedBundle) error) (engine.ConversionSummary, error) {
 	bundles := 0
+	var rows, errorRows int64
 	var summary *engine.ConversionSummary
-	for scanner.Scan() {
+	for {
+		var message engine.ConversionMessage
+		if err := engine.ReadConversionFrame(input, &message); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return engine.ConversionSummary{}, err
+		}
 		if summary != nil {
 			return engine.ConversionSummary{}, errors.New("engine child emitted data after summary")
-		}
-		var message engine.ConversionMessage
-		if err := strictAppJSON(scanner.Bytes(), &message); err != nil {
-			return engine.ConversionSummary{}, err
 		}
 		if message.Version != engine.ConversionProtocolVersion {
 			return engine.ConversionSummary{}, errors.New("unsupported engine child protocol")
 		}
 		switch message.Type {
 		case "bundle":
-			if message.Bundle == nil || message.Summary != nil || message.Bundle.Index != bundles {
+			if message.Bundle == nil || message.Summary != nil || message.Bundle.Index != bundles || bundles >= request.SelectedRecords {
 				return engine.ConversionSummary{}, errors.New("invalid engine child bundle sequence")
 			}
 			if err := verifyChildBundle(request.OutputDirectory, *message.Bundle); err != nil {
 				return engine.ConversionSummary{}, err
 			}
-			if emit != nil {
-				if err := emit(*message.Bundle); err != nil {
+			if err := ctx.Err(); err != nil {
+				return engine.ConversionSummary{}, err
+			}
+			if err := emit(*message.Bundle); err != nil {
+				return engine.ConversionSummary{}, err
+			}
+			if err := ctx.Err(); err != nil {
+				return engine.ConversionSummary{}, err
+			}
+			// COPY has finished and the child waits for this exact ACK. A
+			// consumer retaining bytes must move them into its own reservation.
+			for _, path := range []string{message.Bundle.Analytics.Path, message.Bundle.Payload.Path} {
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 					return engine.ConversionSummary{}, err
 				}
 			}
+			if err := engine.WriteConversionFrame(control, engine.ConversionContinue{Version: engine.ConversionProtocolVersion, Index: bundles, Continue: true}); err != nil {
+				return engine.ConversionSummary{}, err
+			}
+			rows += message.Bundle.RowCount
+			if message.Bundle.Kind == model.KindError {
+				errorRows += message.Bundle.RowCount
+			}
 			bundles++
 		case "summary":
-			if message.Summary == nil || message.Bundle != nil || message.Summary.BundleCount != bundles {
+			if message.Summary == nil || message.Bundle != nil || message.Summary.BundleCount != bundles ||
+				message.Summary.SelectedRecordCount != request.SelectedRecords || message.Summary.SelectedErrorCount != request.SelectedErrors ||
+				rows != int64(request.SelectedRecords) || errorRows != int64(request.SelectedErrors) {
 				return engine.ConversionSummary{}, errors.New("invalid engine child summary")
 			}
 			value := *message.Summary
@@ -133,9 +150,6 @@ func consumeChildMessages(input io.Reader, request engine.ConversionRequest, emi
 		default:
 			return engine.ConversionSummary{}, errors.New("unknown engine child message")
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return engine.ConversionSummary{}, err
 	}
 	if summary == nil {
 		return engine.ConversionSummary{}, errors.New("engine child summary missing")
@@ -158,6 +172,10 @@ func verifyChildBundle(outputDirectory string, bundle engine.ConvertedBundle) er
 		}
 		if output.Evidence.Bytes <= 0 || output.Evidence.Bytes > engine.MaxBundleFileBytes {
 			return errors.New("child output size is invalid")
+		}
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Size() != output.Evidence.Bytes {
+			return errors.Join(errors.New("child output must be a regular file with the declared size"), err)
 		}
 		if err := storage.VerifyFile(path, output.Evidence); err != nil {
 			return err

@@ -1513,6 +1513,163 @@ Frozen source-design bytes remain unchanged. Logs use
 `.tools/capacity-{unit,codegen,race,browser}.log`. No API/schema or capability
 coverage changed; R3/R4 remain incomplete.
 
+The subsequent full fixed-work matrix runs clean4ced580 (immutable application
+and precompiled driver images) with128 cycles/13,440 records/768 jobs and three
+fresh installations for each worker count. The whole command exits0 and every
+profile passes complete public counts (four projects,3,200 logs+160 errors each),
+resource coverage/limits and OOM/kill0. No heavy build/check overlaps measurement.
+Only unrelated, unexecuted follow-up test files were authored after the measured
+images and driver were frozen; those files are not part of these measurements.
+
+| Workers | Three drain times (s) | Median records/s | Speedup / efficiency | Whole-installation peak range (bytes) |
+| --- | --- | --- | --- | --- |
+|1|99.901 /105.201 /99.601|134.533|1 /1|570,306,853–619,901,351|
+|2|52.903 /52.403 /52.402|256.474|1.906 /0.953|511,700,890–601,166,444|
+|4|31.801 /29.503 /29.601|454.039|3.375 /0.844|629,424,519–671,892,894|
+
+Worker cgroup peaks across all nine samples are40,222,720–43,143,168 bytes.
+Every drain makes3,840 full GETs (22,794,991–22,800,636 bytes),1,536 PUTs
+(10,771,074–10,774,046 bytes), no Range GET, and1,539/1,540/1,542 HEADs for
+1/2/4 workers. Drain WAL spans17,118,200–17,610,064 bytes. Each public oracle
+adds768 Range GETs and6,782,650–6,785,063 bytes, separate from measured drain.
+The fixed-work fixture SHA is
+`0ab36b2a73e517ede5432cca7149ec61efc8acc5cc6f2b90bd1edfb249457d27`;
+actual submitted-byte hashes, progress and runtime/library/driver identities are
+retained per sample. Evidence: `.tools/capacity-full.log`,
+`.tools/capacity-matrix.I2gjkh`, and its nine referenced `capacity-report-*`
+directories. This is a scoped capacity/efficiency pass, not a mixed-load SLO,
+AWS result, maximum sustained rate, release or product before/after speedup.
+
+### Conversion streaming and disk-admission correction
+
+Three new regressions reproduce gaps on4ced580. The actual pinned ARM64 child
+converts an8-day durable-ACK batch into16 local files before the first upload,
+contrary to the one-outstanding-pair contract. A pure workflow regression also
+shows scratch creation with no shared disk budget. An output-boundary regression
+shows a matching full/block checksum does not prevent following a symlink to a
+file outside the assigned output directory. Baseline logs are
+`.tools/conversion-stream-before-{unit,native}.log`; the actual PG/S3/native
+failure takes0.714s. These findings do not invalidate prior scoped tests, but
+their coverage was insufficient to prove these wider contracts.
+
+The correction under test keeps ingest owning upload/Prepare, app owning child
+groups/permits, and engine owning COPY. Conversion uses bounded1MiB framed
+messages and a per-index continue acknowledgement after verification/upload
+and removal of the completed pair. Other single-result child operations retain
+their existing protocol. The shared disk reservation includes journal,64MiB
+bounded staging, two128MiB outputs, occurrence/manifest pages and the existing
+2GiB spill allowance. Missing admission fails before scratch creation; cleanup
+failure retains the reservation. Output symlinks/nonregular files or changed
+sizes fail before full checksum reads. An additional framing regression caught
+truncated/whitespace trailing bodies being confused with clean EOF; it is fixed
+without accepting partial terminal data.
+
+The EOF-corrected ARM64 image passes the actual8-day ACK/publication path
+in0.74s. Go1.27.1 ARM64 unit/vet/architecture/layout, generated-contract parity,
+focused race checks and the full pinned-native contracts gate pass. Actual child
+tests cover cancellation while a consumer owns the pair, shared-gate retention,
+joined cleanup, fresh retry and rejection of wrong-version/index/abort ACKs.
+Pure workflow tests also cover exhausted shared-disk admission, an exact stage
+write boundary and reservation retention until a cancelled runner returns.
+
+Initial full checks were not successful: one new test fixture incorrectly used
+a nonprivate temporary root; that fixture is corrected. A later contract run
+hit Colima `No space left on device` during the existing wide compaction test.
+Five obsolete task-generated build images were removed (not the pinned native
+cache, before/after baseline, current candidate or data volumes), increasing
+available space from2.9 to7.8GB. A sequential retry passes the full contract
+tests and vet (`.tools/conversion-stream-contracts-retry.log`, image
+`sha256:ab71afe58377d5ae3816ad10d6ce47ca94ddbb519107a83d5baa4fa219bb0ad0`).
+The concurrent10,000-day integration attempt also ended without a child summary
+after122.79s, and remains a failed attempt, not a publication pass; its precise
+child error was not exposed by the supervisor. A bounded isolated rerun now
+passes both8-day errors (0.69s) and a legal10,000-day log container (733.56s)
+through real durable ACK, pinned native conversion, S3 upload, Prepare and
+Publish. Every callback checks exactly two output files and the expected
+single-record identity for its day; the final catalog contains exactly10,000
+current bundles/rows/distinct days and scratch is empty. Normal60-second leases
+are heartbeated every15seconds, not enlarged for the test. The non-root,
+read-only CPU1/512MiB/swap0 container has174,440,448B memory.peak, zero
+memory.max/OOM/kill events and exit0; it uses384MiB scratch and96MiB Go soft
+limit. PG/MinIO are disposable external providers, not included in that worker
+cgroup peak. Evidence: `.tools/conversion-stream-capped.eWuBn5` (the earlier
+`.VQvEFy` attempt failed before work because PostgreSQL was not ready; the runner
+now awaits readiness). The final integration gate incorporates this bounded
+leg, additionally asserting release of the production shared-disk reservation
+and reporting actual S3 counters. The full final integration command now passes
+(`.tools/conversion-stream-integration-final.log`): general PG/S3 tests21.937s,
+native maintenance/query/Live tests35.780s,8-day conversion0.73s and10,000-day
+conversion741.66s. The latter has172,769,280B cgroup peak, zero max/OOM/kill
+events and no residual disk reservation. Its measured provider operations are
+20,001PUT/96,930,793B,20,001HEAD,40,002fullGET/193,861,586B, and0Range requests/
+bytes. These include journal upload/download, bundle upload readback and
+publication re-verification; content checks were not replaced by uploader
+metadata. Exact record identity and all10,000 current day partitions pass.
+The final host checks also pass29 frontend tests, strict TypeScript and the
+production UI build. The default resource gate passes24 paced cycles/12,600
+records over115.384s (the nominal2-minute profile schedules its last cycle at
+115s), worst cycle257ms,141,549,568B cgroup peak, zero OOM and no scratch entries.
+Native resource-exhaustion, joined cancellation and owner-held permit drain
+checks pass (`.tools/conversion-stream-resource.log`). This is the scoped R1
+profile, not R3 sustained service SLO evidence. The production ARM64 image's
+actual SDK-to-UI browser flow passes (2.7s); the crash gate passes its durable
+ACK/Prepare/Publish SIGKILL and retry checks, plus admission/canonical-limit
+checks. Its five-sample ACK-to-visible p95 is125.155483ms and files span
+2,777–7,256B; this small crash-harness sample is not a sustained latency claim.
+Logs are `.tools/conversion-stream-{browser,crash}.log`.
+
+The frozen-source full Mode A command now also exits0 for all four sizes; this
+replaces the earlier incomplete outer-command evidence, not its historical
+failure record. New evidence is `.tools/native-oracle.uvQxKQ` with image
+`sha256:417d2e2d0860cd97ecad7a969ca11b895fc74199ac22d44d7238fa1685bf5986`
+and product binary SHA256
+`23c49b500f84fed4b0e560624092981cdd273fdb0db2d883e146e7b322624dcb`.
+Every size passes normalization/journal/conversion, exact per-partition identity,
+typed/null/missing/dotted-key filters, half-open time bounds, equal-time keyset
+pages and retry identity contracts, with0S3/network requests and bytes.
+
+| Records | Elapsed ms | Analytics files / bytes | Cgroup peak bytes |
+| --- | --- | --- | --- |
+|10,000|1,767|4 /540,409|175,992,832|
+|100,000|10,412|26 /5,318,576|192,913,408|
+|1,000,000|95,761|221 /52,794,512|249,573,376|
+|10,000,000|955,331|2,196 /528,495,771|536,879,104|
+
+All containers exit0 with OOMKilled=false and zero OOM/kill counters. The10m
+profile has2,338 memory.max events; its kernel peak is8KiB above the configured
+512MiB limit, so this is memory-pressure/reclaim evidence, not spare headroom.
+Its actual SDK envelope SHA remains
+`1497dc8c86ac7ed8990b081b5d74e71833a75ef3185a4e6529fdb218aca2f5ec`.
+These timings are correctness-run observations, not a matched service speedup.
+The streaming/disk correction has scoped local verification; corrected official
+R3 sustained SLOs and R4 release evidence remain incomplete.
+
+The matched real-process benchmark is complete: frozen4ced580 versus the
+EOF-corrected candidate, same fixed staged records, CPU1/512MiB/swap0, Linux
+ARM64, pinned DuckDB, native memory/spill256MiB, supervisor Go soft limit96MiB,
+GOMAXPROCS1, read-only root and512MiB temporary filesystem. Each profile has
+five2-second samples; no other heavy check/build ran during either measurement.
+It includes child startup, native conversion, supervisor checksum verification
+and output cleanup, but excludes durable ingestion, staging, PG and S3.
+
+| Records / days | Median ms before → after | Scoped records/s before → after | Supervisor B/op before → after | allocs/op before → after |
+| --- | --- | --- | --- | --- |
+|1 /1|102.129 →102.053|9.792 →9.799|4,352,823 →2,114,071|205 →140|
+|100 /1|106.960 →104.755|934.928 →954.607|4,353,069 →2,114,147|205 →140|
+|8 /8|565.271 →558.061|14.153 →14.335|33,808,532 →16,855,842|830 →530|
+
+Removing the repeated parent verification cuts measured supervisor allocation
+bytes by50.1–51.4%; latency medians differ by only0.07–2.06%, not evidence of a
+material end-to-end throughput gain. Kernel cumulative max RSS across the full
+benchmark process is child99,835,904 →98,222,080B and supervisor27,598,848
+→26,714,112B. Cgroup memory.peak is69,525,504 →70,684,672B (higher, not a memory
+headroom improvement); both have zero memory.max events/OOM/kills and exit0.
+Those kernel/cgroup accounting scopes differ and must not be summed. S3 request
+counts and transferred bytes are0 on both sides (network denied). Raw samples,
+compiled test binaries and container/image observations are retained in
+`.tools/conversion-process-bench.lRH9ZU/{before,after}.log`; the candidate image
+is `sha256:5c716a36e557b89c9b28316048af4556955684db515c3b4f2b72ae13fab67ec2`.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

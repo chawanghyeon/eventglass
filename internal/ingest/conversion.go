@@ -18,10 +18,26 @@ import (
 	"github.com/chawanghyeon/eventglass/internal/engine"
 	"github.com/chawanghyeon/eventglass/internal/issues"
 	"github.com/chawanghyeon/eventglass/internal/model"
+	"github.com/chawanghyeon/eventglass/internal/resource"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 )
 
 const occurrenceEncodingVersion = 1
+const maxConversionStageBytes = 64 << 20
+
+type conversionStageWriter struct {
+	writer    io.Writer
+	remaining int64
+}
+
+func (writer *conversionStageWriter) Write(data []byte) (int, error) {
+	if int64(len(data)) > writer.remaining {
+		return 0, resource.ErrLimited
+	}
+	n, err := writer.writer.Write(data)
+	writer.remaining -= int64(n)
+	return n, err
+}
 
 type ConversionReceipt struct {
 	Receipt         control.ReceiptResult
@@ -125,7 +141,7 @@ func StageConversion(ctx context.Context, input ConversionInput) (_ *ConversionA
 			_ = os.Remove(stagePath)
 		}
 	}()
-	stageBuffer := bufio.NewWriterSize(stage, 64<<10)
+	stageBuffer := bufio.NewWriterSize(&conversionStageWriter{writer: stage, remaining: maxConversionStageBytes}, 64<<10)
 	stageEncoder := json.NewEncoder(stageBuffer)
 	summaries := make([]model.IssueOccurrenceSummary, 0)
 	selected, selectedErrors := 0, 0

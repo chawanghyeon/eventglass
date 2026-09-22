@@ -57,6 +57,15 @@ Maintenance shares its verified download/upload implementation in `files.go`.
 `app.superviseTask` is only a join/cancel/heartbeat primitive, not a generic
 job state machine. Transaction and authority rules stay in control.
 
+Conversion's supervisor consumes one framed native output pair at a time:
+app verifies the files, invokes ingest's upload/manifest consumer, removes the
+consumed pair, and acknowledges the child before its next COPY. Engine owns
+only native execution and the bounded frame codec, never uploads or PG policy.
+Ingest reserves the shared disk allowance before downloading/staging and keeps
+it through runner join and task-directory cleanup; app wires that same budget
+used by query, maintenance, and cache. Cancellation cannot release the native
+gate or delete files while the consumer is still using them.
+
 Generated HTTP DTOs may be imported only by api, never by app/query/control.
 `api.QueryAdapter` owns public result decoding and token/HTTP translation;
 `query.Submission` owns catalog verification and durable plan submission, and

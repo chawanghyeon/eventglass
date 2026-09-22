@@ -72,6 +72,15 @@ operation-specific verified-download limits (journal24MiB, result64MiB,
 bundle128MiB), and actual S3 cancellation/retry. Passing a128MiB raw-object
 download is not evidence that a maximum-size Parquet rewrite fits the worker
 memory/time budget; retain those resource tests as separate requirements.
+The conversion leg compiles its test binary outside the resource container,
+then checks8-day errors and a legal10,000-day log container through real durable
+ACK, the pinned child, S3 upload and fenced publication under CPU1/512MiB/swap0,
+non-root, a read-only root and384MiB scratch. It checks exact per-day record
+identity, one outstanding pair, complete catalog coverage and released disk
+reservations. The runner prints cgroup peak/limits/events and fails on OOM;
+it waits for PostgreSQL readiness and heartbeats the normal60-second job lease
+while large conversion/publication work runs. This slow boundary check does
+not substitute for sustained R3 SLOs.
 
 `./scripts/check resource` runs the native ARM64 binary under CPU1/512MiB/swap0
 for two minutes by default. `EVENTGLASS_RESOURCE_DURATION=30s` is available only

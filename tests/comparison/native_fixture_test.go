@@ -251,6 +251,11 @@ func TestNativeDatasetOracle(t *testing.T) {
 			}
 			delete(expectedPartitions, key)
 			file := bundle.Analytics
+			retained := filepath.Join(directory, fmt.Sprintf("retained-%06d-analytics.parquet", bundle.Index))
+			if err := os.Rename(file.Path, retained); err != nil {
+				return err
+			}
+			file.Path = retained
 			parquetBytes += file.Evidence.Bytes
 			if parquetBytes > 2<<30 || len(files) >= query.MaxPlanFiles {
 				return fmt.Errorf("native oracle retained-data budget exceeded")

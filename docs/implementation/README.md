@@ -19,9 +19,15 @@ also pass. R3's latest1/2/4-worker official-duration profiles pass the former
 target map, but audited ACK sampling and maintenance-budget omissions require
 corrected measurements. The latest clean0004b4f budgeted short diagnostic still
 misses query and load-backlog targets, although that run has no cancellation
-budget overrun. Independent fixed-work capacity now has an executable1/2/4-worker
-matrix and a passing32-cycle diagnostic; the clean128-cycle three-sample matrix
-and corrected official-duration service measurements remain required. R3
+budget overrun. Independent fixed-work capacity now passes the clean4ced580
+128-cycle matrix with three fresh installations per1/2/4-worker profile.
+Corrected official-duration service measurements remain required. A subsequent
+conversion audit reproduced missing shared disk admission, all-partition file
+accumulation before upload and a symlink output-validation gap. Their bounded
+streaming correction now passes the actual10,000-day ACK/publication boundary
+under CPU1/512MiB/swap0, unit/race/native contracts, integration, resource,
+browser/crash and the complete10k/100k/1m/10m native oracle. This scoped
+correction does not complete sustained-load service validation. R3
 remains the first incomplete packet and R4 remains dependency-blocked. Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises

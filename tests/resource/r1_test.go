@@ -270,6 +270,13 @@ func convertR1Batch(t *testing.T, binary, root string, cycle int, records []mode
 	}
 	var bundles []engine.ConvertedBundle
 	summary, err := (app.ProcessConversionRunner{BinaryPath: binary}).Run(context.Background(), request, func(bundle engine.ConvertedBundle) error {
+		for role, file := range map[string]*engine.ConvertedFile{"analytics": &bundle.Analytics, "payload": &bundle.Payload} {
+			retained := filepath.Join(directory, fmt.Sprintf("retained-%06d-%s.parquet", bundle.Index, role))
+			if err := os.Rename(file.Path, retained); err != nil {
+				return err
+			}
+			file.Path = retained
+		}
 		bundles = append(bundles, bundle)
 		return nil
 	})
