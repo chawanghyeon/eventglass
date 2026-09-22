@@ -87,6 +87,13 @@ integration() {
     AWS_ACCESS_KEY_ID=eventglass-local \
     AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
     go test -count=1 ./tests/integration
+  # Exercise the private maintenance downloader against the same disposable
+  # provider, including same-size corruption, missing objects and joined retry.
+  EVENTGLASS_S3_ENDPOINT="http://${minio_address}" \
+    EVENTGLASS_S3_BUCKET=eventglass-g00 \
+    AWS_ACCESS_KEY_ID=eventglass-local \
+    AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+    go test -tags=integration -count=1 -run '^TestMaintenanceDownloadsS3FailureAndRetry$' -v ./internal/maintenance
   ./scripts/build-image --target build --load --tag eventglass-go:integration-build
   docker run --rm --platform linux/arm64 --network "${project}_default" \
     -e EVENTGLASS_INTEGRATION_REQUIRED=1 \

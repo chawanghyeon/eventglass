@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/chawanghyeon/eventglass/internal/control"
 	"github.com/chawanghyeon/eventglass/internal/engine"
@@ -74,21 +75,64 @@ func reserveDisk(budget *resource.Budget, work control.CompactionWork) (*resourc
 	return budget.Acquire(bytes)
 }
 
+// Each worker streams one object at a time through the existing full-SHA
+// verifier. Disk admission already covers the complete input set. Four workers
+// bound live provider bodies/copy buffers independently of input cardinality.
+const maintenanceDownloadConcurrency = 4
+
 func downloadInputs(ctx context.Context, store CompactionStore, directory string, work control.CompactionWork) ([]engine.CompactionInput, error) {
+	if store == nil || len(work.Inputs) > control.MaxCompactionInputs {
+		return nil, errors.New("invalid maintenance download inputs")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	inputs := make([]engine.CompactionInput, len(work.Inputs))
-	for index, input := range work.Inputs {
-		inputDir := filepath.Join(directory, fmt.Sprintf("input-%03d", index))
-		if err := os.Mkdir(inputDir, 0o700); err != nil {
-			return nil, err
-		}
-		analytics, payload := filepath.Join(inputDir, "analytics.parquet"), filepath.Join(inputDir, "payload.parquet")
-		if err := store.DownloadToFile(ctx, input.Analytics.ObjectKey, analytics, input.Analytics.Bytes, input.Analytics.SHA256, engine.MaxBundleFileBytes); err != nil {
-			return nil, err
-		}
-		if err := store.DownloadToFile(ctx, input.Payload.ObjectKey, payload, input.Payload.Bytes, input.Payload.SHA256, engine.MaxBundleFileBytes); err != nil {
-			return nil, err
-		}
-		inputs[index] = engine.CompactionInput{BundleID: input.BundleID, AnalyticsPath: analytics, PayloadPath: payload, IdentitySHA256: input.IdentitySHA256}
+	var workers sync.WaitGroup
+	var first sync.Once
+	var failure error
+	for start := 0; start < min(maintenanceDownloadConcurrency, len(inputs)); start++ {
+		workers.Add(1)
+		go func(start int) {
+			defer workers.Done()
+			for index := start; index < len(inputs); index += maintenanceDownloadConcurrency {
+				if ctx.Err() != nil {
+					return
+				}
+				input, err := downloadInput(ctx, store, directory, index, work.Inputs[index])
+				if err != nil {
+					first.Do(func() { failure = err; cancel() })
+					return
+				}
+				inputs[index] = input
+			}
+		}(start)
+	}
+	// Cancellation is not completion: body close/partial-file cleanup must join
+	// before the workflow may delete the task directory or release its permit.
+	workers.Wait()
+	if failure != nil {
+		return nil, failure
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return inputs, nil
+}
+
+func downloadInput(ctx context.Context, store CompactionStore, directory string, index int, input control.CompactionWorkInput) (engine.CompactionInput, error) {
+	inputDir := filepath.Join(directory, fmt.Sprintf("input-%03d", index))
+	if err := os.Mkdir(inputDir, 0o700); err != nil {
+		return engine.CompactionInput{}, err
+	}
+	analytics, payload := filepath.Join(inputDir, "analytics.parquet"), filepath.Join(inputDir, "payload.parquet")
+	if err := store.DownloadToFile(ctx, input.Analytics.ObjectKey, analytics, input.Analytics.Bytes, input.Analytics.SHA256, engine.MaxBundleFileBytes); err != nil {
+		return engine.CompactionInput{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return engine.CompactionInput{}, err
+	}
+	if err := store.DownloadToFile(ctx, input.Payload.ObjectKey, payload, input.Payload.Bytes, input.Payload.SHA256, engine.MaxBundleFileBytes); err != nil {
+		return engine.CompactionInput{}, err
+	}
+	return engine.CompactionInput{BundleID: input.BundleID, AnalyticsPath: analytics, PayloadPath: payload, IdentitySHA256: input.IdentitySHA256}, nil
 }

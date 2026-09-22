@@ -50,7 +50,13 @@ maintenance accounting and OOM checks, but rows/histogram p95=591/1,737ms fail.
 The runner exits1 before2/4 workers; their corrected official profiles remain
 unexecuted. Maximum queried files reach2,117 and planning/transport overhead
 grows; retained measurements distinguish this from the short diagnostic.
-Corrected official query SLOs remain open. Separately, typed sizing, bounded native
+Corrected official query SLOs remain open. The next maintenance-local four-read
+bound preserves full SHA verification, ordered inputs and joined cancellation.
+Real S3 download microbenchmarks improve, with higher RSS; the same short service
+profile changes295/566→303/548ms and still fails histogram500ms. Native maximum-
+pair direct/dispatcher, actual S3 failure/retry, full integration including10,000
+event days, child contracts and browser checks pass. No official profile has
+been rerun for that change yet. Separately, typed sizing, bounded native
 writer fan-in and app-owned retry admission pass two maximum-pair actual-worker
 resource executions, with zero OOM or budget overrun but no memory headroom.
 These local results are not full-service SLO or release claims. R3

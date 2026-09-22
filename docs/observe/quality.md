@@ -2338,7 +2338,7 @@ Before evidence is `.tools/comparison-report-1.rV0OM9/report.json`, candidate
 | Histogram durable-job p95 |720ms|396ms|
 | ACK/visibility p95 |374/868ms|374/735ms|
 | Maximum query files |756|561|
-| Completed compactions |187|239|
+| Compaction work steps (prepare/swap) |187|239|
 | All maintenance attempts / measured idle |12,730/64,300ms|15,632/78,300ms|
 | Query work time |14,848ms|8,827ms|
 | Sampled whole-installation peak |769,727,134B|864,623,260B|
@@ -2445,6 +2445,123 @@ not cleared. Full replacement-worker maintenance attempts total2,621ms against
 remains blocked without signed backup verification. Exact data, restart,
 cache, containment and maintenance passes do not override the two failed query
 targets. R3 and dependent R4 remain incomplete; no release is advertised.
+
+### Bounded verified maintenance downloads
+
+The concrete maintenance input path now runs at most four streaming downloads,
+retaining the existing full-byte SHA/size checks, exclusive private paths,
+input order, file128MiB/paired256MiB limits and shared disk reservation. First
+failure cancels siblings; all provider bodies and cleanup join before the
+workflow can remove files, release disk or start native work. No new workflow
+framework, transaction policy, cache or provider prefetch is introduced.
+
+The bounded-concurrency regression fails on the serial baseline (one active
+read rather than four), then passes with stable128-pair ordering and exactly
+four maximum active reads. The first test-fixture draft cleaned its temporary
+directory before joining the baseline on assertion failure; that fixture was
+corrected and the retained baseline repro contains only the intended failure.
+Race tests additionally cover blocked provider completion after cancellation
+or another read's error, disk/scratch lifetime, one-input retention, oversized
+input rejection, existing-directory rejection and retry. Explicit real MinIO
+tests reject missing and same-length corrupt bytes, then succeed after repair;
+these are wired into `scripts/check integration`, not successful mock substitutes.
+
+`BenchmarkMaintenanceDownloads` uses deterministic opaque bytes, not Parquet:
+it isolates real S3 full reads, SHA verification, private-file writes and cleanup.
+The byte-identical benchmark source is compiled before each measurement in the
+same pinned ARM64 build image. Fresh before/after CPU1/512MiB/swap0 non-root,
+read-only containers use GOMEMLIMIT96MiB/GOMAXPROCS1 and128MiB tmpfs, with separate
+disposable MinIO installations. No other build/test overlaps timed loops.
+Warmup/provider upload and independent file inspection precede timing; five
+samples of three iterations include download and directory cleanup. Evidence:
+`.tools/maintenance-downloads-before.3XIgF0` and
+`.tools/maintenance-downloads-after.fc6eSg` contain source/binary/image hashes,
+raw samples, fixture hashes and memory events.
+
+| Pairs / bytes per file | Median latency before→after | Transfer rate before→after | S3 GET / bytes per operation (both) |
+|---|---:|---:|---:|
+|16 /8KiB|10.619→3.360ms|24.69→78.03MB/s|32 /262,144B|
+|16 /256KiB|18.605→9.244ms|450.89→907.51MB/s|32 /8,388,608B|
+|128 /8KiB|78.514→25.070ms|26.71→83.65MB/s|256 /2,097,152B|
+|128 /256KiB|147.551→72.595ms|454.82→924.43MB/s|256 /67,108,864B|
+
+128-pair fixture hashes are respectively
+`da809f6dc7a5b2dd345bd09c43d4cb4ea265888dc8cec838d0ed63a6a4d8b32d` and
+`b83e05c62ec21ea3aa5b91cbb0306b7ecab8c053a07951fe5191ba37dce07080`.
+No measured PUT/HEAD/Range operations occur. This is download throughput, not
+ingestion throughput or native compaction speedup.
+
+| Pairs / file size | Go B/op before→after | allocs/op before→after | Median VmRSS before→after |
+|---|---:|---:|---:|
+|16 /8KiB|1,468,376→1,469,368|17,498→17,484|28,241,920→28,434,432B|
+|16 /256KiB|2,213,837→2,214,981|17,498→17,486|28,835,840→30,089,216B|
+|128 /8KiB|11,748,365→11,747,546|139,823→139,584|29,835,264→32,784,384B|
+|128 /256KiB|17,712,778→17,711,490|139,832→139,587|30,404,608→35,012,608B|
+
+Maximum VmHWM33,439,744→38,002,688B and cgroup peak98,512,896→104,194,048B
+increase; OOM/kill0 on both. These process peaks include fixture setup, clients,
+all subbenchmarks and samples, not just one operation. Do not claim memory saving.
+
+Fresh actual PG/S3 maximum-pair execution
+`.tools/maintenance-resource.mK8BJE` passes direct compaction/retention21.95s
+and real-dispatcher146.03s over265,537,875 input bytes/896 records. Dispatcher
+compaction/retention require three claims each (including cancellation/retry),
+then fully expired retirement succeeds. All maintenance attempts12,894ms
+against112,800ms observed idle stay within budget, no overrun. Cgroup
+peak536,875,008B reaches the512MiB boundary with reclaim pressure; OOM/kill0
+does not establish headroom. Pinned identities and full/mixed expiry remain exact.
+
+The same20s/300s/90s service comparison uses baseline
+`.tools/comparison-report-1.VCMPUF/report.json` and candidate
+`.tools/comparison-report-1.h8LAhb/report.json`. Candidate product SHA is
+`b7616c21d9973364ff43a384ee2347f1f2a7aa75efd80698f45bb12b8b20c454`, unchanged
+native library SHA is recorded above. Fresh build/runtime image IDs are
+`sha256:9472db30581e639eece3c58200e01f9e9bd9a2180f2080f2974f449bdccbb172` and
+`sha256:881ba1cf78784aa7f12b67443112cac682e45738ebeeb51d37711aa29d5852cf`.
+
+| Short actual service | Before | Candidate |
+|---|---:|---:|
+| Rows/histogram p95 |295/566ms|303/548ms|
+| Histogram durable-job p95 |396ms|390ms|
+| ACK/visibility p95 |374/735ms|371/750ms|
+| Maximum query files |561|601|
+| Completed compaction tasks / work steps |116/239|117/241|
+| All maintenance attempts / observed idle |15,632/78,300ms|15,271/74,700ms|
+| Sampled whole-installation peak |864,623,260B|788,207,236B|
+| Worker cgroup peak |70,410,240B|71,512,064B|
+| S3 PUT count/bytes |5,942/35,510,791B|5,967/35,528,788B|
+| S3 HEAD count |50,177|51,132|
+| S3 full GET count/bytes |14,600/86,426,496B|14,593/86,156,852B|
+| S3 Range count/bytes |2,035/19,630,435B|2,027/19,500,180B|
+| PG WAL |74,702,512B|75,054,136B|
+
+Both return exact33,600 public records,60 successful searches, final backlog0,
+OOM0 and passing main/post-load maintenance accounting. Candidate slope−0.207509/min
+and max backlog11 pass. Cold/warm same-snapshot rows take838/612ms with
+Range540/3 and6,338,487/25,222B;10s idle adds no query work. Post-load maintenance
+1,746ms versus8,200ms idle has no overrun. Candidate input is10,779 envelopes/
+43,052,103B with framed SHA
+`f33b02bdb9b0cd70a263f34561d7db0e32507d6a789ec71daf746c3cf52054e6`.
+UUIDs, retries, timing and compaction trajectories differ: the small histogram
+difference is not a stable full-service speedup or sole-cause attribution.
+Histogram548ms still fails500ms, so the command exits1. Official-duration R3
+query correction, full remaining evidence and R4 are still incomplete.
+
+The older warm-input table's187/239 figures are work steps, not completed
+compaction tasks: corresponding retained reports contain93/116 completed tasks.
+That label is corrected above without changing raw evidence or published history.
+
+Executed checks: ARM64 unit/layout/architecture/vet; byte-identical codegen;
+maintenance race1.823s; explicit bounded-container MinIO missing/corrupt/retry;
+standard PG/S3 integration25.735s plus downloader0.803s; selected pinned-native
+query/Live/authority/maintenance39.242s; actual10,000-event-day publication750.72s
+(170,078,208B cgroup peak, OOM0, one outstanding pair and no disk residue);
+native child contracts0.840s; fresh non-root/read-only Chromium2.8s; maximum-pair
+resource and the failed service comparison above. Browser/child checks overlapped
+the long correctness-only date-boundary test, not either performance measurement.
+Logs use `.tools/maintenance-download-{unit,codegen,race,verify,resource,
+integration,contracts,browser,comparison}.log`. API/schema, fences, authorization,
+native limits and the signed-backup GC interlock are unchanged.
 
 ## Release and workflow
 

@@ -380,6 +380,17 @@ not a proven single cause. R3 remains first incomplete: resolve both query SLOs
 at official duration and complete the corrected profiles, then dependent R4.
 Detailed identities/costs are in quality.md.
 
+Maintenance now bounds verified input downloads at four concurrent streams,
+with stable input order and joined failure/cancellation before scratch/permit
+release. Same-input real-MinIO128-pair medians improve78.514→25.070ms for8KiB
+files and147.551→72.595ms for256KiB files; RSS increases and request bytes stay
+identical. Actual missing/corrupt objects and retries, maximum-pair native
+direct/dispatcher, the full integration gate, child contracts and browser pass.
+The matched short service profile measures295/566→303/548ms; histogram still
+fails500ms. This is not the official-duration correction required above.
+R3 remains first incomplete, including fairness/complete scaling evidence;
+do not advance to a release claim on this scoped transport optimization.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

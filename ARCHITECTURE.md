@@ -54,6 +54,9 @@ owns verified conversion output and publication orchestration. `query/worker.go`
 and `query/coordinator.go` own durable query work. Process runners stay in app;
 these operation packages receive small consumer interfaces, not app imports.
 Maintenance shares its verified download/upload implementation in `files.go`.
+It downloads at most four objects concurrently within one admitted input set,
+retains the original input order and full-byte SHA checks, and joins every read
+on error/cancellation before the workflow can remove files or release disk.
 `app.superviseTask` is only a join/cancel/heartbeat primitive, not a generic
 job state machine. Transaction and authority rules stay in control.
 

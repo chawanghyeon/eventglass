@@ -73,6 +73,10 @@ those corrected official profiles remain unexecuted. See quality.md for retained
 native-oracle and service evidence. R3 remains incomplete.
 Two separate maximum-pair real-dispatcher runs pass with zero OOM or
 budget overrun. These scoped results do not close G07 or establish a release.
+The next bounded maintenance-download change reduces actual same-input S3
+download time but increases benchmark RSS. Its matched short service profile
+measures303/548ms versus295/566ms; histogram still fails500ms. No official SLO
+pass or broad cost/memory improvement is inferred from that small difference.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the

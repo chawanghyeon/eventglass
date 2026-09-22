@@ -68,6 +68,18 @@ at the exact received-time boundary, fully expired retirement, pinned old
 snapshot reads, authority revocation and retry/cancellation checks. It does not
 enable physical GC without signed backup evidence. Metadata-only maintenance
 fixtures are not a substitute for this end-to-end path.
+The same gate runs the private downloader's `integration`-tagged real-MinIO
+missing-object, same-length corruption and restored-object retry checks.
+`BenchmarkMaintenanceDownloads` in `internal/maintenance` measures that concrete
+download/cleanup path, not Parquet execution. Compile with the pinned static
+build before timing, then run `-test.run '^$' -test.bench
+'^BenchmarkMaintenanceDownloads$' -test.benchmem -test.benchtime=3x -test.count=5`
+in fresh Linux ARM64 CPU1/512MiB/no-swap, non-root/read-only containers with
+128MiB scratch, GOMEMLIMIT96MiB and GOMAXPROCS1. Provide an explicit disposable
+MinIO endpoint/bucket and fixture credentials; the benchmark rejects ambient
+credentials and non-local endpoints. It checks identical byte hashes and exact
+S3 request/transfer counts; Go allocations and RSS/HWM include the documented
+benchmark phases. Do not run concurrent builds or tests during comparison.
 The same gate includes a real approximately72MiB-per-file paired bundle,
 operation-specific verified-download limits (journal24MiB, result64MiB,
 bundle128MiB), and actual S3 cancellation/retry. Passing a128MiB raw-object

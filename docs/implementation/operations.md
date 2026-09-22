@@ -214,6 +214,15 @@ scan provenance must not be replaceable by a Parquet filename column. Input
 full-SHA verification remains at the download boundary; output SHA/block and
 pair evidence remains mandatory before upload/Prepare. Do not recalculate input
 full hashes merely to discard them. File128MiB and total256MiB bounds still apply.
+The concrete maintenance downloader uses at most four streaming reads across
+the at-most128 admitted pairs; analytics/payload within each pair stay ordered.
+There is no whole-object memory buffering. Successful work still reads each
+input object once; a canceled operation may have up to four admitted reads in flight.
+It cancels siblings on the first failure but joins all body-close/partial-file
+cleanup before returning; only then may the workflow remove its private task
+directory and release the existing shared-disk permit. A late successful read
+after cancellation cannot start the native child. This bound is local to each
+maintenance operation, not a new app scheduler or transaction policy.
 Wide native rewrites must not keep a full sorted value vector beside the Parquet
 writer. Small inputs retain the direct COPY path, selected by actual Parquet
 uncompressed metadata, not compressed file length. Larger inputs materialize
