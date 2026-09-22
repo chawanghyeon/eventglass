@@ -60,7 +60,10 @@ verification and eliminate duplicate histogram scans when filling empty buckets.
 Bounded compaction-prefix ranking avoids lexical error/log priority. The latest
 matched short diagnostic measures rows/histogram p95=341/949→315/714ms and fewer
 S3 HEADs, but histogram still misses500ms; RSS/full-GET bytes and post-load
-cold/warm latency increase. Official-duration measurements remain required.
+cold/warm latency increase. A later joined-cleanup/accounting correction measures
+416/949ms; it adds full replacement-worker maintenance verification and removes
+compilation from startup/measurement. Histogram still fails, so this is not a
+performance improvement. Official-duration measurements remain required.
 Two separate maximum-pair real-dispatcher runs pass with zero OOM or
 budget overrun. These scoped results do not close G07 or establish a release.
 

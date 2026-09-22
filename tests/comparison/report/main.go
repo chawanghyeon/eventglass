@@ -108,6 +108,7 @@ func main() {
 	targets["resource_evidence_complete"] = complete
 	targets["no_cgroup_oom"] = complete && len(resource.OOMKilled) == 0 && resource.CgroupOOMEvents == 0 && resource.CgroupOOMKills == 0
 	targets["go_units_within_512mib"] = complete && resource.GoUnitsWithin512MiB && resource.GoLimitsVerified
+	targets["postload_maintenance_time_accounted"] = validPostLoadMaintenance(report)
 	targets["postload_complete"] = validPostLoad(report, targets)
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -124,10 +125,10 @@ func main() {
 
 func validPostLoad(report, targets map[string]any) bool {
 	phase, ok := report["PostLoad"].(map[string]any)
-	if !ok || phase["Complete"] != true {
+	if !ok || phase["Complete"] != true || !validPostLoadMaintenance(report) {
 		return false
 	}
-	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work"} {
+	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted"} {
 		if targets[name] != true {
 			return false
 		}
@@ -138,6 +139,45 @@ func validPostLoad(report, targets map[string]any) bool {
 	}
 	idle, ok := phase["IdleSeconds"].(float64)
 	return ok && idle >= minimumIdle
+}
+
+// Recompute from retained counters; a stale true target cannot certify the
+// replacement workers. All attempts count, including failures and empty work.
+func validPostLoadMaintenance(report map[string]any) bool {
+	phase, _ := report["PostLoad"].(map[string]any)
+	operations, _ := phase["Operations"].(map[string]any)
+	counter := func(operation, field string) (uint64, bool) {
+		raw, exists := operations[operation]
+		if !exists {
+			return 0, true
+		}
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			return 0, false
+		}
+		value, ok := entry[field].(float64)
+		// JSON numbers were decoded as float64. Do not accept rounded, negative,
+		// or fractional counters as exact accounting evidence.
+		if !ok || math.IsNaN(value) || value < 0 || value > (1<<53)-1 || math.Trunc(value) != value {
+			return 0, false
+		}
+		return uint64(value), true
+	}
+	idleCalls, callsOK := counter("maintenance_spare", "Calls")
+	idle, idleOK := counter("maintenance_spare", "WorkMS")
+	overruns, overrunOK := counter("maintenance_budget_overrun", "Calls")
+	if !callsOK || !idleOK || !overrunOK || idleCalls == 0 || idle == 0 || overruns != 0 {
+		return false
+	}
+	var spent uint64
+	for _, name := range []string{"retention", "compaction", "gc"} {
+		elapsed, ok := counter(name, "ElapsedMS")
+		if !ok {
+			return false
+		}
+		spent += elapsed // Three exact JSON integers cannot overflow uint64.
+	}
+	return spent <= idle/4
 }
 
 func readObject(path string) map[string]any {

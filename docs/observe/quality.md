@@ -2182,6 +2182,95 @@ The final non-root/read-only ARM64 image's actual Chromium operator flow passes
 integration,browser}.log`. These correctness checks do not turn the failed
 histogram target into a successful R3 gate or claim R4 completion.
 
+### Joined cleanup and post-load maintenance accounting
+
+A two-unstarted-compaction lookahead experiment on the same20s/300s/90s,
+one-worker profile was rejected and fully removed. Its real PG selector tests
+passed, but `.tools/comparison-report-1.L2Oa34/report.json` measured
+rows/histogram363/956ms versus the accepted315/714ms baseline, with failing
+backlog slope+0.227181/min. All33,600 public records were exact,59 queries had no
+public failures and final backlog was zero; these do not override the failed
+targets. Sampled whole-installation peak was789,845,112B, OOM0. Cold/warm regex
+was798/671ms, Range506/2 and6,128,472/16,337B. This is rejected diagnostic
+evidence, not a product improvement or reason to change the SLO.
+
+The replacement worker logged a327ms `maintenance_budget_overrun` after load,
+but the old report checked maintenance only during the main load. Consequently,
+older successful cold/warm/idle flags do not establish post-load maintenance
+accounting. The revised collector retains the complete replacement-worker
+operation counters, including startup before the first scrape. Both the test
+and final reporter require observed idle credit, all retention/compaction/GC
+attempt time<=idle/4 and zero overruns. The reporter recomputes from raw counters
+and rejects missing, negative, fractional or inexact JSON-integer evidence;
+a stored true target cannot substitute. All seven negative regressions fail
+against the old reporter (`.tools/postload-accounting-before.log`).
+
+The old admission allowance reserved only100ms native TERM grace. A deterministic
+actual-dispatcher test that holds native ownership through100ms grace plus50ms
+cleanup reproduces350ms work against300ms allowance (idle1,200ms), recording an
+overrun (`.tools/maintenance-join-cleanup-before.log`). Admission now reserves
+200ms, including100ms cleanup/scheduling margin, with the unchanged200ms minimum
+work slice. This is not permission to abandon cleanup: actual joined duration
+is fully charged, slow joins still fail, and permits stay owned until completion.
+The regression and the existing deliberately long cleanup/overrun test both pass.
+The sustained harness also compiles its test executable before any installation
+starts and reuses it for setup/load/cold/idle, removing compiler competition
+with worker startup. Capacity uses its existing precompiled executable.
+
+Fresh pinned-native ARM64 maximum-pair PG/S3 verification passes in
+`.tools/maintenance-resource.IxYnyB`:14 pairs/896 records/265,537,875B,
+direct compaction9.234s and full direct workflow22.24s. The actual dispatcher
+completes compaction and mixed retention in three claims each (71.753/63.002s)
+and full expiry in one claim; total146.77s. Observed idle113,200ms,
+all maintenance attempts13,424ms and overruns0. Old pinned pair identity,
+authority and half-open retention checks pass; physical GC remains frozen.
+CPU1/512MiB/swap0 cgroup peak536,875,008B has OOM/kill0 but significant reclaim,
+so no memory headroom is claimed. The product executable SHA is
+`34f37941f753543f20a44abc8554c1fbbfb87e24809c4eaf7fc4ee71993bdaf4`;
+the unchanged pinned native library SHA is
+`84ad753acc1390e13ce56e728d75d379bebeedec7f3df58ce071c1b373e4c79f`.
+This repairs admission/verification, not an established speedup or R3 closure.
+
+The fresh20s/300s/90s one-worker service run is retained in
+`.tools/comparison-report-1.rV0OM9/report.json`, with runner log
+`.tools/maintenance-accounting-comparison.log`. Rows/histogram p95 are416/949ms
+(server162/720ms), ACK374ms, visibility868ms. The500ms histogram target alone
+fails; the change is not a speedup relative to315/714ms. All33,600 records are
+publicly queryable exactly,59 measured queries have zero public failures,
+backlog max13/slope−0.095188/min/final0. Main-load compaction187 work,
+12,539ms all attempts; retention148ms and GC43ms, versus64,300ms observed idle,
+with zero recorded overruns. The newly enforced post-load check passes:
+compaction1,607ms+retention24ms+GC8ms=1,639ms versus8,200ms idle, overruns0.
+Cold/warm regex1,009/668ms uses Range722/3,7,859,828/24,742B, same snapshot and
+exact rows;10s idle adds no query work. This full fresh-worker counter snapshot
+is evidence the older post-load reports did not retain.
+
+Sampled whole-installation peak is769,727,134B, observed worker cgroup peak
+70,086,656B and OOM0. Main-load S3 PUT5,947/33,613,229B, HEAD63,526,
+full GET14,203/80,279,287B, Range1,990/18,523,640B; PG WAL75,997,200B.
+Post-load S3/WAL are separate. Actual input provenance is10,940 envelopes,
+40,937,267B, framed SHA
+`0d14c4fa08176384ed5c5bcf7db02d3176da807f06377e8de13d1d3a5f0ae456`.
+The native dependency is unchanged; all product images are freshly built.
+Earlier timings include compiler work after worker startup; the corrected
+harness removes it, so this pair cannot isolate a product-only performance
+effect. Neither this short profile nor containment closes R3/R4.
+
+ARM64 unit/layout/architecture/vet and byte-identical code generation pass.
+App/control/query race checks pass4.549/1.307/7.785s. The current comparison
+build image executes the full Dockerfile native test/vet commands with its
+pinned library and real child: engine160.355s, child contracts0.864s. As before,
+this avoids exporting another large test image; environment-required cases are
+verified separately, not claimed from skipped no-environment tests. Real PG/S3
+integration passes26.309s on host ARM64 and49.918s in the selected actual-native
+search/Live/authority/snapshot/maintenance run, with no skips in that selected
+run. The final non-root/read-only ARM64 Chromium flow passes2.9s. The comparison
+harness regression suite also passes in the fresh runner (2.275/0.198s);
+an initial unprivileged host attempt failed on localhost bind permissions and
+is not counted as a pass. Logs use `.tools/maintenance-accounting-` with
+`unit`, `codegen`, `race`, `contracts`, `integration`, `browser`, `comparison`
+and `resource` suffixes. The unrelated full capacity matrix was not rerun.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

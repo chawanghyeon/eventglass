@@ -111,8 +111,11 @@ func TestPostLoadEvidenceCannotBeOmittedOrShortenedForOfficialProfile(t *testing
 	if validPostLoad(report, targets) {
 		t.Fatal("missing post-load evidence passed")
 	}
-	report["PostLoad"] = map[string]any{"Complete": true, "IdleSeconds": float64(10)}
-	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work"} {
+	report["PostLoad"] = map[string]any{"Complete": true, "IdleSeconds": float64(10), "Operations": map[string]any{
+		"maintenance_spare": map[string]any{"Calls": float64(100), "WorkMS": float64(10000)},
+		"compaction":        map[string]any{"ElapsedMS": float64(2500)},
+	}}
+	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted"} {
 		targets[name] = true
 	}
 	if !validPostLoad(report, targets) {
@@ -129,5 +132,39 @@ func TestPostLoadEvidenceCannotBeOmittedOrShortenedForOfficialProfile(t *testing
 	targets["warm_same_snapshot_rows"] = false
 	if validPostLoad(report, targets) {
 		t.Fatal("mismatched warm result accepted")
+	}
+}
+
+func TestPostLoadRejectsUnaccountedMaintenanceDespiteLegacyTargets(t *testing.T) {
+	for _, scenario := range []string{"missing", "startup_overrun", "excess_attempts", "zero_idle", "negative", "fractional", "unsafe_integer"} {
+		t.Run(scenario, func(t *testing.T) {
+			spare := map[string]any{"Calls": float64(100), "WorkMS": float64(10000)}
+			compaction := map[string]any{"ElapsedMS": float64(2500)}
+			operations := map[string]any{"maintenance_spare": spare, "compaction": compaction}
+			switch scenario {
+			case "missing":
+				delete(operations, "maintenance_spare")
+			case "startup_overrun":
+				operations["maintenance_budget_overrun"] = map[string]any{"Calls": float64(1)}
+			case "excess_attempts":
+				operations["retention"] = map[string]any{"ElapsedMS": float64(1)}
+			case "zero_idle":
+				spare["WorkMS"] = float64(0)
+			case "negative":
+				compaction["ElapsedMS"] = float64(-1)
+			case "fractional":
+				compaction["ElapsedMS"] = 0.5
+			case "unsafe_integer":
+				spare["WorkMS"] = float64(1 << 54)
+			}
+			report := map[string]any{"PostLoad": map[string]any{"Complete": true, "IdleSeconds": float64(60), "Operations": operations}}
+			targets := map[string]any{}
+			for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted"} {
+				targets[name] = true
+			}
+			if validPostLoad(report, targets) {
+				t.Fatal("unaccounted post-load maintenance accepted")
+			}
+		})
 	}
 }

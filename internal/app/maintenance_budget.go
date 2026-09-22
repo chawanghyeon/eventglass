@@ -4,9 +4,10 @@ import "time"
 
 const (
 	maintenanceWindow = time.Minute
-	// Leave time for canceled native work to exit and join. Unused allowance
-	// is not charged; a slow join is charged in full, never hidden by timeout.
-	maintenanceJoinAllowance = nativeChildStopGrace
+	// Reserve native termination grace plus joined gateway/file cleanup and
+	// scheduling margin. This is admission headroom, not a cleanup deadline:
+	// a slow join remains charged in full and retains its permit until done.
+	maintenanceJoinAllowance = nativeChildStopGrace + 100*time.Millisecond
 	maintenanceMinWorkSlice  = 200 * time.Millisecond
 )
 

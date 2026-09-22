@@ -168,8 +168,10 @@ compaction and GC share61 fixed one-second buckets; partial oldest idle buckets
 are discarded and partial oldest work buckets are fully charged. Work allowance
 is I/4-M (20% of I+M), forecasting idle-credit expiry through the end of the
 grant. There is no initial free burst. Foreground claims always run first.
-The task deadline leaves100ms of the grant for cancellation/join; actual time until
-return, including no-work/failed claims and cleanup, is charged. Aging credit or
+The task deadline leaves200ms of the grant for cancellation/join:100ms native
+termination grace plus100ms joined cleanup/scheduling margin. This is not a
+cleanup timeout. Actual time until return, including no-work/failed claims and
+cleanup, is charged. Aging credit or
 a slow join can create debt: it denies further admission, never releases a live
 permit or retrospectively erases work. A join overrun is observable and fails
 comparison verification. This wall-time admission policy is not a hard CPU-time

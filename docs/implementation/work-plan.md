@@ -345,6 +345,22 @@ limit or query authorization changes. R3 remains first incomplete: resolve the
 remaining histogram SLO and run corrected official-duration profiles. See
 quality.md for source identities, scope, costs and failures.
 
+A two-unstarted-compaction lookahead experiment was rejected: the same short
+profile measured363/956ms and backlog slope+0.227181/min, worse than the accepted
+candidate. No lookahead restriction remains in the product. Its new cold worker
+also logged a327ms maintenance budget overrun that the legacy post-load verdict
+omitted. Post-load verification now retains/rechecks the full replacement-worker
+operation counters, including startup. Admission reserves200ms for native grace
+plus joined cleanup rather than100ms for grace alone; actual work and overruns
+remain fully charged. Deterministic regressions reproduce both omissions before
+the fix. Sustained test compilation moves before installation startup. These
+are correctness/measurement repairs, not a relaxed SLO or R3 completion.
+The fresh maximum-pair actual dispatcher passes146.77s with13,424ms all-attempt
+maintenance against113,200ms observed idle, overrun/OOM0. The new short service
+profile measures416/949ms, not a speedup; histogram alone fails. Post-load
+maintenance1,639ms against8,200ms idle passes, with exact cold/warm rows and
+zero idle query work. Corrected official profiles still remain required.
+
 ## Failure-injection matrix (stable acceptance IDs)
 
 Use test-only failpoint barriers through inherited IPC, never public HTTP/env

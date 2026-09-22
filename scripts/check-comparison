@@ -108,6 +108,16 @@ else
   test_timeout=1h
 fi
 
+comparison_binary="$run_dir/capacity.test"
+if [ "$mode" = sustained ]; then
+  comparison_binary="$run_dir/comparison.test"
+  # Compilation must not compete with startup maintenance or measured load.
+  # Reuse this exact test executable for prepare, sustained and cold/idle phases.
+  docker run --rm --platform linux/arm64 --network none -v "$run_dir:/comparison" \
+    -v "$ROOT/tests/comparison:/src/tests/comparison:ro" -w /src "$build_image" \
+    go test -tags comparison -c -o /comparison/comparison.test ./tests/comparison
+fi
+
 start_runtime() {
   name=$1
   role=$2
@@ -208,12 +218,12 @@ for workers in $profiles; do
   app_containers="$api_container"
 
   docker run --rm --platform linux/arm64 --network "${active_project}_default" \
-    -v "$artifacts_dir:/comparison" -v "$ROOT/tests/comparison:/src/tests/comparison:ro" -w /src \
+    -v "$artifacts_dir:/comparison" -v "$comparison_binary:/comparison.test:ro" \
     -e EVENTGLASS_COMPARISON_BASE_URL="http://${api_container}:8080" \
     -e EVENTGLASS_COMPARISON_STATE=/comparison/state.json \
     -e EVENTGLASS_COMPARISON_BOOTSTRAP_TOKEN="$bootstrap_token" \
-    --entrypoint go "$build_image" \
-    test -tags comparison -count=1 -run '^TestPrepareComparisonInstallation$' -v ./tests/comparison
+    --entrypoint /comparison.test "$build_image" \
+    -test.count=1 -test.timeout 5m -test.run '^TestPrepareComparisonInstallation$' -test.v
 
   public_url=https://eventglass.invalid
   scheduler_container="${active_project}-scheduler"
@@ -272,7 +282,7 @@ for workers in $profiles; do
 
   set +e
   docker run --rm --platform linux/arm64 --network "${active_project}_default" \
-    -v "$artifacts_dir:/comparison" -v "$ROOT/tests/comparison:/src/tests/comparison:ro" -w /src \
+    -v "$artifacts_dir:/comparison" -v "$comparison_binary:/comparison.test:ro" \
     -e EVENTGLASS_DATABASE_URL="$database_url" \
     -e EVENTGLASS_COMPARISON_BASE_URL="http://${api_container}:8080" \
     -e EVENTGLASS_COMPARISON_STATE=/comparison/state.json \
@@ -285,8 +295,8 @@ for workers in $profiles; do
     -e EVENTGLASS_COMPARISON_REVISION="$revision" \
     -e EVENTGLASS_COMPARISON_METRICS="$metrics" \
     -e EVENTGLASS_COMPARISON_RESTART_METRICS=/comparison/restarted-worker.metrics \
-    --entrypoint go "$build_image" \
-    test -tags comparison -count=1 -timeout "$test_timeout" -run '^TestSustainedComparison$' -v ./tests/comparison
+    --entrypoint /comparison.test "$build_image" \
+    -test.count=1 -test.timeout "$test_timeout" -test.run '^TestSustainedComparison$' -test.v
   status=$?
   set -e
   kill "$restart_pid" >/dev/null 2>&1 || true
@@ -313,7 +323,7 @@ for workers in $profiles; do
     if [ "$postload_ready" -eq 1 ]; then
       set +e
       docker run --rm --platform linux/arm64 --network "${active_project}_default" \
-        -v "$artifacts_dir:/comparison" -v "$ROOT/tests/comparison:/src/tests/comparison:ro" -w /src \
+        -v "$artifacts_dir:/comparison" -v "$comparison_binary:/comparison.test:ro" \
         -e EVENTGLASS_DATABASE_URL="$database_url" \
         -e EVENTGLASS_COMPARISON_BASE_URL="http://${api_container}:8080" \
         -e EVENTGLASS_COMPARISON_STATE=/comparison/state.json \
@@ -321,8 +331,8 @@ for workers in $profiles; do
         -e EVENTGLASS_COMPARISON_COLD_WORKERS=/comparison/cold-cache-workers.tsv \
         -e EVENTGLASS_COMPARISON_METRICS="$metrics" \
         -e EVENTGLASS_COMPARISON_QUICK="${EVENTGLASS_COMPARISON_QUICK:-}" \
-        --entrypoint go "$build_image" \
-        test -tags comparison -count=1 -timeout 5m -run '^TestPostLoadComparison$' -v ./tests/comparison
+        --entrypoint /comparison.test "$build_image" \
+        -test.count=1 -test.timeout 5m -test.run '^TestPostLoadComparison$' -test.v
       postload_status=$?
       set -e
       if [ "$postload_status" -ne 0 ]; then status=$postload_status; fi

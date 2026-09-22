@@ -152,6 +152,12 @@ HEAD/PUT requests and bytes, exact returned-row hash, and actual warm misses
 (work can move between workers). Only Eventglass's block caches are cold, not
 the provider or host OS cache. A60-second idle phase checks no new query work;
 quick diagnostics use10 seconds. These phases still run when load SLOs miss.
+The test executable is compiled once before any installation starts and reused
+for setup/load/post-load; compilation cannot compete with cold-worker startup.
+Post-load evidence retains full replacement-worker operation counters, including
+startup before the first scrape. Its maintenance gate independently rejects
+missing idle evidence, excess all-attempt time and any overrun; the report
+recomputes this from raw counters rather than trusting a stored target flag.
 Retained evidence includes pre-cold worker logs, replacement IDs, sampled
 whole-installation usage, and cgroup memory.peak/OOM/limit observations for
 every container incarnation before replacement and at the end. Missing samples,

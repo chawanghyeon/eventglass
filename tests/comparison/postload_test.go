@@ -42,6 +42,7 @@ type postLoadEvidence struct {
 	IdleQueryWork                           uint64
 	IdleBacklog                             int64
 	PGWALBytes                              int64
+	Operations                              map[string]comparisonOperation
 }
 
 type regexResult struct {
@@ -69,7 +70,7 @@ func TestPostLoadComparison(t *testing.T) {
 	}
 	phase := &postLoadEvidence{CacheScope: "empty per-worker Eventglass block caches; provider/OS cache not cleared"}
 	report.PostLoad = phase
-	for _, target := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_complete"} {
+	for _, target := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted", "postload_complete"} {
 		report.Targets[target] = false
 	}
 	defer func() { writeReport(t, env[2], report) }()
@@ -163,6 +164,10 @@ func TestPostLoadComparison(t *testing.T) {
 	case <-timer.C:
 	}
 	collectS3Metrics(t, client, &idleAfter)
+	// Retain the complete new-worker lifetime, not only deltas after the first
+	// scrape: startup maintenance can already have overrun before that scrape.
+	phase.Operations = idleAfter.Operations
+	report.Targets["postload_maintenance_time_accounted"] = maintenanceTimeAccounted(phase.Operations)
 	phase.IdleIO, err = ioDelta(warmAfter, idleAfter)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +184,7 @@ func TestPostLoadComparison(t *testing.T) {
 	report.Targets["idle_no_query_work"] = phase.IdleQueryJobsBefore == phase.IdleQueryJobsAfter && phase.IdleQueryWork == 0 && phase.IdleBacklog == 0
 	phase.Complete = true
 	report.Targets["postload_complete"] = true
-	for _, target := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work"} {
+	for _, target := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted"} {
 		if !report.Targets[target] {
 			t.Errorf("post-load target failed: %s", target)
 		}

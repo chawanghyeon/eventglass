@@ -38,7 +38,10 @@ with job-boundary diagnostics gives341/949ms, exposing run-to-run variation.
 Control now ranks actual bounded compaction prefixes instead of lexical
 error/log priority. Its matched20s/300s/90s candidate measures315/714ms with
 fewer HEADs; histogram still misses500ms, while RSS/full-GET bytes and post-load
-latencies increase. Corrected official query SLOs remain open. Separately, typed sizing, bounded native
+latencies increase. A later joined-cleanup/accounting correction measures416/949ms;
+its replacement-worker maintenance counters now pass the independently recomputed
+post-load gate, but histogram still fails. Compiler work is outside worker startup
+and measured phases. Corrected official query SLOs remain open. Separately, typed sizing, bounded native
 writer fan-in and app-owned retry admission pass two maximum-pair actual-worker
 resource executions, with zero OOM or budget overrun but no memory headroom.
 These local results are not full-service SLO or release claims. R3

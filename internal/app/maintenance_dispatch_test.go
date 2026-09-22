@@ -8,6 +8,44 @@ import (
 	"time"
 )
 
+func TestMaintenanceAdmissionReservesChildGraceAndCleanup(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		runtime := &Runtime{nativeTasks: NewNativeTaskGate()}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		work := []workerOperation{
+			{"conversion", func(context.Context) (bool, error) { return false, nil }},
+			{"compaction", func(taskContext context.Context) (bool, error) {
+				release, err := runtime.nativeTasks.acquire(taskContext)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
+				<-taskContext.Done()
+				// Native termination may use its whole grace period; joined
+				// file/gateway cleanup is still owned work after that period.
+				time.Sleep(nativeChildStopGrace + 50*time.Millisecond)
+				if runtime.nativeTasks.used() != 1 {
+					t.Fatal("cleanup lost native ownership")
+				}
+				cancel()
+				return true, taskContext.Err()
+			}},
+		}
+		if err := runtime.runWorkerGroup(ctx, work); err != nil {
+			t.Fatal(err)
+		}
+		idle := runtime.stats.entries["maintenance_spare"].busy
+		spent := runtime.stats.entries["compaction"].elapsed
+		if spent > idle/4 || runtime.stats.entries["maintenance_budget_overrun"].calls != 0 {
+			t.Fatalf("admission omitted cleanup after child grace: idle=%s work=%s overruns=%d", idle, spent, runtime.stats.entries["maintenance_budget_overrun"].calls)
+		}
+		if runtime.nativeTasks.used() != 0 {
+			t.Fatal("joined cleanup retained permit")
+		}
+	})
+}
+
 func TestMaintenanceDeadlineWaitsForActualWorkAndChargesOverrun(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		runtime := &Runtime{nativeTasks: NewNativeTaskGate()}

@@ -174,8 +174,11 @@ startup age, dependency-error backoff or a shared native helper's occupied time.
 Maintenance debits all claim/execution/join time, including failures; admission
 requires M<=I/4, equivalent to20% of spare lane wall time I+M. This is measured
 dispatch capacity, not a claim about native CPU utilization or tenant fairness.
-Credit expiring during a granted slice is excluded, cancellation reserves100ms for
-join, and an overrun remains charged and explicitly fails comparison evidence.
+Credit expiring during a granted slice is excluded. Cancellation reserves200ms:
+100ms native termination grace plus100ms for joined gateway/file cleanup and
+scheduling. This is admission headroom, not a cleanup timeout; an overrun remains
+charged and explicitly fails comparison evidence, including replacement workers
+in the post-load cold/warm/idle phase.
 Foreground work is rechecked before another maintenance step; maintenance
 backoff never sleeps ready foreground work. Control rechecks foreground pressure
 inside each compaction/retention claim, without consuming a denied claim's

@@ -62,7 +62,10 @@ class GoLayoutTests(unittest.TestCase):
         self.assertIn("load=30m", runner)
         self.assertIn("drain=10m", runner)
         self.assertIn("test_timeout=1h", runner)
-        self.assertIn('-timeout "$test_timeout"', runner)
+        self.assertIn('-test.timeout "$test_timeout"', runner)
+        self.assertLess(runner.index("-o /comparison/comparison.test"), runner.index("start_runtime()"))
+        self.assertEqual(runner.count('--entrypoint /comparison.test "$build_image"'), 3)
+        self.assertNotIn("test -tags comparison -count=1 -run '^TestPrepareComparisonInstallation$'", runner)
 
     def test_native_cache_recipe_excludes_product_sources(self):
         dockerfile = (ROOT / "Dockerfile").read_text()
