@@ -4,7 +4,7 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00–G06 have implemented baselines and scoped executable evidence. G05 connects the complete operator surface; M1–M4 implement compaction, fail-closed retention/GC, verified Range/block caching, and coordinated PostgreSQL/WAL/S3 recovery. Physical GC remains frozen whenever signed recovery evidence is absent or older than 24 hours. R1 passes a Linux ARM64 CPU1/512MiB/swap0 two-minute containment gate at the target logical 100 logs/s+5 errors/s mix. R2 adds bounded autoscaling control and a 1/2/4 logical-equivalence harness. R3's latest 1/2/4-worker official-duration runs pass the former target map, but the audit found warmup-contaminated ACK samples and missing maintenance-budget evidence. Independent fixed-work capacity/efficiency now passes the clean4ced580 nine-installation matrix. Bounded conversion/shared-disk corrections pass a real10,000-day publication boundary and the full10k/100k/1m/10m native oracle. Corrected official mixed-load measurements remain required; R3 and dependent R4 are incomplete. No deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
+Current status: G00–G06 have implemented baselines and scoped executable evidence. G05 connects the complete operator surface; M1–M4 implement compaction, fail-closed retention/GC, verified Range/block caching, and coordinated PostgreSQL/WAL/S3 recovery. Physical GC remains frozen whenever signed recovery evidence is absent or older than 24 hours. R1 passes a Linux ARM64 CPU1/512MiB/swap0 two-minute containment gate at the target logical 100 logs/s+5 errors/s mix. R2 adds bounded autoscaling control and a 1/2/4 logical-equivalence harness. R3's historical 1/2/4-worker official-duration runs pass the former target map, but the audit found warmup-contaminated ACK samples and missing maintenance-budget evidence. The corrected clean02c98f2 official one-worker run now passes data/maintenance/resource checks but fails both query SLOs; the runner stops before2/4 workers. Independent fixed-work capacity/efficiency passes the clean4ced580 nine-installation matrix. Bounded conversion/shared-disk corrections pass a real10,000-day publication boundary and the full10k/100k/1m/10m native oracle. R3 and dependent R4 remain incomplete. No deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
@@ -66,7 +66,11 @@ compilation from startup/measurement. Histogram still fails, so this is not a
 performance improvement. A subsequent bounded warm-input transport reduces a
 matched256-file native scan111.6→62.3ms and short-service rows/histogram416/949
 →295/566ms. Histogram still misses500ms; RSS and some S3 transfer costs increase.
-Official-duration measurements remain required.
+The subsequent clean02c98f2 official one-worker run fails both query targets:
+rows/histogram p95=591/1,737ms, despite exact220,500 public records, final backlog0,
+passing maintenance accounting and OOM0. The runner exits1 before2/4 workers;
+those corrected official profiles remain unexecuted. See quality.md for retained
+native-oracle and service evidence. R3 remains incomplete.
 Two separate maximum-pair real-dispatcher runs pass with zero OOM or
 budget overrun. These scoped results do not close G07 or establish a release.
 

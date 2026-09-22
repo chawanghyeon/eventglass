@@ -15,7 +15,7 @@ payload, and reducer child reads. M4 passed an actual pgBackRest base+WAL restor
 into two independent PGDATA volumes, full referenced-object reads, signed report
 import and missing-object failure. R1's CPU1/512MiB/swap0 containment gate also
 passes. R2's autoscale control, fair claims and bounded Kubernetes/KEDA baseline
-also pass. R3's latest1/2/4-worker official-duration profiles pass the former
+also pass. R3's historical1/2/4-worker official-duration profiles pass the former
 target map, but audited ACK sampling and maintenance-budget omissions require
 corrected measurements. The latest clean64d6038 budgeted short diagnostic still
 misses query and load-backlog targets, although that run has no cancellation
@@ -44,8 +44,13 @@ post-load gate, but histogram still fails. Compiler work is outside worker start
 and measured phases. Bounded staging of verified warm aggregate inputs then
 measures295/566ms in the same short service profile; histogram still fails500ms.
 The isolated same-input native scan improves111.6→62.3ms, with higher RSS, and
-service S3 byte costs do not uniformly improve. Corrected official query SLOs
-remain open. Separately, typed sizing, bounded native
+service S3 byte costs do not uniformly improve. The next clean02c98f2 official
+one-worker run passes the full native oracle, exact220,500 public records,
+maintenance accounting and OOM checks, but rows/histogram p95=591/1,737ms fail.
+The runner exits1 before2/4 workers; their corrected official profiles remain
+unexecuted. Maximum queried files reach2,117 and planning/transport overhead
+grows; retained measurements distinguish this from the short diagnostic.
+Corrected official query SLOs remain open. Separately, typed sizing, bounded native
 writer fan-in and app-owned retry admission pass two maximum-pair actual-worker
 resource executions, with zero OOM or budget overrun but no memory headroom.
 These local results are not full-service SLO or release claims. R3

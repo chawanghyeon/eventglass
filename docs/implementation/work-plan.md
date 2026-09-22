@@ -2,7 +2,7 @@
 
 Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
-G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1–R2 have implementations and scoped tests. R3 remains the first incomplete packet: its latest1/2/4-worker official-duration runs pass the former targets, but corrected ACK/maintenance service measurements still require verification. Independent fixed-work capacity/efficiency passes on4ced580; the subsequent bounded conversion/shared-disk correction and full native oracle also have scoped passes.
+G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4, and R1–R2 have implementations and scoped tests. R3 remains the first incomplete packet: historical1/2/4-worker official-duration runs pass the former targets, but corrected clean02c98f2 one-worker measurements fail both query SLOs despite passing data/maintenance/resource checks. The runner stops before2/4 workers. Independent fixed-work capacity/efficiency passes on4ced580; the subsequent bounded conversion/shared-disk correction and full native oracle also have scoped passes.
 M2 physical GC stays frozen whenever M4's signed coordinated backup attestation is absent or older than 24 hours.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
@@ -370,8 +370,15 @@ reduce loopback514→0 and Go allocation, but RSS increases. The fresh short ser
 pair measures416/949→295/566ms; histogram still misses500ms. Exact counts,
 backlog, main/post-load budgets and OOM pass; full-GET/Range bytes and whole
 installation memory increase, so no cost/memory superiority is claimed.
-R3 remains first incomplete: finish the histogram SLO and corrected official
-profiles, then the dependent R4 evidence. Detailed identities/costs are in quality.md.
+The subsequent frozen clean02c98f2 official run passes the full10k/100k/1m/10m
+native oracle and one-worker exact220,500 public records, final backlog0,
+main/post-load maintenance budgets and OOM0. Rows/histogram p95=591/1,737ms
+both fail500ms; the command exits1 after post-load verification and does not
+start2/4 workers. Maximum query files reach2,117; rows/histogram pre/post-job
+overhead p95=468/478ms and durable-job p95=196/1,248ms identify separate costs,
+not a proven single cause. R3 remains first incomplete: resolve both query SLOs
+at official duration and complete the corrected profiles, then dependent R4.
+Detailed identities/costs are in quality.md.
 
 ## Failure-injection matrix (stable acceptance IDs)
 

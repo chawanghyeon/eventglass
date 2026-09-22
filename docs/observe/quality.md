@@ -2382,6 +2382,70 @@ contracts,browser,comparison}.log`. No API schema changed. Physical GC, native
 limits, authorization and transaction fences are unchanged; source-design SHA
 remains the frozen original. No release is declared by these scoped results.
 
+### Corrected official-duration warm-input verification
+
+The frozen clean `02c98f2d8127385973428064b26d1e15ce912c16` run of
+`scripts/check comparison` (Go1.27.1 ARM64, no quick/reuse overrides) completes
+the four native oracles, then fails the one-worker service profile. Outer exit1
+is retained in `.tools/small-inputs-official-comparison.log`;2/4 workers do not
+start after that failure. No source, limits or thresholds changed during the run.
+Fresh build image `sha256:1b49743661fd1f8095f7c6fc1be2a6951ab1b9556ec8ce38c2f554f35d7330b7`
+contains executable `fc5231a7f2848f921245924b3ca413918b3684c8e5504761bc82234509db650a`
+and the unchanged pinned library SHA above. Environment and exact source hashes
+are retained in `.tools/native-oracle.aIwFfl/environment.txt`.
+
+Native10k/100k/1m/10m profiles all pass the independent query oracle, with
+elapsed1,827/10,631/96,797/965,986ms and OOM0. The10m profile produces2,196 analytics
+files/528,495,771B from682,231,716 journal bytes; actual envelope SHA is
+`1497dc8c86ac7ed8990b081b5d74e71833a75ef3185a4e6529fdb218aca2f5ec`.
+Its supervisor cumulatively allocates272,557,818,128B; cgroup peak536,879,104B
+reaches the512MiB boundary with reclaim pressure, not spare memory headroom.
+These local-file oracles have S3 requests/network bytes0 and are not service
+throughput evidence. Logs/container exit states are in the same directory.
+
+The actual isolated PG/MinIO service uses5min warmup/30min measured load and
+the10min drain limit. Retained evidence is
+`.tools/comparison-report-1.xOwwze/report.json`, including per-query phase data,
+pre/post-restart worker logs, all three worker incarnation cgroups and raw
+installation resource samples. Load test duration is2,106.63s; post-load65.01s
+passes. Input comprises71,760 submitted envelopes/287,013,539B, framed SHA
+`19366283e385483a9cc14fd48e2bd310d36b35de5c96d86ae1bee5648d4dc757`.
+
+| Official one-worker measurement | Result |
+|---|---:|
+| ACK / visibility p95 |370/1,049ms|
+| Rows / histogram p95 |591/1,737ms; both fail500ms|
+| Rows / histogram durable-job p95 |196/1,248ms|
+| Rows / histogram pre/post-job overhead p95 |468/478ms|
+| Public counts |210,000 logs +10,500 errors, exact|
+| Public queries / failures |359/0|
+| Maximum query files |2,117|
+| Final backlog / drain |0/2,009ms|
+| Main maintenance attempts / observed idle |82,330/448,000ms; no overrun|
+| Sampled whole-installation peak |2,010,015,332B|
+| Worker cgroup peak / OOM events / kills |213,065,728B/0/0|
+| S3 PUT count/bytes |39,026/293,132,090B|
+| S3 HEAD count |823,728|
+| S3 full GET count/bytes |98,433/711,846,998B|
+| S3 Range count/bytes |12,937/148,037,541B|
+| PG WAL |692,682,648B|
+
+The backlog slope+0.0206425/min passes the existing regression tolerance; it is
+not reported as negative. The report's dated cost model projects840.84USD/month
+under its explicit assumptions/exclusions, not an AWS bill or cloud execution.
+Per-query Go allocations are not measured by this service profile. Planning
+overhead and increasing catalog cardinality are diagnostic evidence, not proof
+that one component alone caused the failed SLOs. The short295/566ms profile has
+different duration/cardinality and is not a matched official before/after pair.
+
+Fresh-worker cold/warm all-history regex takes2,814/1,997ms with identical
+snapshot/rows; Range reads2,162/11 and29,498,200/92,589B. The provider/OS cache is
+not cleared. Full replacement-worker maintenance attempts total2,621ms against
+54,400ms observed idle, no overrun;60s idle adds zero query work. Physical GC
+remains blocked without signed backup verification. Exact data, restart,
+cache, containment and maintenance passes do not override the two failed query
+targets. R3 and dependent R4 remain incomplete; no release is advertised.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency
