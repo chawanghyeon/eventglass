@@ -3292,6 +3292,33 @@ the same source tree. Corrected official cost totals still require rerunning
 the official profiles. R3 remains incomplete because1/2-worker query SLOs and
 corrected official cost evidence are open.
 
+### Current-source fixed-work capacity matrix
+
+`./scripts/check capacity` completed on ARM64 source revision
+`1cf35380c31c3d0f8d3ed78eed9b2f157061e542` using nine fresh isolated
+installations: three each at1/2/4 workers. Each run durably preloaded and
+published the same13,440 records in128 cycles, verified exact public counts,
+and measured drain including sequential Docker worker resume. Preload and
+post-drain query verification are excluded from throughput. This is a fixed-work
+publication-capacity test, not steady-state maximum capacity or the mixed-load
+R3 SLO.
+
+| Workers | Median records/s (range) | Speedup / efficiency | Median sampled installation peak | Median PG WAL | Median S3 requests PUT/HEAD/LIST/GET/Range |
+|---:|---:|---:|---:|---:|---:|
+|1|124.9 (118.9–126.8)|1.000 /1.000|569,859,111B|22,906,136B|2,309/3,855/0/4,619/768|
+|2|230.5 (226.6–246.1)|1.846 /0.923|616,965,338B|23,272,296B|2,309/3,858/0/4,620/768|
+|4|401.2 (384.0–407.2)|3.212 /0.803|696,541,770B|23,273,912B|2,309/3,864/0/4,622/768|
+
+Median S3 PUT/GET/Range transfer was12,029,570/24,059,307/6,784,771B,
+12,029,684/24,059,702/6,784,319B, and12,029,861/24,061,714/6,784,102B
+for1/2/4 workers respectively. All nine capacity reports passed durable
+preload, complete publication, public-count oracle, resource completeness and
+Go-unit512MiB checks; cgroup OOM events/kills were0. The source image used the
+pinned DuckDB2.0 recipe and the fixed Go1.27.1 ARM64 build. Retained per-run
+reports and the nine-sample matrix are under `.tools/capacity-report-*` and
+`.tools/capacity-matrix.6hCBeY`. These measurements do not change the failing
+1/2-worker query SLOs or close R3.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

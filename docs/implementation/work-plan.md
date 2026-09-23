@@ -12,9 +12,11 @@ conflicts, and OOM at0. Histogram catalog fan-out co-varies with worker count
 (1,553 objects/7 scan tasks at1 worker versus311–312/2 at2/4); this is
 diagnostic correlation, not a causal claim. S3 LIST page counters and PUT-tier
 pricing are now implemented and unit/integration tested, so earlier official
-cost projections need a fresh measurement. The fixed-work capacity matrix on
-4ced580 and later bounded conversion/shared-disk correction remain scoped
-evidence, not substitutes for R3. See quality.md for retained metrics.
+cost projections need a fresh measurement. Current-source fixed-work capacity
+on1cf3538 passed three isolated128-cycle runs per worker count at median
+124.9/230.5/401.2 records/s (speedup1/1.846/3.212; efficiency1/0.923/0.803).
+This is publication-capacity evidence, not a replacement for R3 mixed-load SLOs.
+See quality.md for retained metrics.
 M2 physical GC stays frozen whenever M4's signed coordinated backup attestation is absent or older than 24 hours.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
@@ -107,7 +109,7 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 |---|---|---|
 | R1 / M4 — complete | tests/resource Linux cgroup harness; scripts/check resource | CPU1/512MiB/swap0 profile verifies maximum input, two-minute 100 logs/s+5 errors/s logical mix through normalization and actual conversion/query children, no growing cycle backlog, cgroup OOM=0, bounded child OOM/cancel/join, exact permit drain and zero scratch residue. This is containment evidence, not R3's 30-minute end-to-end SLO. |
 | R2 / R1 — complete | app autoscale metrics/control; deploy/kubernetes/KEDA; scripts/check scale | Private fixed-label backlog metrics and storage availability, EWMA prior, two-sample scale-out, dependency freeze, 300s stable scale-in capped at25%, warm min1/max20 and PG64 total bound. Conversion/query claims prefer tenants without running work. Linux ARM64 1/2/4 control harness produced the same checksum; manifests enforce non-root/read-only/CPU1/512MiB/bounded scratch and KEDA timing. This is control evidence, not R3 throughput. |
-| R3 / R2 — executable, SLO/cost audit pending | tests/comparison independent oracle/load/cost report; scripts/check comparison | Corrected5m warmup/30m load/10m drain, SIGKILL/restart, cold/warm/idle, per-role ARM64 cgroup, and whole-installation PG/S3 reporting are implemented. Official1/2/4-worker profiles completed with220,500 accepted each, final backlog0, conflicts0, OOM0; rows/histogram p95=565/1,353ms,336/612ms,244/436ms. Thus1-worker rows/histogram and2-worker histogram exceed500ms; only4 workers meets both targets. Histogram object/scan-task fan-out co-varies with worker count; causality is not isolated. This report exposed missing S3 LIST-page accounting; the metric/pricing path now has unit and integration coverage, but official cost projections must be rerun. Independent fixed-work capacity/efficiency passes all nine128-cycle installations on4ced580 and is not a substitute for R3 SLOs. **G07 remains incomplete.** |
+| R3 / R2 — executable, SLO/cost audit pending | tests/comparison independent oracle/load/cost report; scripts/check comparison | Corrected5m warmup/30m load/10m drain, SIGKILL/restart, cold/warm/idle, per-role ARM64 cgroup, and whole-installation PG/S3 reporting are implemented. Official1/2/4-worker profiles completed with220,500 accepted each, final backlog0, conflicts0, OOM0; rows/histogram p95=565/1,353ms,336/612ms,244/436ms. Thus1-worker rows/histogram and2-worker histogram exceed500ms; only4 workers meets both targets. Histogram object/scan-task fan-out co-varies with worker count; causality is not isolated. This report exposed missing S3 LIST-page accounting; the metric/pricing path now has unit and integration coverage, but official cost projections must be rerun. Current-source fixed-work capacity passes nine isolated128-cycle installations on1cf3538 at median124.9/230.5/401.2 records/s, speedup1/1.846/3.212 and efficiency1/0.923/0.803; this is not a substitute for the mixed-load SLO. **G07 remains incomplete.** |
 | R4 / R3 | deploy backend locks; scripts/check release; operator/upgrade guides; SBOM/notices | Authorized AWS + proven selfhost smoke/restore, ARM64 provenance, secret/license scans, schema/journal compatibility and rollback rehearsal, declared SDK matrix; **G08 complete; only then advertise release** |
 
 R3 remains the first incomplete packet. A further 20s/300s/90s ARM64

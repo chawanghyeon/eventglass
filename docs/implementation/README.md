@@ -19,8 +19,11 @@ also pass. Corrected official5m/30m/10m R3 profiles have now completed at1/2/4
 workers: rows/histogram p95=565/1,353ms,336/612ms,244/436ms respectively; only
 4 workers meets both500ms query targets. The latest clean64d6038 budgeted short diagnostic still
 misses query and load-backlog targets, although that run has no cancellation
-budget overrun. Independent fixed-work capacity now passes the clean4ced580
-128-cycle matrix with three fresh installations per1/2/4-worker profile.
+budget overrun. Independent fixed-work capacity passes on current source
+1cf3538: three fresh128-cycle installations per1/2/4-worker profile measured
+median124.9/230.5/401.2 records/s, with speedup1/1.846/3.212 and efficiency
+1/0.923/0.803. This is bounded publication-capacity evidence, not sustained
+mixed-load SLO or steady-state maximum capacity.
 The official cost model still needs a fresh run after S3 LIST accounting was
 added. A subsequent
 conversion audit reproduced missing shared disk admission, all-partition file
