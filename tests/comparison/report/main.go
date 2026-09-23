@@ -30,6 +30,7 @@ type prices struct {
 	RDSMinGB        float64           `json:"rds_min_storage_gb"`
 	S3Storage       float64           `json:"s3_standard_gb_month"`
 	S3PUT           float64           `json:"s3_put_per_1000"`
+	S3LIST          float64           `json:"s3_list_per_1000"`
 	S3GET           float64           `json:"s3_get_per_1000"`
 	Sources         map[string]string `json:"sources"`
 	Assumptions     []string          `json:"assumptions"`
@@ -68,6 +69,7 @@ type costReport struct {
 	ChargedBackupGB              float64           `json:"charged_backup_gb"`
 	ProjectedS3StorageGB         float64           `json:"projected_s3_storage_gb"`
 	ProjectedS3PUT               float64           `json:"projected_s3_put"`
+	ProjectedS3LIST              float64           `json:"projected_s3_list"`
 	ProjectedS3GET               float64           `json:"projected_s3_get"`
 	FargateUSD                   float64           `json:"fargate_usd"`
 	RDSComputeUSD                float64           `json:"rds_compute_usd"`
@@ -343,17 +345,18 @@ func calculateCost(report map[string]any, price prices) costReport {
 	chargedBackupGB := math.Max(0, backupGB-pgGB)
 	s3GB := number(report, "S3StoredBytes") * factor / gib
 	puts := number(report, "S3PutRequests") * factor
+	lists := number(report, "S3ListRequests") * factor
 	gets := (number(report, "S3GetRequests") + number(report, "S3HeadRequests") + number(report, "S3RangeRequests")) * factor
 	tasks := workers + 2
 	fargate := float64(tasks) * price.MonthSeconds * (price.FargateCPU + price.FargateMemoryGB*price.FargateMemory)
 	rdsCompute := price.RDSHour * price.MonthSeconds / 3600
 	rdsStorage, rdsBackup := pgGB*price.RDSStorage, chargedBackupGB*price.RDSBackup
-	s3Storage, s3Requests := s3GB*price.S3Storage, puts/1000*price.S3PUT+gets/1000*price.S3GET
+	s3Storage, s3Requests := s3GB*price.S3Storage, puts/1000*price.S3PUT+lists/1000*price.S3LIST+gets/1000*price.S3GET
 	return costReport{
 		AsOf: price.AsOf, Region: price.Region, Currency: price.Currency, MeasurementSeconds: seconds, MonthlyProjectionFactor: factor,
 		FargateTasks: tasks, FargateBilledMemoryGBPerTask: price.FargateMemoryGB, ProjectedPGStorageGB: pgGB,
 		BackupWindowGB: backupGB, ChargedBackupGB: chargedBackupGB, ProjectedS3StorageGB: s3GB,
-		ProjectedS3PUT: puts, ProjectedS3GET: gets, FargateUSD: fargate, RDSComputeUSD: rdsCompute,
+		ProjectedS3PUT: puts, ProjectedS3LIST: lists, ProjectedS3GET: gets, FargateUSD: fargate, RDSComputeUSD: rdsCompute,
 		RDSStorageUSD: rdsStorage, RDSBackupUSD: rdsBackup, S3StorageUSD: s3Storage, S3RequestsUSD: s3Requests,
 		TotalUSD: fargate + rdsCompute + rdsStorage + rdsBackup + s3Storage + s3Requests,
 		Sources:  price.Sources, Assumptions: price.Assumptions, Exclusions: price.Exclusions,

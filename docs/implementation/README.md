@@ -15,13 +15,14 @@ payload, and reducer child reads. M4 passed an actual pgBackRest base+WAL restor
 into two independent PGDATA volumes, full referenced-object reads, signed report
 import and missing-object failure. R1's CPU1/512MiB/swap0 containment gate also
 passes. R2's autoscale control, fair claims and bounded Kubernetes/KEDA baseline
-also pass. R3's historical1/2/4-worker official-duration profiles pass the former
-target map, but audited ACK sampling and maintenance-budget omissions require
-corrected measurements. The latest clean64d6038 budgeted short diagnostic still
+also pass. Corrected official5m/30m/10m R3 profiles have now completed at1/2/4
+workers: rows/histogram p95=565/1,353ms,336/612ms,244/436ms respectively; only
+4 workers meets both500ms query targets. The latest clean64d6038 budgeted short diagnostic still
 misses query and load-backlog targets, although that run has no cancellation
 budget overrun. Independent fixed-work capacity now passes the clean4ced580
 128-cycle matrix with three fresh installations per1/2/4-worker profile.
-Corrected official-duration service measurements remain required. A subsequent
+The official cost model still needs a fresh run after S3 LIST accounting was
+added. A subsequent
 conversion audit reproduced missing shared disk admission, all-partition file
 accumulation before upload and a symlink output-validation gap. Their bounded
 streaming correction now passes the actual10,000-day ACK/publication boundary
@@ -44,13 +45,13 @@ post-load gate, but histogram still fails. Compiler work is outside worker start
 and measured phases. Bounded staging of verified warm aggregate inputs then
 measures295/566ms in the same short service profile; histogram still fails500ms.
 The isolated same-input native scan improves111.6→62.3ms, with higher RSS, and
-service S3 byte costs do not uniformly improve. The next clean02c98f2 official
-one-worker run passes the full native oracle, exact220,500 public records,
-maintenance accounting and OOM checks, but rows/histogram p95=591/1,737ms fail.
-The runner exits1 before2/4 workers; their corrected official profiles remain
-unexecuted. Maximum queried files reach2,117 and planning/transport overhead
-grows; retained measurements distinguish this from the short diagnostic.
-Corrected official query SLOs remain open. The next maintenance-local four-read
+service S3 byte costs do not uniformly improve. At that earlier checkpoint, the
+clean02c98f2 official one-worker run passed the full native oracle, exact220,500
+public records, maintenance accounting and OOM checks, but rows/histogram p95
+591/1,737ms failed. It exited1 before2/4 workers. Maximum queried files reached
+2,117 and planning/transport overhead grew; retained measurements distinguish
+this from the short diagnostic. The corrected official1/2/4 profiles are now
+recorded above;1/2-worker query SLOs still fail. The next maintenance-local four-read
 bound preserves full SHA verification, ordered inputs and joined cancellation.
 Real S3 download microbenchmarks improve, with higher RSS; the same short service
 profile changes295/566→303/548ms and still fails histogram500ms. Native maximum-
@@ -71,9 +72,11 @@ query queued-work fixtures now pass three repetitions, recording claim-count
 skew and requiring participation by every process; these are not continuous-load
 or elapsed-time fairness measurements. The latest clean04ec2c2 official profile
 passes rows404ms, exact220,500 public records, maintenance/resource/restart/cache
-checks and the full native oracle, but histogram874ms still fails500ms. Corrected
-official2/4-worker profiles do not start after that failure. R3
-remains the first incomplete packet and R4 remains dependency-blocked. Physical GC remains
+checks and the full native oracle, but histogram874ms still fails500ms. That
+earlier profile stopped before2/4 workers; later corrected full profiles show
+only4 workers meeting both query targets. S3 LIST costs still need official
+remeasurement. R3 remains the first incomplete packet and R4 remains open.
+Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises
 the actual ingest/publication/query runtime. Check `api/implemented-routes.json` before wiring a feature.

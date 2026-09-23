@@ -13,6 +13,7 @@
   "rds_min_storage_gb": 20,
   "s3_standard_gb_month": 0.023,
   "s3_put_per_1000": 0.005,
+  "s3_list_per_1000": 0.005,
   "s3_get_per_1000": 0.0004,
   "sources": {
     "fargate": "https://aws.amazon.com/fargate/pricing/",

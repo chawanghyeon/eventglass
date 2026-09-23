@@ -4,7 +4,7 @@ Eventglass is being rebuilt as a Go product using PostgreSQL, S3-compatible obje
 
 The former Rust product is no longer present on `main`. Its final Rust-only state is preserved by the repository tag `rust-version` (`ceb2ed7`) and can be checked out independently if needed.
 
-Current status: G00–G06 have implemented baselines and scoped executable evidence. G05 connects the complete operator surface; M1–M4 implement compaction, fail-closed retention/GC, verified Range/block caching, and coordinated PostgreSQL/WAL/S3 recovery. Physical GC remains frozen whenever signed recovery evidence is absent or older than 24 hours. R1 passes a Linux ARM64 CPU1/512MiB/swap0 two-minute containment gate at the target logical 100 logs/s+5 errors/s mix. R2 adds bounded autoscaling control and a 1/2/4 logical-equivalence harness. R3's historical 1/2/4-worker official-duration runs pass the former target map, but the audit found warmup-contaminated ACK samples and missing maintenance-budget evidence. The latest clean04ec2c2 official one-worker run passes rows p95=404ms and data/maintenance/resource checks, but histogram874ms still fails500ms; the runner stops before2/4 workers. Independent fixed-work capacity/efficiency passes the clean4ced580 nine-installation matrix. Bounded conversion/shared-disk corrections pass a real10,000-day publication boundary and the full10k/100k/1m/10m native oracle. R3 and dependent R4 remain incomplete. No deployable production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
+Current status: G00–G06 have implemented baselines and scoped executable evidence. G05 connects the complete operator surface; M1–M4 implement compaction, fail-closed retention/GC, verified Range/block caching, and coordinated PostgreSQL/WAL/S3 recovery. Physical GC remains frozen without fresh signed recovery evidence. R1's CPU1/512MiB/swap0 containment and R2's bounded autoscale-control gates pass. Corrected official ARM64 R3 profiles (5m warmup/30m load/10m drain) completed at1/2/4 workers: rows/histogram p95=565/1,353ms,336/612ms,244/436ms; only the4-worker profile meets both500ms query targets. Each accepted220,500 records and ended with backlog/conflicts/OOM at0. S3 LIST page counting and cost pricing are now fixed and tested, but official cost measurements must be rerun with the corrected accounting. R3 and dependent R4 remain incomplete; AWS restore, provenance/security and rollback evidence remain unverified. No production release is claimed. [Capability coverage](api/capabilities.json) distinguishes registered APIs from UI and pending features; [work plan](docs/implementation/work-plan.md) owns packet status. See [DESIGN.md](DESIGN.md), [SDK-SUPPORT.md](SDK-SUPPORT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for behavior, verified SDK scope and checks.
 
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
@@ -66,11 +66,12 @@ compilation from startup/measurement. Histogram still fails, so this is not a
 performance improvement. A subsequent bounded warm-input transport reduces a
 matched256-file native scan111.6→62.3ms and short-service rows/histogram416/949
 →295/566ms. Histogram still misses500ms; RSS and some S3 transfer costs increase.
-The subsequent clean02c98f2 official one-worker run fails both query targets:
+At that earlier checkpoint, the clean02c98f2 official one-worker run failed both query targets:
 rows/histogram p95=591/1,737ms, despite exact220,500 public records, final backlog0,
-passing maintenance accounting and OOM0. The runner exits1 before2/4 workers;
-those corrected official profiles remain unexecuted. See quality.md for retained
-native-oracle and service evidence. R3 remains incomplete.
+passing maintenance accounting and OOM0. The runner exited1 before2/4 workers;
+those profiles were unexecuted then. See quality.md for retained native-oracle
+and service evidence. Later corrected full1/2/4 profiles are summarized at the
+top of this README; R3 remains incomplete.
 Two separate maximum-pair real-dispatcher runs pass with zero OOM or
 budget overrun. These scoped results do not close G07 or establish a release.
 The next bounded maintenance-download change reduces actual same-input S3
@@ -87,11 +88,11 @@ tenants. A separate query cursor and capacity filter also pass actual A/B/A
 search execution, exact results, cross-tenant denial and concurrent task caps.
 Actual1/2/4-process queued-work tests now pass three repetitions, preserving
 all IDs and checking each worker's participation and tenant claim-count skew.
-This is not elapsed-time fairness or per-replica throughput evidence. The latest
-clean04ec2c2 official profile measures404/874ms versus02c98f2's591/1,737ms;
-rows pass but histogram still fails500ms. Actual220,500 public records, restart,
-backlog0, maintenance accounting and OOM0 pass. Corrected official2/4 profiles
-and R4 remain open; see quality.md for full provenance and tradeoffs.
+This is not elapsed-time fairness or per-replica throughput evidence. The earlier
+clean04ec2c2 official profile measured404/874ms versus02c98f2's591/1,737ms.
+Later corrected1/2/4 profiles are summarized at the top of this README: only4
+workers meet both query targets, so R3 remains open. R4 also remains open; see
+quality.md for full provenance and tradeoffs.
 
 Implementation handoff: [`docs/implementation/README.md`](docs/implementation/README.md)
 contains the complete v1 design reading map; the

@@ -19,18 +19,22 @@ func TestPricingFixtureAndMonthlyCostIncludeSharedServices(t *testing.T) {
 	if err := json.Unmarshal(data, &price); err != nil {
 		t.Fatal(err)
 	}
-	if price.AsOf != "2026-09-21" || price.FargateCPU <= 0 || price.FargateMemory <= 0 || price.RDSHour <= 0 || price.RDSStorage <= 0 || price.RDSBackup <= 0 || price.S3Storage <= 0 || price.S3PUT <= 0 || price.S3GET <= 0 || len(price.Sources) != 3 {
+	if price.AsOf != "2026-09-21" || price.FargateCPU <= 0 || price.FargateMemory <= 0 || price.RDSHour <= 0 || price.RDSStorage <= 0 || price.RDSBackup <= 0 || price.S3Storage <= 0 || price.S3PUT <= 0 || price.S3LIST <= 0 || price.S3GET <= 0 || len(price.Sources) != 3 {
 		t.Fatalf("incomplete price fixture: %#v", price)
 	}
 	report := map[string]any{
 		"WarmupSeconds": float64(300), "LoadSeconds": float64(1800), "Workers": float64(2),
 		"PGDatabaseStartBytes": float64(1 << 30), "PGDatabaseEndBytes": float64(2 << 30), "PGWALBytes": float64(1 << 30),
-		"S3StoredBytes": float64(3 << 30), "S3PutRequests": float64(1000), "S3GetRequests": float64(2000),
+		"S3StoredBytes": float64(3 << 30), "S3PutRequests": float64(1000), "S3ListRequests": float64(500), "S3GetRequests": float64(2000),
 		"S3HeadRequests": float64(3000), "S3RangeRequests": float64(4000),
 	}
 	cost := calculateCost(report, price)
-	if cost.FargateTasks != 4 || cost.ProjectedPGStorageGB < price.RDSMinGB || cost.ProjectedS3StorageGB <= 3 || cost.ProjectedS3PUT <= 1000 || cost.ProjectedS3GET <= 9000 || cost.FargateUSD <= 0 || cost.RDSComputeUSD <= 0 || cost.RDSStorageUSD <= 0 || cost.S3StorageUSD <= 0 || cost.S3RequestsUSD <= 0 || cost.TotalUSD <= cost.FargateUSD {
+	if cost.FargateTasks != 4 || cost.ProjectedPGStorageGB < price.RDSMinGB || cost.ProjectedS3StorageGB <= 3 || cost.ProjectedS3PUT <= 1000 || cost.ProjectedS3LIST <= 500 || cost.ProjectedS3GET <= 9000 || cost.FargateUSD <= 0 || cost.RDSComputeUSD <= 0 || cost.RDSStorageUSD <= 0 || cost.S3StorageUSD <= 0 || cost.S3RequestsUSD <= 0 || cost.TotalUSD <= cost.FargateUSD {
 		t.Fatalf("incomplete whole-installation cost: %#v", cost)
+	}
+	wantRequestsUSD := cost.ProjectedS3PUT/1000*price.S3PUT + cost.ProjectedS3LIST/1000*price.S3LIST + cost.ProjectedS3GET/1000*price.S3GET
+	if math.Abs(cost.S3RequestsUSD-wantRequestsUSD) > 1e-9 {
+		t.Fatalf("S3 request cost=%f want PUT+LIST+GET/HEAD=%f", cost.S3RequestsUSD, wantRequestsUSD)
 	}
 }
 

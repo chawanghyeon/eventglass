@@ -158,7 +158,15 @@ analytics/payload pairs. A larger analytics file is its own task. Each
 selected analytics file belongs to exactly one scan partition. Payload files are excluded
 except detail. Row-group splitting remains disabled unless independently proven.
 The R3 CPU1 small-file experiments raised the file-count bound from32 to128,
-then256 to avoid three native tasks for a tiny129–256-file scan;
+then256 to avoid three native tasks for a tiny129–256-file scan. After aligning
+query windows to PostgreSQL time, a20s/300s/90s one-worker pair measured
+rows/histogram p95=350/780ms at256 files and374/784ms at512. Fresh inputs and
+compaction trajectories still differ, so the pair is not causal evidence; it
+shows no histogram improvement from doubling the cap, and both runs fail the
+500ms histogram target. The production bound remains256. The corrected official
+5m/30m/10m profiles have since run at1/2/4 workers: only the4-worker profile
+meets both query targets; R3 remains incomplete. Details are in
+[quality evidence](../observe/quality.md).
 the 64MiB byte, 1MiB per-task manifest, native256MiB and one-child bounds do
 not increase. The native query request cap and planner share this limit, and
 257 inputs fail closed. Metadata-heavy partitions are bisected deterministically

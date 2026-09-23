@@ -99,12 +99,12 @@ func TestBacklogSlopePerMinute(t *testing.T) {
 
 func TestAddS3MetricsAccumulatesRestartedWorker(t *testing.T) {
 	var report comparisonReport
-	first := []byte("eventglass_s3_requests_total{operation=\"put\"} 2\neventglass_s3_transfer_bytes_total{direction=\"put\"} 30\n")
-	second := []byte("eventglass_s3_requests_total{operation=\"put\"} 3\neventglass_s3_transfer_bytes_total{direction=\"put\"} 40\n")
+	first := []byte("eventglass_s3_requests_total{operation=\"put\"} 2\neventglass_s3_requests_total{operation=\"list\"} 7\neventglass_s3_transfer_bytes_total{direction=\"put\"} 30\n")
+	second := []byte("eventglass_s3_requests_total{operation=\"put\"} 3\neventglass_s3_requests_total{operation=\"list\"} 11\neventglass_s3_transfer_bytes_total{direction=\"put\"} 40\n")
 	addS3Metrics(first, &report)
 	addS3Metrics(second, &report)
-	if report.S3PutRequests != 5 || report.S3PutBytes != 70 {
-		t.Fatalf("restart counters requests=%d bytes=%d", report.S3PutRequests, report.S3PutBytes)
+	if report.S3PutRequests != 5 || report.S3ListRequests != 18 || report.S3PutBytes != 70 {
+		t.Fatalf("restart counters PUT=%d LIST=%d bytes=%d", report.S3PutRequests, report.S3ListRequests, report.S3PutBytes)
 	}
 }
 
@@ -318,15 +318,20 @@ func TestColdCacheRequiresEveryChangedWorkerIdentity(t *testing.T) {
 }
 
 func TestPhaseIODeltaRejectsCounterResets(t *testing.T) {
-	before := comparisonReport{S3RangeRequests: 2, S3RangeBytes: 10, S3GetRequests: 1}
-	after := comparisonReport{S3RangeRequests: 3, S3RangeBytes: 30, S3GetRequests: 1}
+	before := comparisonReport{S3ListRequests: 2, S3RangeRequests: 2, S3RangeBytes: 10, S3GetRequests: 1}
+	after := comparisonReport{S3ListRequests: 5, S3RangeRequests: 3, S3RangeBytes: 30, S3GetRequests: 1}
 	delta, err := ioDelta(before, after)
-	if err != nil || delta.RangeGET != 1 || delta.RangeBytes != 20 || delta.GET != 0 {
+	if err != nil || delta.LIST != 3 || delta.RangeGET != 1 || delta.RangeBytes != 20 || delta.GET != 0 {
 		t.Fatalf("delta=%+v err=%v", delta, err)
 	}
 	after.S3GetRequests = 0
 	if _, err := ioDelta(before, after); err == nil {
 		t.Fatal("counter reset became valid phase evidence")
+	}
+	after = before
+	after.S3ListRequests = 1
+	if _, err := ioDelta(before, after); err == nil {
+		t.Fatal("LIST counter reset became valid phase evidence")
 	}
 }
 

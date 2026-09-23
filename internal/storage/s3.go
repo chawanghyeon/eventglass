@@ -44,6 +44,7 @@ type S3Store struct {
 	putRequests     atomic.Uint64
 	putBytes        atomic.Uint64
 	headRequests    atomic.Uint64
+	listRequests    atomic.Uint64
 	fullGetRequests atomic.Uint64
 	fullGetBytes    atomic.Uint64
 	rangeRequests   atomic.Uint64
@@ -54,6 +55,7 @@ type OperationCounts struct {
 	PutRequests     uint64
 	PutBytes        uint64
 	HeadRequests    uint64
+	ListRequests    uint64
 	FullGetRequests uint64
 	FullGetBytes    uint64
 	RangeRequests   uint64
@@ -62,7 +64,7 @@ type OperationCounts struct {
 
 func (s *S3Store) OperationCounts() OperationCounts {
 	return OperationCounts{
-		PutRequests: s.putRequests.Load(), PutBytes: s.putBytes.Load(), HeadRequests: s.headRequests.Load(),
+		PutRequests: s.putRequests.Load(), PutBytes: s.putBytes.Load(), HeadRequests: s.headRequests.Load(), ListRequests: s.listRequests.Load(),
 		FullGetRequests: s.fullGetRequests.Load(), FullGetBytes: s.fullGetBytes.Load(),
 		RangeRequests: s.rangeRequests.Load(), RangeBytes: s.rangeBytes.Load(),
 	}
@@ -341,6 +343,7 @@ func (s *S3Store) List(ctx context.Context, prefix string) ([]ObjectInfo, error)
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{Bucket: aws.String(s.bucket), Prefix: aws.String(objectPrefix)})
 	var objects []ObjectInfo
 	for paginator.HasMorePages() {
+		s.listRequests.Add(1)
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("list S3 objects: %w", err)

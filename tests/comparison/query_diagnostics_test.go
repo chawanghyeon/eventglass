@@ -41,6 +41,19 @@ type compactionEvidence struct {
 	Tasks, Inputs, Attempts int64
 }
 
+func comparisonDatabaseClock(ctx context.Context, pool *pgxpool.Pool) (time.Time, time.Duration, error) {
+	started := time.Now()
+	var databaseNow time.Time
+	if err := pool.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&databaseNow); err != nil {
+		return time.Time{}, 0, err
+	}
+	return databaseNow, databaseNow.Sub(started.Add(time.Since(started) / 2)), nil
+}
+
+func comparisonSearchBounds(databaseNow time.Time) (int64, int64) {
+	return databaseNow.Add(-15 * time.Minute).UnixMicro(), databaseNow.Add(time.Minute).UnixMicro()
+}
+
 func (sample *queryMeasurementEvidence) setJobInterval(created, finished time.Time) error {
 	end := sample.StartedAt.Add(sample.total)
 	// A negative interval is evidence of clock skew or a mismatched job, not a
@@ -165,18 +178,21 @@ func TestQueryDiagnosticIntervals(t *testing.T) {
 		name              string
 		created, finished time.Duration
 		server            time.Duration
+		clockOffset       time.Duration
 		valid             bool
 	}{
-		{"valid", 20 * time.Millisecond, 70 * time.Millisecond, 50 * time.Millisecond, true},
-		{"inclusive_boundaries", 0, 100 * time.Millisecond, 100 * time.Millisecond, true},
-		{"server_clock_early", -time.Millisecond, 70 * time.Millisecond, 71 * time.Millisecond, false},
-		{"server_clock_late", 20 * time.Millisecond, 101 * time.Millisecond, 81 * time.Millisecond, false},
-		{"inverted_job", 70 * time.Millisecond, 20 * time.Millisecond, 0, false},
-		{"wrong_job", 20 * time.Millisecond, 70 * time.Millisecond, 49 * time.Millisecond, false},
+		{"valid", 20 * time.Millisecond, 70 * time.Millisecond, 50 * time.Millisecond, 0, true},
+		{"inclusive_boundaries", 0, 100 * time.Millisecond, 100 * time.Millisecond, 0, true},
+		{"host_clock_offset_calibrated", 20 * time.Millisecond, 70 * time.Millisecond, 50 * time.Millisecond, 114 * time.Millisecond, true},
+		{"server_clock_early", -time.Millisecond, 70 * time.Millisecond, 71 * time.Millisecond, 0, false},
+		{"server_clock_late", 20 * time.Millisecond, 101 * time.Millisecond, 81 * time.Millisecond, 0, false},
+		{"inverted_job", 70 * time.Millisecond, 20 * time.Millisecond, 0, 0, false},
+		{"wrong_job", 20 * time.Millisecond, 70 * time.Millisecond, 49 * time.Millisecond, 0, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			sample := queryMeasurementEvidence{snapshotID: "sample", StartedAt: start, total: 100 * time.Millisecond, server: test.server}
-			err := sample.setJobInterval(start.Add(test.created), start.Add(test.finished))
+			alignedStart := start.Add(test.clockOffset)
+			sample := queryMeasurementEvidence{snapshotID: "sample", StartedAt: alignedStart, total: 100 * time.Millisecond, server: test.server}
+			err := sample.setJobInterval(alignedStart.Add(test.created), alignedStart.Add(test.finished))
 			if (err == nil) != test.valid {
 				t.Fatalf("interval accepted=%v want=%v", err == nil, test.valid)
 			}
@@ -184,5 +200,16 @@ func TestQueryDiagnosticIntervals(t *testing.T) {
 				t.Fatalf("lost boundary time: %+v", sample)
 			}
 		})
+	}
+}
+
+func TestComparisonSearchBoundsUseDatabaseClock(t *testing.T) {
+	databaseNow := time.Date(2026, time.September, 23, 9, 30, 0, 123000, time.UTC)
+	start, end := comparisonSearchBounds(databaseNow)
+	if got, want := start, databaseNow.Add(-15*time.Minute).UnixMicro(); got != want {
+		t.Fatalf("start_us=%d want=%d", got, want)
+	}
+	if got, want := end, databaseNow.Add(time.Minute).UnixMicro(); got != want {
+		t.Fatalf("end_us=%d want=%d", got, want)
 	}
 }

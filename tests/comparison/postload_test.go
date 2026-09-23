@@ -22,7 +22,7 @@ import (
 )
 
 type phaseIO struct {
-	PUT, HEAD, GET, RangeGET       uint64
+	PUT, HEAD, LIST, GET, RangeGET uint64
 	PUTBytes, GETBytes, RangeBytes uint64
 }
 
@@ -96,7 +96,11 @@ func TestPostLoadComparison(t *testing.T) {
 	doJSON(t, client, http.MethodPost, env[0]+"/v1/sessions", map[string]any{"email": state.Email, "password": state.Password}, "", http.StatusOK, &session)
 	// The retained installation contains only this run's workload. Include its
 	// entire received-time range, including records older than the last15min.
-	phase.StartUS, phase.EndUS = report.StartedAt.Add(-time.Minute).UnixMicro(), time.Now().Add(time.Minute).UnixMicro()
+	databaseNow, _, err := comparisonDatabaseClock(ctx, pool)
+	if err != nil {
+		t.Fatalf("sample comparison post-load database time: %v", err)
+	}
+	phase.StartUS, phase.EndUS = report.StartedAt.Add(-time.Minute).UnixMicro(), databaseNow.Add(time.Minute).UnixMicro()
 	walStart := pgWAL(t, pool)
 	var before, coldAfter, warmAfter, idleAfter comparisonReport
 	for _, endpoint := range strings.Split(os.Getenv("EVENTGLASS_COMPARISON_METRICS"), ",") {
@@ -270,8 +274,8 @@ func parseNonnegative(t *testing.T, value string) int64 {
 }
 
 func ioDelta(before, after comparisonReport) (phaseIO, error) {
-	if after.S3PutRequests < before.S3PutRequests || after.S3HeadRequests < before.S3HeadRequests || after.S3GetRequests < before.S3GetRequests || after.S3RangeRequests < before.S3RangeRequests || after.S3PutBytes < before.S3PutBytes || after.S3GetBytes < before.S3GetBytes || after.S3RangeBytes < before.S3RangeBytes {
+	if after.S3PutRequests < before.S3PutRequests || after.S3HeadRequests < before.S3HeadRequests || after.S3ListRequests < before.S3ListRequests || after.S3GetRequests < before.S3GetRequests || after.S3RangeRequests < before.S3RangeRequests || after.S3PutBytes < before.S3PutBytes || after.S3GetBytes < before.S3GetBytes || after.S3RangeBytes < before.S3RangeBytes {
 		return phaseIO{}, errors.New("S3 counters reset during measured phase")
 	}
-	return phaseIO{PUT: after.S3PutRequests - before.S3PutRequests, HEAD: after.S3HeadRequests - before.S3HeadRequests, GET: after.S3GetRequests - before.S3GetRequests, RangeGET: after.S3RangeRequests - before.S3RangeRequests, PUTBytes: after.S3PutBytes - before.S3PutBytes, GETBytes: after.S3GetBytes - before.S3GetBytes, RangeBytes: after.S3RangeBytes - before.S3RangeBytes}, nil
+	return phaseIO{PUT: after.S3PutRequests - before.S3PutRequests, HEAD: after.S3HeadRequests - before.S3HeadRequests, LIST: after.S3ListRequests - before.S3ListRequests, GET: after.S3GetRequests - before.S3GetRequests, RangeGET: after.S3RangeRequests - before.S3RangeRequests, PUTBytes: after.S3PutBytes - before.S3PutBytes, GETBytes: after.S3GetBytes - before.S3GetBytes, RangeBytes: after.S3RangeBytes - before.S3RangeBytes}, nil
 }

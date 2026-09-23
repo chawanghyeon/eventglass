@@ -101,7 +101,7 @@ elif [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then
   drain=${EVENTGLASS_COMPARISON_DRAIN:-30s}
   test_timeout=10m
 else
-  profiles="1 2 4"
+  profiles=${EVENTGLASS_COMPARISON_WORKERS:-"1 2 4"}
   warmup=5m
   load=30m
   drain=10m

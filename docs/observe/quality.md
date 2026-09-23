@@ -2871,8 +2871,9 @@ are not cleared. Full replacement-worker maintenance takes7,113ms against
 49,800ms observed idle, with zero budget overruns;60s idle adds no query work.
 The retained post-load compaction failure is counted, not excluded. Missing
 signed backup evidence still blocks physical GC. Rows now pass500ms but
-histogram874ms fails, so corrected2/4-worker profiles do not start and R3/R4
-remain incomplete. Native, data, cache and resource passes cannot override it.
+histogram874ms fails. At that checkpoint the runner stopped before2/4-worker
+profiles; the later corrected1/2/4 results are in the section below. Native,
+data, cache and resource passes cannot override the SLO failures at1/2 workers.
 
 ### Actual two/four-worker tenant claim observations
 
@@ -3169,6 +3170,127 @@ The final actual-native fixture passes both five-sample cases in
 quiet-boundary read oracle6.17s,136,503,296B whole-run cgroup peak and OOM0.
 These final checks verify the retained product and tests, not the rejected
 candidate. No measured service speedup or new completed release gate is claimed.
+
+### Rejected 512-file analytics scan-bound trial
+
+A `20s/300s/90s` quick one-worker ARM64 comparison tested raising the analytics
+scan cap from256 to512 with the same CPU1/512MiB role limits, pinned DuckDB
+2.0, and isolated fresh PostgreSQL/MinIO. The retained 256 baseline is
+`.tools/comparison-report-1.ZdK5Gl/report.json`; the 512 candidate is
+`.tools/comparison-report-1.4Ti890/report.json`. Both accepted33,600 records,
+drained to backlog0, had no conflicts or cgroup OOM, and passed backlog,
+visibility and resource checks, but both runs used fresh, non-identical input
+envelopes (10,788/42,207,389B versus10,784/42,882,500B). Do not attribute the
+whole difference to the scan bound. These first reports are exploratory, not a
+valid paired conclusion: `search` and later full-run bounds used the test host's
+wall clock although `time_basis=received` is stored on PostgreSQL in Colima.
+That can select different catalog populations when the clocks are offset.
+
+| Measurement | 256 baseline | 512 candidate |
+|---|---:|---:|
+| Rows / histogram end-to-end p95 |293/585ms|9,739/348ms|
+| Rows / histogram job p95 |141/411ms|151/265ms|
+| Rows / histogram HTTP overhead p95 |173/175ms|9,668/108ms|
+| Successful query jobs / query failures |60/0|33/8 (503 dependency unavailable)|
+| ACK / visibility p95 |372/731ms|375/823ms|
+| Final backlog / drain |0/1,001ms|0/1,003ms|
+| Whole-installation sampled peak |809,972,529B|761,319,651B|
+| Worker cgroup peak / OOM kills |66,916,352B /0|63,713,280B /0|
+| S3 PUT requests / bytes |5,960/34,401,018B|5,983/36,892,721B|
+| S3 HEAD requests |50,637|16,922|
+| S3 full GET requests / bytes |14,525/83,478,355B|15,474/93,700,476B|
+| S3 Range requests / bytes |2,007/18,859,206B|1,367/12,989,175B|
+| PG WAL |75,003,600B|73,720,824B|
+
+Two pre-correction repeats show why the first pair cannot decide the cap:
+`.tools/comparison-report-1.p65N6B/report.json` (256) measured rows/histogram
+p95 of628/1,454ms,59 successful queries,0 failures and a maximum1,597 selected
+files; `.tools/comparison-report-1.E3UsQv/report.json` (512) measured494/1,053ms,
+59 successful queries,0 failures and a maximum1,185 selected files. The first
+512 report selected at most272 files and missed query/post-load checks, while
+the second selected1,185 and passed all but the histogram p95 target. Fresh
+input hashes and compaction trajectories differ across all runs; these p95 and
+S3 deltas do not prove either a speedup or a regression. Lower sampled memory
+and request counts are not a service improvement claim.
+
+The first trial also failed before report generation because interval checking
+compared host HTTP timestamps with PostgreSQL timestamps as if they shared a
+clock; a contemporaneous read showed Colima about114ms ahead. The test helper
+now samples PostgreSQL time per query, derives `received` query windows and
+full-run/cold-history bounds from that clock, and aligns HTTP interval checks
+to it. Boundary coverage includes the114ms skew. These changes correct test
+instrumentation only.
+
+With those corrections, a fresh one-worker pair compared the retained256 bound
+(`.tools/comparison-report-1.5iL543/report.json`) with512
+(`.tools/comparison-report-1.CCgbLZ/report.json`):
+
+| Measurement | 256 | 512 |
+|---|---:|---:|
+| Rows / histogram end-to-end p95 |350/780ms|374/784ms|
+| Rows / histogram job p95 |158/540ms|164/519ms|
+| Rows / histogram HTTP overhead p95 |244/240ms|267/267ms|
+| Successful query samples / failures |59/0|59/0|
+| Maximum selected files |849|885|
+| ACK / visibility p95 |374/851ms|374/863ms|
+| Final backlog / post-load cold query |0/1,044ms|0/1,121ms|
+| Whole-installation sampled peak |815,754,377B|829,242,209B|
+| Worker cgroup peak / OOM kills |69,742,592B /0|74,743,808B /0|
+| S3 PUT requests / bytes |5,945/32,977,615B|5,895/32,753,293B|
+| S3 HEAD requests |68,912|68,542|
+| S3 full GET requests / bytes |14,093/78,385,657B|13,877/77,125,351B|
+| S3 Range requests / bytes |2,059/18,685,119B|1,982/18,280,025B|
+| PG WAL |76,342,160B|75,876,992B|
+| Projected monthly cost / S3 request share |$650.37/$516.38|$645.90/$512.21|
+
+Both accept33,600 records, pass every target except histogram p95<=500ms, and
+complete cold/warm/idle verification. Actual submitted inputs remain fresh and
+different:11,288/39,410,743B SHA
+`ac8e4dc7b31517c8b004194bf7cb4b89634769badccbe4d519fd1714e976a7d0` versus
+11,321/36,681,314B SHA
+`633fca2fd203738fe14436f33f81add1bd3fae2ad0c0f379fb2f88b78bdc17cf`. The
+histogram end-to-end p95 is effectively unchanged, so this pair provides no
+basis to adopt512 or claim a cost/S3 improvement. R3 and the256-file product
+bound remain unchanged. At that checkpoint the5min/30min/10min1/2/4-worker gate
+was still required; its later corrected results follow.
+
+### Corrected official 1/2/4-worker profiles
+
+On2026-09-23 the corrected ARM64 official profile completed at1,2,and4 workers
+with5min warmup,30min offered load,10min drain, worker restart/cold replacement,
+post-load verification, and the full10k/100k/1m/10m native oracle. Each accepted
+220,500 records with35 duplicate retry envelopes, zero conflicts/query failures,
+zero final backlog, and no cgroup OOM. The fixed500ms query targets still fail
+at1/2 workers; the4-worker run passes all recorded targets.
+
+| Workers | Rows p95 | Histogram p95 | ACK p95 | Visibility p95 | Load backlog slope/min | Target result |
+|---:|---:|---:|---:|---:|---:|---|
+|1|565ms|1,353ms|372ms|982ms|−0.0318|rows and histogram fail|
+|2|336ms|612ms|380ms|740ms|+0.00377|histogram fails|
+|4|244ms|436ms|373ms|531ms|−0.00331|all targets pass|
+
+The joined query diagnostics show a correlation, not an isolated causal result:
+histogram `JobMS` p95/object-count p95/scan-task-count p95 were965ms/1,553/7
+at1 worker,434ms/311/2 at2, and321ms/312/2 at4. Scanned-byte p95 was19.0MB,
+11.8MB, and11.7MB. Earlier1-worker compaction completed420 tasks/11,698 inputs
+and left15 tasks/429 inputs queued, versus1,650/13,688 at2 workers and
+1,667/13,703 at4. Fresh inputs and different maintenance trajectories mean
+these comparisons do not establish worker count as the sole cause. No resource,
+query, or500ms threshold was relaxed. The4-worker native10m dataset profile took
+1,007.98s; analytics output was528,495,771B, journal output682,231,716B,
+cgroup peak536,879,104B, and OOM0.
+
+The archived run cost totals are preliminary: the report collector had no S3
+LIST-page counter. The runtime now counts every ListObjectsV2 paginator page;
+the comparison collector, per-phase deltas, and whole-installation cost model
+include LIST at the PUT/COPY/POST/LIST request tier. The fixture uses
+USD0.005/1,000 LIST requests, matching S3 Standard PUT-tier pricing on the
+[AWS S3 pricing page](https://aws.amazon.com/s3/pricing/). Unit tests verify
+multi-page counting and exact PUT+LIST+GET/HEAD request-cost composition; the
+real MinIO integration and complete10,000-day publication boundary passed on
+the same source tree. Corrected official cost totals still require rerunning
+the official profiles. R3 remains incomplete because1/2-worker query SLOs and
+corrected official cost evidence are open.
 
 ## Release and workflow
 

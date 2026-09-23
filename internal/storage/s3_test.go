@@ -50,6 +50,40 @@ func TestS3RequiresExplicitRegionAndBucket(t *testing.T) {
 	}
 }
 
+func TestListCountsEveryS3Page(t *testing.T) {
+	requests := 0
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		requests++
+		if request.URL.Query().Get("list-type") != "2" {
+			t.Fatalf("unexpected list request: %s", request.URL)
+		}
+		page := `<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Name>bucket</Name><Prefix>installation/live/journals/</Prefix><KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys>`
+		if request.URL.Query().Get("continuation-token") == "" {
+			page += `<IsTruncated>true</IsTruncated><NextContinuationToken>next</NextContinuationToken><Contents><Key>installation/live/journals/a</Key><Size>1</Size><ETag>"a"</ETag></Contents></ListBucketResult>`
+		} else {
+			page += `<IsTruncated>false</IsTruncated><Contents><Key>installation/live/journals/b</Key><Size>2</Size><ETag>"b"</ETag></Contents></ListBucketResult>`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: http.Header{"Content-Type": []string{"application/xml"}}, Body: io.NopCloser(strings.NewReader(page)), Request: request}, nil
+	})
+	client := awss3.NewFromConfig(aws.Config{
+		Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("test", "test", ""), HTTPClient: transport,
+	}, func(options *awss3.Options) {
+		options.BaseEndpoint = aws.String("https://s3.invalid")
+		options.UsePathStyle = true
+	})
+	store := &S3Store{client: client, bucket: "bucket", prefix: "installation/live"}
+	objects, err := store.List(context.Background(), "journals/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 || len(objects) != 2 || objects[0].Key != "journals/a" || objects[1].Key != "journals/b" {
+		t.Fatalf("requests=%d objects=%+v", requests, objects)
+	}
+	if counts := store.OperationCounts(); counts.ListRequests != 2 {
+		t.Fatalf("LIST request count=%d, want two page requests", counts.ListRequests)
+	}
+}
+
 func TestPutStreamRejectsCorrectHeadMetadataWithWrongStoredBytes(t *testing.T) {
 	good := []byte("good")
 	digest := sha256.Sum256(good)

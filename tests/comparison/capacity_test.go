@@ -244,7 +244,7 @@ func TestMeasureCapacityDrain(t *testing.T) {
 		t.Fatal(err)
 	}
 	report.Operations = verified.Operations
-	report.S3PutRequests, report.S3HeadRequests, report.S3GetRequests, report.S3RangeRequests = verified.S3PutRequests, verified.S3HeadRequests, verified.S3GetRequests, verified.S3RangeRequests
+	report.S3PutRequests, report.S3HeadRequests, report.S3ListRequests, report.S3GetRequests, report.S3RangeRequests = verified.S3PutRequests, verified.S3HeadRequests, verified.S3ListRequests, verified.S3GetRequests, verified.S3RangeRequests
 	report.S3PutBytes, report.S3GetBytes, report.S3RangeBytes = verified.S3PutBytes, verified.S3GetBytes, verified.S3RangeBytes
 	report.PGDatabaseEndBytes, report.S3Objects, report.S3StoredBytes = pgSize(t, pool)
 	report.PGWALBytes = pgWAL(t, pool) - report.WALStartBytes

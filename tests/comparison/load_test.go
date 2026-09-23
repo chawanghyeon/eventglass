@@ -75,7 +75,7 @@ type comparisonReport struct {
 	PGWALBytes                                      int64
 	S3Objects, S3StoredBytes                        int64
 	S3PutRequests, S3HeadRequests                   uint64
-	S3GetRequests, S3RangeRequests                  uint64
+	S3ListRequests, S3GetRequests, S3RangeRequests  uint64
 	S3PutBytes, S3GetBytes, S3RangeBytes            uint64
 	StartedAt, FinishedAt                           time.Time
 	Targets                                         map[string]bool
@@ -154,8 +154,12 @@ func TestSustainedComparison(t *testing.T) {
 	}
 	defer pool.Close()
 
+	databaseStart, _, err := comparisonDatabaseClock(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("sample comparison database start: %v", err)
+	}
 	report := comparisonReport{Revision: os.Getenv("EVENTGLASS_COMPARISON_REVISION"), Architecture: "linux/arm64", Workers: workers,
-		WarmupSeconds: int64(warmup.Seconds()), LoadSeconds: int64(load.Seconds()), StartedAt: time.Now().UTC(), Targets: make(map[string]bool), QueryFailureCodes: make(map[string]int), QueryJobStates: make(map[string]int)}
+		WarmupSeconds: int64(warmup.Seconds()), LoadSeconds: int64(load.Seconds()), StartedAt: databaseStart, Targets: make(map[string]bool), QueryFailureCodes: make(map[string]int), QueryJobStates: make(map[string]int)}
 	report.FixtureDefinitionSHA256 = fixedFixtureSummaries[10_000_000].SHA256
 	input := newInputEvidence()
 	report.PGDatabaseStartBytes, _, _ = pgSize(t, pool)
@@ -166,7 +170,7 @@ func TestSustainedComparison(t *testing.T) {
 	var latencyMu sync.Mutex
 	queryContext, stopQueries := context.WithCancel(context.Background())
 	queryErrors := make(chan error, 1)
-	go runMixedQueries(queryContext, client, baseURL, state, session.CSRFToken, warmup, &latencyMu,
+	go runMixedQueries(queryContext, pool, client, baseURL, state, session.CSRFToken, warmup, &latencyMu,
 		&queryLatencies, &rowsQueryLatencies, &histogramQueryLatencies,
 		&rowsServerLatencies, &histogramServerLatencies, &rowsOverheadLatencies, &histogramOverheadLatencies,
 		&visibilityLatencies, &report, queryErrors)
@@ -256,15 +260,20 @@ func TestSustainedComparison(t *testing.T) {
 	report.RowsOverheadP95MS, report.HistogramOverheadP95MS = percentileMS(rowsOverheadLatencies, .95), percentileMS(histogramOverheadLatencies, .95)
 	report.VisibilitySamples = len(visibilityLatencies)
 	report.VisibilityP95MS = percentileMS(visibilityLatencies, .95)
-	if measurement, searchErr := search(context.Background(), client, baseURL, state, session.CSRFToken, false, true); searchErr != nil {
+	if measurement, searchErr := search(context.Background(), pool, client, baseURL, state, session.CSRFToken, false, true); searchErr != nil {
 		report.PostDrainLast15MinRegexFailed = true
 	} else {
 		report.PostDrainLast15MinRegexMS = measurement.Total.Milliseconds()
 	}
 	checkStarted := time.Now()
-	report.PublishedCounts, err = publishedCounts(context.Background(), client, baseURL, state, session.CSRFToken, report.StartedAt, checkStarted)
-	if err != nil {
-		report.PublishedOracleFailure = searchFailureCode(err)
+	databaseFinished, _, clockErr := comparisonDatabaseClock(context.Background(), pool)
+	if clockErr != nil {
+		report.PublishedOracleFailure = "database_clock_unavailable"
+	} else {
+		report.PublishedCounts, err = publishedCounts(context.Background(), client, baseURL, state, session.CSRFToken, report.StartedAt, databaseFinished)
+		if err != nil {
+			report.PublishedOracleFailure = searchFailureCode(err)
+		}
 	}
 	report.PublishedOracleMS = time.Since(checkStarted).Milliseconds()
 	report.SubmittedInput = input.snapshot()
@@ -273,7 +282,10 @@ func TestSustainedComparison(t *testing.T) {
 	// measurements, rather than charging S3 but omitting their PG/WAL work.
 	report.PGDatabaseEndBytes, report.S3Objects, report.S3StoredBytes = pgSize(t, pool)
 	report.PGWALBytes = pgWAL(t, pool) - walStart
-	report.FinishedAt = time.Now().UTC()
+	report.FinishedAt, _, err = comparisonDatabaseClock(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("sample comparison database finish: %v", err)
+	}
 	expectedAccepted := int64((warmup+load)/time.Second) * (logsPerSecond + errorsPerSecond)
 	setWorkloadTargets(&report, expectedAccepted)
 	writeReport(t, reportPath, report)
@@ -438,7 +450,7 @@ func postEnvelopeWithAdmissionRetry(client *http.Client, baseURL string, state c
 	}
 }
 
-func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, state comparisonState, csrf string, delay time.Duration, mu *sync.Mutex,
+func runMixedQueries(ctx context.Context, pool *pgxpool.Pool, client *http.Client, baseURL string, state comparisonState, csrf string, delay time.Duration, mu *sync.Mutex,
 	latencies, rows, histograms, rowsServer, histogramsServer, rowsOverhead, histogramsOverhead, visibility *[]time.Duration,
 	report *comparisonReport, result chan<- error,
 ) {
@@ -449,6 +461,10 @@ func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, s
 		result <- nil
 		return
 	case <-timer.C:
+	}
+	if ctx.Err() != nil {
+		result <- nil
+		return
 	}
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -461,7 +477,7 @@ func runMixedQueries(ctx context.Context, client *http.Client, baseURL string, s
 		case <-ticker.C:
 			histogram := queryIndex%2 == 1
 			queryIndex++
-			measurement, err := search(ctx, client, baseURL, state, csrf, histogram, false)
+			measurement, err := search(ctx, pool, client, baseURL, state, csrf, histogram, false)
 			if err != nil {
 				if ctx.Err() != nil {
 					result <- nil
@@ -555,10 +571,14 @@ func (measurement searchMeasurement) Overhead() time.Duration {
 	return overhead
 }
 
-func search(ctx context.Context, client *http.Client, baseURL string, state comparisonState, csrf string, histogram, regex bool) (searchMeasurement, error) {
-	now := time.Now()
+func search(ctx context.Context, pool *pgxpool.Pool, client *http.Client, baseURL string, state comparisonState, csrf string, histogram, regex bool) (searchMeasurement, error) {
+	databaseNow, clockOffset, err := comparisonDatabaseClock(ctx, pool)
+	if err != nil {
+		return searchMeasurement{}, fmt.Errorf("sample comparison database query time: %w", err)
+	}
+	startUS, endUS := comparisonSearchBounds(databaseNow)
 	body := map[string]any{"tenant_id": strconv.FormatInt(state.TenantID, 10), "project_ids": []string{strconv.FormatInt(state.ProjectID, 10)},
-		"start_us": strconv.FormatInt(now.Add(-15*time.Minute).UnixMicro(), 10), "end_us": strconv.FormatInt(now.Add(time.Minute).UnixMicro(), 10),
+		"start_us": strconv.FormatInt(startUS, 10), "end_us": strconv.FormatInt(endUS, 10),
 		"time_basis": "received", "kinds": []string{"log", "error"}, "filter": map[string]any{"op": "constant", "value": true}, "limit": 100, "sort": "received_desc", "mode": "sync", "projection": "list"}
 	if regex {
 		delete(body, "filter")
@@ -660,7 +680,7 @@ func search(ctx context.Context, client *http.Client, baseURL string, state comp
 		}
 		visible = lag
 	}
-	return searchMeasurement{SnapshotID: wire.SnapshotID, StartedAt: started, Total: queryLatency, Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible, Objects: objects, ScannedBytes: scannedBytes}, nil
+	return searchMeasurement{SnapshotID: wire.SnapshotID, StartedAt: started.Add(clockOffset), Total: queryLatency, Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible, Objects: objects, ScannedBytes: scannedBytes}, nil
 }
 
 func releaseComparisonSnapshot(ctx context.Context, client *http.Client, baseURL string, tenantID int64, snapshotID, csrf string) error {
@@ -848,6 +868,8 @@ func addS3Metrics(data []byte, report *comparisonReport) {
 			report.S3PutRequests += value
 		case `eventglass_s3_requests_total{operation="head"}`:
 			report.S3HeadRequests += value
+		case `eventglass_s3_requests_total{operation="list"}`:
+			report.S3ListRequests += value
 		case `eventglass_s3_requests_total{operation="get"}`:
 			report.S3GetRequests += value
 		case `eventglass_s3_requests_total{operation="range_get"}`:

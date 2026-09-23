@@ -43,6 +43,7 @@ func (runtime *Runtime) serveAutoscaleMetrics(writer http.ResponseWriter, reques
 	_, _ = fmt.Fprintln(writer, "# TYPE eventglass_s3_requests_total counter")
 	_, _ = fmt.Fprintf(writer, "eventglass_s3_requests_total{operation=\"put\"} %d\n", operations.PutRequests)
 	_, _ = fmt.Fprintf(writer, "eventglass_s3_requests_total{operation=\"head\"} %d\n", operations.HeadRequests)
+	_, _ = fmt.Fprintf(writer, "eventglass_s3_requests_total{operation=\"list\"} %d\n", operations.ListRequests)
 	_, _ = fmt.Fprintf(writer, "eventglass_s3_requests_total{operation=\"get\"} %d\n", operations.FullGetRequests)
 	_, _ = fmt.Fprintf(writer, "eventglass_s3_requests_total{operation=\"range_get\"} %d\n", operations.RangeRequests)
 	_, _ = fmt.Fprintln(writer, "# HELP eventglass_s3_transfer_bytes_total S3 application bytes transferred by this process, with fixed direction labels.")
