@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -450,6 +451,13 @@ func measureCompactGateway(t *testing.T, ctx context.Context, stage, analytics s
 func measureCompactGatewayStore(t *testing.T, ctx context.Context, backend string, store productMeasuredRangeStore, manifests []storage.ObjectManifest, packed []byte, rows int, noisy bool) {
 	t.Helper()
 	withAttrs := os.Getenv("EVENTGLASS_PRODUCT_COMPACT_DYNAMIC") == "1"
+	cpuUS := func() int64 {
+		var usage syscall.Rusage
+		if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
+			t.Fatal(err)
+		}
+		return usage.Utime.Sec*1_000_000 + usage.Utime.Usec + usage.Stime.Sec*1_000_000 + usage.Stime.Usec
+	}
 	gateway, err := storage.NewGateway(store, manifests)
 	if err != nil {
 		t.Fatal(err)
@@ -494,9 +502,10 @@ func measureCompactGatewayStore(t *testing.T, ctx context.Context, backend strin
 			}
 		}
 		query := "SELECT r.service,count(*)::BIGINT,coalesce(sum(r.severity_number),0)::BIGINT FROM " + from + " WHERE " + where + " GROUP BY r.service"
-		var scanTimes, indexTimes, scanGets, indexGets, scanBytes, indexBytes []int64
+		var scanTimes, indexTimes, scanCPU, indexCPU, scanGets, indexGets, scanBytes, indexBytes []int64
 		runScan := func() {
 			store.take("analytics")
+			startCPU := cpuUS()
 			start := time.Now()
 			queryDB, err := engine.Open(ctx, "")
 			if err != nil {
@@ -525,12 +534,14 @@ func measureCompactGatewayStore(t *testing.T, ctx context.Context, backend strin
 				t.Fatalf("gateway scan term=%q filter=%q got=%v want=%v err=%v close=%v", term, tc.filter, got, want, err, closeErr)
 			}
 			scanTimes = append(scanTimes, time.Since(start).Microseconds())
+			scanCPU = append(scanCPU, cpuUS()-startCPU)
 			reads := store.take("analytics")
 			scanGets = append(scanGets, reads.gets)
 			scanBytes = append(scanBytes, reads.bytes)
 		}
 		runIndex := func() {
 			store.take("index")
+			startCPU := cpuUS()
 			start := time.Now()
 			request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/objects/index", nil)
 			if err != nil {
@@ -580,6 +591,7 @@ func measureCompactGatewayStore(t *testing.T, ctx context.Context, backend strin
 				t.Fatalf("gateway compact term=%q filter=%q got=%v want=%v", term, tc.filter, got, want)
 			}
 			indexTimes = append(indexTimes, time.Since(start).Microseconds())
+			indexCPU = append(indexCPU, cpuUS()-startCPU)
 			reads := store.take("index")
 			indexGets = append(indexGets, reads.gets)
 			indexBytes = append(indexBytes, reads.bytes)
@@ -593,9 +605,9 @@ func measureCompactGatewayStore(t *testing.T, ctx context.Context, backend strin
 				runScan()
 			}
 		}
-		for _, values := range [][]int64{scanTimes, indexTimes, scanGets, indexGets, scanBytes, indexBytes} {
+		for _, values := range [][]int64{scanTimes, indexTimes, scanCPU, indexCPU, scanGets, indexGets, scanBytes, indexBytes} {
 			slices.Sort(values)
 		}
-		t.Logf("compact_gateway backend=%s comparator=pair_analytics term=%q filter=%q reps=30 parquet_p50_us=%d parquet_p95_us=%d parquet_p99_us=%d compact_p50_us=%d compact_p95_us=%d compact_p99_us=%d parquet_get_p50=%d compact_get_p50=%d parquet_bytes_p50=%d compact_bytes_p50=%d", backend, term, tc.filter, scanTimes[15], scanTimes[28], scanTimes[29], indexTimes[15], indexTimes[28], indexTimes[29], scanGets[15], indexGets[15], scanBytes[15], indexBytes[15])
+		t.Logf("compact_gateway backend=%s comparator=pair_analytics term=%q filter=%q reps=30 parquet_p50_us=%d parquet_p95_us=%d parquet_p99_us=%d compact_p50_us=%d compact_p95_us=%d compact_p99_us=%d parquet_cpu_p50_us=%d compact_cpu_p50_us=%d parquet_cpu_p95_us=%d compact_cpu_p95_us=%d parquet_get_p50=%d compact_get_p50=%d parquet_bytes_p50=%d compact_bytes_p50=%d", backend, term, tc.filter, scanTimes[15], scanTimes[28], scanTimes[29], indexTimes[15], indexTimes[28], indexTimes[29], scanCPU[15], indexCPU[15], scanCPU[28], indexCPU[28], scanGets[15], indexGets[15], scanBytes[15], indexBytes[15])
 	}
 }
