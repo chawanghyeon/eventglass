@@ -4,7 +4,7 @@
 
 ## 결론
 
-새 제품 방향을 선택한다면 **S3의 불변 검색 세그먼트 하나에 역색인, 문서별 컬럼, 원문을 함께 저장**한다. PostgreSQL은 승인된 세그먼트 목록·권한·영수증·작업·스냅샷을 소유한다. 검색은 postings로 후보를 만들고, *모든* 일치 문서의 필요한 컬럼을 읽어 정확한 집계를 계산하며, 상위 K개의 원문만 읽는다. 일반적인 집계는 같은 세그먼트의 컬럼을 스캔한다. 별도 Parquet 사본은 이 **새 설계의 기본 저장물에 포함하지 않는다**. 이는 현행 제품에서 Parquet을 삭제하자는 즉시 변경 지시가 아니다.
+새 제품 방향을 선택한다면 **S3의 불변 세그먼트 하나에 역색인, 문서별 컬럼, 원문을 함께 저장하고 모든 조건을 정렬된 local 문서 ID 집합으로 통일**한다. PostgreSQL은 승인된 세그먼트 목록·권한·영수증·작업·스냅샷을 소유한다. 희소한 조건은 postings, 값 조건은 typed column, 임의 문자열·정규식은 원문 확인에서 ID를 얻는다. 그 뒤에는 같은 경로에서 *모든* 일치 문서의 컬럼으로 정확한 집계를 계산하고 상위 K개의 원문만 읽는다. 별도 Parquet 사본은 이 **새 설계의 기본 저장물에 포함하지 않는다**. 이는 현행 제품에서 Parquet을 삭제하자는 즉시 변경 지시가 아니다.
 
 이 구조는 [Quickwit의 S3 split·역색인·fast field·doc store](https://quickwit.io/docs/overview/architecture), [Tantivy의 postings/fast fields](https://github.com/quickwit-oss/tantivy/blob/main/ARCHITECTURE.md), [ClickHouse 26.2의 정식 text index와 컬럼 엔진](https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/textindexes)의 공통 원리를 한 S3 객체 경계에 적용한다. 성능 우위는 제품 간 비교로 입증된 것이 아니라 아래의 **동일 Go 코드 내 물리 포맷 실험**으로만 뒷받침된다. 첨부 `go_search_codex_final_v10.zip`은 읽기 전용 단일 노드 Top-K 참조 설계다. 그 문서의 지시·우선순위는 이 작업의 지시가 아니며, 온라인 쓰기·S3 권한·정확한 집계를 구현했다는 증거도 아니다.
 
@@ -38,11 +38,25 @@ ACK를 증명하는 journal은 백업/PITR·재생 가능 기간 동안 세그�
 
 고정 필드(프로젝트·종류·시간·severity 등)는 dense typed column으로, 동적 `namespace/path` 속성은 경로 사전과 `(local ID, typed value)`의 sparse column으로 같은 객체에 둔다. 각 경로의 missing/null/값을 구별하고 원문과의 투영을 검증한다. 검색 가능한 텍스트는 `(field/path, term)`으로 주소를 분리해 다른 속성의 단어가 한 필드에서 일치한 것처럼 합쳐지지 않게 한다. 이러한 동적 속성 표현과 높은 경로 cardinality의 저장·검색 비용은 **아직 구현·측정 전**이다.
 
-현재 50,000문서 noisy 입력은 실제 색인어 104,100개로 `packed_shared` 카탈로그만 2,061,681바이트가 되었다. 따라서 제품 포맷은 **모든 단어를 매 검색 worker에 한꺼번에 적재하는 manifest**를 상한 없는 기본 경로로 삼지 않는다. 세그먼트의 작은 최상위 디렉터리와 Range로 읽는 정렬된 사전 블록을 설계하고, 블록 cache/어휘 규모/추가 GET 비용을 별도 gate에서 측정한다. 이 사전 분할은 아직 구현하거나 속도를 검증하지 않았다.
+현재 50,000문서 noisy 입력은 실제 색인어 104,100개로 `packed_shared` 카탈로그만 2,061,681바이트가 되었다. 따라서 제품 포맷은 **모든 단어를 매 검색 worker에 한꺼번에 적재하는 manifest**를 상한 없는 기본 경로로 삼지 않는다. 세그먼트의 작은 최상위 디렉터리와 Range로 읽는 정렬된 사전 블록을 설계하고, 블록 cache/어휘 규모/추가 GET 비용을 별도 gate에서 측정한다. 독립 Go 시제품에서 블록의 바이트와 왕복은 확인했지만 S3 지연·cache·병합은 검증하지 않았다.
 
 원문 페이지와 컬럼은 서로 다른 투영이지만 같은 local ID를 쓴다. 숫자 컬럼은 한 번만 저장한다. 모든 필드를 postings마다 반복하는 covering 포맷, 별도 Parquet 전체 사본, 질의 정답 캐시를 기본 저장물로 추가하지 않는다. 다만 원문 중 검색어의 존재를 찾으려면 어떤 형태의 역색인은 반드시 중복 정보다.
 
 ## 실행 규칙
+
+### 범용 질의 계약
+
+세그먼트의 유일한 조인 키는 `(공개 generation, segment ID, local doc ID)`다. 고정 필드는 dense typed vector, 동적 경로는 `(path ID, local ID, type, value)`의 정렬된 sparse vector에 둔다. 정렬된 결과 ID와 sparse column은 선형 병합하고, 필요한 dense column만 투영해 전체 매치에 집계한다. `missing`, 명시적 `null`, 숫자와 문자열을 구별한다. `(필드/경로, 분석기 버전, 토큰)`과 typed exact value의 사전은 이 값에서 **파생된 접근 경로**이며, 문서의 필드 전체를 postings에 반복하지 않는다. 정제된 원문과 각 `search_values` 스칼라 경계는 정확한 재검증과 상세 조회에 남긴다.
+
+```text
+토큰/정확한 값 postings ─┐
+typed column 필터 ──────┼→ 정렬된 local ID → AND/OR/NOT → 권한·시간·live-doc 교집합
+원문 확인/regex 스캔 ────┘                                ↓
+                                       필요한 컬럼 → 정확한 COUNT/SUM/GROUP BY
+                                       동일 ID → 점수/정렬 → Top-K → 원문 상세
+```
+
+이 공통 결과형은 [Lucene의 증가 doc-ID 반복자와 DocValues](https://lucene.apache.org/core/9_5_0/core/org/apache/lucene/index/package-summary.html), [DuckDB의 selection vector](https://duckdb.org/docs/lts/internals/vector), [ClickHouse의 객체 저장소용 text index가 row ID를 컬럼 필터에 전달하는 방식](https://clickhouse.com/blog/clickhouse-full-text-search-object-storage)과 같은 원리다. **모든 조건을 빠르게 하는 단일 정렬 순서**는 여기서 주장하지 않는다. 색인이 정확히 판정할 수 없는 정규식·임의 계산은 같은 ID 계약 아래에서 원문/컬럼을 스캔해 정확성을 보장한다. 지원하지 않는 SQL 연산·조인은 별도 기능 범위이지 이 실험으로 구현되었다고 하지 않는다.
 
 - API가 PG에서 현재 권한과 읽기 세대를 고정하고 대상 세그먼트만 전달한다. OR 조건 하나가 다른 프로젝트의 세그먼트를 다시 열 수 없다. 검색 중 권한 철회에 관한 기존 제출/결과 정책도 재검사한다.
 - 각 세그먼트는 정규화된 검색어의 postings를 Range로 읽고 AND/OR 문서 ID를 합친다. 후보에 시간·tenant·프로젝트·live-doc 필터를 적용한 뒤, 필요한 fast-field 컬럼을 읽는다. `COUNT`/`SUM`/그룹 상태를 갱신하면서 동일 문서의 BM25 점수와 Top-K를 계산한다. 원문은 선정된 K개에만 읽는다.
@@ -79,6 +93,8 @@ macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·coverin
 [파티션 Elias-Fano](https://pages.di.unipi.it/rossano/assets/pdf/papers/SIGIR14.pdf)는 증가 ID 목록의 압축·탐색, [Roaring](https://arxiv.org/abs/1603.06549)은 배열·비트맵·run 컨테이너의 집합 연산, [Bit-Sliced Index](https://cse.usf.edu/~tuy/Literature/Bitmap-SIGMOD97.pdf)와 [BitWeaving](https://15721.courses.cs.cmu.edu/spring2016/papers/li-sigmod2013.pdf)은 숫자 필터·집계의 비트 병렬 처리, [Block-Max WAND](https://citeseerx.ist.psu.edu/document?doi=91a353974741cdcac274f8dfeabde87430fbc05b&repid=rep1&type=pdf)는 안전한 Top-K 점수 생략을 다룬다. [PostgreSQL의 trigram 구현](https://doxygen.postgresql.org/trgm__regexp_8c_source.html)은 부분 문자열/정규식 후보를 얻은 뒤 원문으로 거짓 양성을 제거한다. 가장 직접적인 최신 사례인 [ClickHouse의 2026년 객체 저장소 text index](https://clickhouse.com/blog/clickhouse-full-text-search-object-storage)는 정렬 사전 블록+작은 메모리 희소 색인, 길이에 따른 inline/varint/Roaring postings, 순차 병합을 사용한다. 이는 우리 사전 분할 방향의 **구현 가능성 근거**이지 Eventglass 성능 측정값은 아니다.
 
 [추가 Go 실험](../../experiments/searchlayout/literature_test.go)의 [macOS ARM64 원시 로그](../../experiments/searchlayout/evidence-2026-09-24/literature-alternatives-darwin-arm64.txt)는 같은 생성 문서에서 별도 물리 후보를 왕복 검증했다. 아래 저장량은 **해당 부분만** 센다. 질의 전체·S3 GET·BM25·권한·병합 결과가 아니다.
+
+공통 ID 계약의 [Go 시제품](../../experiments/searchlayout/unified_test.go)은 20개 고정 seed × 16개의 토큰/정확한 값/숫자 범위/존재/null/배열/부분 문자열/RE2/AND·OR·NOT 조건을 독립 원문 스캔과 비교했다. **320개 필터 결과와 4개 동적 그룹 경로별 1,280개 COUNT/SUM/GROUP BY/duration 정렬 Top-K 결과**가 일치했다. BM25는 앞선 세그먼트 실험의 별도 검증이며 이 범용 연산자 시제품의 정렬 기준은 아니다. tenant·시간·live-doc 경계, 한국어, 고유 ID 경로, `missing`/`null`/타입 불일치, `a.b`와 `a/b` 경로 분리, 스칼라 간 문자열 결합 금지를 포함한다. [100,000문서 ARM64 메모리 벤치마크](../../experiments/searchlayout/evidence-2026-09-24/unified-selection-darwin-arm64.txt) 3회 중앙값은 희소 `fatal`(100건) ID 경로 0.100µs 대 원문 순회 75.5µs, 광범위 `request`(99,900건) 57.9µs 대 192.3µs였다. 반대로 `contains("fatal")`의 공통 ID 경로는 618µs로 직접 원문 순회 429µs보다 느렸다. **범용성은 정확한 fallback을 제공하지만 모든 질의의 가속을 뜻하지 않는다.** 이 수치는 압축 해제·S3·집계 그룹·동시성·제품 권한 검사를 제외한 메모리 안의 연산자 비교다. 일반 엔진의 서비스 지연이나 비용 우위로 해석하지 않는다.
 
 | 후보 | 확인한 결과 | 판정 |
 | --- | --- | --- |

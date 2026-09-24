@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/chawanghyeon/eventglass/experiments/searchlayout
+cpu: Apple M3 Pro
+BenchmarkUniversalSelection/fatal/index-12         	 2212254	       101.4 ns/op
+BenchmarkUniversalSelection/fatal/index-12         	 2360445	        99.95 ns/op
+BenchmarkUniversalSelection/fatal/index-12         	 2412082	        99.07 ns/op
+BenchmarkUniversalSelection/fatal/scan-12          	    3158	     75549 ns/op
+BenchmarkUniversalSelection/fatal/scan-12          	    3235	     75768 ns/op
+BenchmarkUniversalSelection/fatal/scan-12          	    3213	     75480 ns/op
+BenchmarkUniversalSelection/request/index-12       	    4152	     58174 ns/op
+BenchmarkUniversalSelection/request/index-12       	    3608	     57912 ns/op
+BenchmarkUniversalSelection/request/index-12       	    3529	     57472 ns/op
+BenchmarkUniversalSelection/request/scan-12        	    1225	    192323 ns/op
+BenchmarkUniversalSelection/request/scan-12        	    1249	    192292 ns/op
+BenchmarkUniversalSelection/request/scan-12        	    1258	    192152 ns/op
+BenchmarkUniversalSelection/contains/index_fallback-12         	     386	    618366 ns/op
+BenchmarkUniversalSelection/contains/index_fallback-12         	     385	    619590 ns/op
+BenchmarkUniversalSelection/contains/index_fallback-12         	     390	    617531 ns/op
+BenchmarkUniversalSelection/contains/scan-12                   	     550	    431609 ns/op
+BenchmarkUniversalSelection/contains/scan-12                   	     556	    429393 ns/op
+BenchmarkUniversalSelection/contains/scan-12                   	     553	    428866 ns/op
+PASS
+ok  	github.com/chawanghyeon/eventglass/experiments/searchlayout	5.904s
