@@ -438,7 +438,7 @@ func measureProductCompactTerms(t *testing.T, ctx context.Context, db *sql.DB, s
 	}
 	t.Logf("compact_terms rows=%d noisy=%t random_trace_128=%t random_trace_256=%t dynamic_attrs=%t terms=%d postings=%d raw_bytes=%d zstd_bytes=%d core_zstd_bytes=%d combined_bytes=%d single_plus_index=%d single_plus_complete=%d pair_bytes=%d", rows, noisy, os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_TRACE_128") == "1", os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_TRACE") == "1", withAttrs, len(terms), postings, len(raw), len(packed), len(corePacked), len(combined), stat(single)+int64(len(packed)), stat(single)+int64(len(combined)), stat(analytics)+stat(payload))
 	if withAttrs && os.Getenv("EVENTGLASS_PRODUCT_COMPACT_RESIDUAL") == "1" {
-		measureProductCompactResidual(t, stage, combined, rows, stat(analytics)+stat(payload))
+		measureProductCompactResidual(t, stage, payload, combined, rows, stat(analytics)+stat(payload))
 	}
 	if rows == 100000 && os.Getenv("EVENTGLASS_PRODUCT_COMPACT_GATEWAY") == "1" {
 		measureCompactGateway(t, ctx, stage, analytics, combined, rows, noisy)

@@ -1,0 +1,21 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:318: compact_lookup term="fatal" rows=100000 reps=30 parquet_p50_us=7106 parquet_p95_us=9400 parquet_p99_us=13357 compact_p50_us=6388 compact_p95_us=8937 compact_p99_us=9138
+    product_parquet_test.go:318: compact_lookup term="request" rows=100000 reps=30 parquet_p50_us=6616 parquet_p95_us=8594 parquet_p99_us=8641 compact_p50_us=8284 compact_p95_us=11446 compact_p99_us=13151
+    product_parquet_test.go:318: compact_lookup term="trace-6b19e101442883646595f233b371e57d" rows=100000 reps=30 parquet_p50_us=9054 parquet_p95_us=11970 parquet_p99_us=13928 compact_p50_us=8954 compact_p95_us=12302 compact_p99_us=12542
+    product_parquet_test.go:318: compact_terms rows=100000 noisy=true random_trace_128=true random_trace_256=false dynamic_attrs=true terms=100008 postings=401031 raw_bytes=4136270 zstd_bytes=2087199 core_zstd_bytes=2525005 combined_bytes=4612212 single_plus_index=13253039 single_plus_complete=15778052 pair_bytes=11273200
+    product_parquet_test.go:318: compact_residual rows=100000 source_page_rows=128 pages=782 source_bytes=4387801 index_bytes=4612212 total_bytes=9000013 pair_bytes=11273200 delta_bytes=-2273187
+    product_parquet_test.go:318: compact_compound rows=100000 object_bytes=9000045 pair_bytes=11273200 delta_bytes=-2273155
+    product_parquet_test.go:318: compact_compound_upload put=2 put_bytes=15533501 head=2 verify_get=2 verify_bytes=15533501
+    product_parquet_test.go:318: compact_compound_minio source=compound rows=100000 reps=30 p50_us=29945 p95_us=37300 p99_us=37780 cpu_p50_us=26291 cpu_p95_us=31191 get_p50=5 bytes_p50=6028615
+    product_parquet_test.go:318: compact_compound_minio source=payload rows=100000 reps=30 p50_us=44464 p95_us=62442 p99_us=68484 cpu_p50_us=42247 cpu_p95_us=52293 get_p50=4 bytes_p50=6533456
+    product_parquet_test.go:318: compact_compound_minio_query range_get=270 range_bytes=376862130
+    product_parquet_test.go:332: actual_converter rows=100000 noisy=true analytics_bytes=4739744 payload_bytes=6533456 pair_bytes=11273200 single_bytes=11165840
+--- PASS: TestActualConverterSingleParquetParity (15.70s)
+PASS
+536870912
+low 0
+high 0
+max 409
+oom 0
+oom_kill 0
+oom_group_kill 0

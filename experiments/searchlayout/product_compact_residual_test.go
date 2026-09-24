@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/binary"
 	"encoding/json"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 
 // Keep every StageRecord field except those already stored in the compact
 // index. Fixed-size compressed pages allow point reads without whole-file decode.
-func measureProductCompactResidual(t *testing.T, stage string, index []byte, rows int, pairBytes int64) {
+func measureProductCompactResidual(t *testing.T, stage, payload string, index []byte, rows int, pairBytes int64) {
 	t.Helper()
 	core, _, err := compactDecodeCore(index, rows, true)
 	if err != nil {
@@ -166,4 +167,43 @@ func measureProductCompactResidual(t *testing.T, stage string, index []byte, row
 		t.Fatal("residual record count mismatch")
 	}
 	t.Logf("compact_residual rows=%d source_page_rows=%d pages=%d source_bytes=%d index_bytes=%d total_bytes=%d pair_bytes=%d delta_bytes=%d", rows, pageRows, len(offsets), info.Size(), len(index), info.Size()+int64(len(index)), pairBytes, info.Size()+int64(len(index))-pairBytes)
+	compound := filepath.Join(filepath.Dir(stage), "compound.bin")
+	packed, err := os.Create(compound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer packed.Close()
+	if _, err := packed.Write(index); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copied, copyErr := io.Copy(packed, source)
+	closeErr := source.Close()
+	if copyErr != nil || closeErr != nil || copied != info.Size() {
+		t.Fatalf("compound source copy bytes=%d err=%v close=%v", copied, copyErr, closeErr)
+	}
+	compoundFooter := append([]byte("CRS1"), binary.LittleEndian.AppendUint64(nil, uint64(len(index)))...)
+	compoundFooter = binary.LittleEndian.AppendUint64(compoundFooter, uint64(info.Size()))
+	compoundFooter = binary.LittleEndian.AppendUint64(compoundFooter, binary.LittleEndian.Uint64(index[:8]))
+	compoundFooter = binary.LittleEndian.AppendUint32(compoundFooter, crc32.ChecksumIEEE(compoundFooter))
+	if _, err := packed.Write(compoundFooter); err != nil {
+		t.Fatal(err)
+	}
+	if err := packed.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	compoundInfo, err := packed.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compoundInfo.Size() != int64(len(index))+info.Size()+32 {
+		t.Fatalf("compound size=%d", compoundInfo.Size())
+	}
+	t.Logf("compact_compound rows=%d object_bytes=%d pair_bytes=%d delta_bytes=%d", rows, compoundInfo.Size(), pairBytes, compoundInfo.Size()-pairBytes)
+	if os.Getenv("EVENTGLASS_PRODUCT_COMPACT_COMPOUND_MINIO") == "1" {
+		measureProductCompactCompoundMinIO(t, compound, payload, rows, stage)
+	}
 }
