@@ -307,7 +307,7 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 		measureProductUnified(t, ctx, root, stage, analytics, payload, rows, noisy)
 	}
 	if os.Getenv("EVENTGLASS_PRODUCT_COMPACT_TERMS") == "1" {
-		measureProductCompactTerms(t, stage, single, analytics, payload, rows, noisy)
+		measureProductCompactTerms(t, ctx, db, stage, single, analytics, payload, rows, noisy)
 	}
 	analyticsInfo, err := os.Stat(analytics)
 	if err != nil {
