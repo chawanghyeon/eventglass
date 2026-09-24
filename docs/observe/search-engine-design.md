@@ -135,6 +135,21 @@ macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·coverin
 
 이 구조를 [기본 10만 Range 로그](../../experiments/searchlayout/evidence-2026-09-24/actual-product-postings-gateway-baseline-100k.txt)와 [동적 10만 Range 로그](../../experiments/searchlayout/evidence-2026-09-24/actual-product-postings-gateway-noisy-100k.txt)에서 같은 검증 게이트웨이의 별도 capability 두 개로 다시 실행했다. 질의마다 새 DuckDB 연결을 열어 파일 캐시가 GET을 0으로 만드는 측정 오류를 제거했다. 기본 입력 `fatal` p50은 스캔 23.02ms/2 GET/2,208,874B, 색인 28.09ms/3 GET/2,539,237B였다. 동적 입력의 고유 `trace`도 25.96ms/2 GET/3,236,254B 대 27.22ms/3 GET/3,770,669B였다. 흔한 `request` 역시 두 입력 모두 색인이 느렸다. 로컬에서 확인된 희소어 이득은 이 Range 경로에서 사라졌다. [기본 1만 Range 로그](../../experiments/searchlayout/evidence-2026-09-24/actual-product-postings-gateway-baseline-10k.txt)는 1 GET→2 GET을 보인다. 이는 loopback·파일 기반 RangeStore·새 엔진 연결을 포함한 진단값이며 실제 S3/TLS, 비용, 다중 worker p95/p99가 아니다. 10만 건은 oracle 메모리 보유를 제거한 뒤 OOM 없이 통과했지만 cgroup peak가 512MiB에 닿아 운영 여유를 증명하지도 못한다.
 
+[제품 입력의 압축 어휘 실험](../../experiments/searchlayout/product_compact_terms_test.go)은 Parquet postings의 저장 부담이 컬럼형 포맷 때문인지 분리해 확인했다. `StageRecord.SearchValues`에서 공백 분리 토큰의 `(문서 ID, TF)`를 만들고, 정렬 어휘의 공통 접두어와 문서 ID 차분을 인코딩한 뒤 전체를 Zstd로 압축했다. 모든 어휘·postings를 복원해 원본과 비교하고 `fatal`/`request`/고유 `trace`의 프로젝트 범위 `COUNT`·severity `SUM`을 독립 생성 규칙과 대조했다. 동일 변환기의 단일 Parquet에 압축 블록을 더해 두 Parquet 총량과 비교했다.
+
+| 입력 | 문서 | 압축 어휘+postings | 단일 Parquet+색인 | 현행 두 Parquet | 차이 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 기본 | 10,000 | 138B | 230,822B | 243,321B | −5.1% |
+| 순번형 고유 토큰 | 10,000 | 9,704B | 358,933B | 361,866B | −0.8% |
+| 무작위 128비트 고유 토큰 | 10,000 | 210,775B | 966,985B | 768,847B | +25.8% |
+| 무작위 256비트 고유 토큰 | 10,000 | 386,315B | 1,503,735B | 1,130,037B | +33.1% |
+| 기본 | 100,000 | 214B | 2,209,088B | 2,315,870B | −4.6% |
+| 순번형 고유 토큰 | 100,000 | 77,839B | 3,314,093B | 3,343,454B | −0.9% |
+| 무작위 128비트 고유 토큰 | 100,000 | 2,087,199B | 9,385,574B | 7,405,690B | +26.7% |
+| 무작위 256비트 고유 토큰 | 100,000 | 3,871,718B | 14,774,280B | 11,009,907B | +34.2% |
+
+[기본/순번형 1만·10만 로그](../../experiments/searchlayout/evidence-2026-09-24/actual-product-compact-terms-noisy-100k.txt), [128비트 1만](../../experiments/searchlayout/evidence-2026-09-24/actual-product-compact-terms-random-128-10k.txt)·[10만](../../experiments/searchlayout/evidence-2026-09-24/actual-product-compact-terms-random-128-100k.txt), [256비트 1만](../../experiments/searchlayout/evidence-2026-09-24/actual-product-compact-terms-random-trace-10k.txt)·[10만](../../experiments/searchlayout/evidence-2026-09-24/actual-product-compact-terms-random-trace-100k.txt)이 원시 증거다. 무작위 토큰은 고정 SHA-256 입력에서 생성해 재현 가능하고 실제 변환기에 투입했다. 순번형의 극단적 압축은 일반 고유 토큰의 증거가 아니며, 128비트 결과만으로도 작은 색인이 저장량을 반드시 절감한다는 주장을 반박한다. 128비트 10만 실행의 cgroup peak는 536,879,104B로 512MiB 한계에 닿았으나 OOM 이벤트는 0이었다. 이 블록은 **전체를 읽어야 하는 저장량 중심 시제품**이다. S3 선택 Range, 위치/구문 검색, BM25, 범용 Unicode 분석기, 병합, 쓰기·메모리·지연 비용을 포함한 제품 색인이 아니다.
+
 | 후보 | 확인한 결과 | 판정 |
 | --- | --- | --- |
 | 128개씩 고정 폭 delta ID + TF | 10만 문서 baseline에서 postings 저장 바이트 355,792→291,196(**18.2% 감소**), clustered 356,879→309,686(**13.2% 감소**); 5만 noisy에서는 518,137→637,766(**23.1% 증가**). `request` 99,000건 복원 438→442µs, `timeout` 990건 3.97→7.81µs. 모든 목록 왕복 일치 | 블록 압축은 실행 가능한 대안이나 이 단순 구현은 일관된 우위가 없다. **Partitioned Elias-Fano나 SIMD/PForDelta를 구현·검증한 결과로 해석하지 않는다.** 기본 codec 변경 보류. |

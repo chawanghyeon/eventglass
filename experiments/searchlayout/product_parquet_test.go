@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -34,6 +35,17 @@ func productParquetRaw(i int, noisy bool) ([]byte, error) {
 		rawFields["trace"] = fmt.Sprintf("trace-%064x", i)
 	}
 	return json.Marshal(rawFields)
+}
+
+func productParquetTrace(i int) string {
+	if os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_TRACE") == "1" || os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_TRACE_128") == "1" {
+		hash := sha256.Sum256([]byte(fmt.Sprintf("product-parquet-trace-%d", i)))
+		if os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_TRACE_128") == "1" {
+			return "trace-" + fmt.Sprintf("%x", hash[:16])
+		}
+		return "trace-" + fmt.Sprintf("%x", hash)
+	}
+	return "trace-" + fmt.Sprintf("%064x", i+1)
 }
 
 func productParquetFixture(t *testing.T, path string, rows int, noisy bool) map[string]productParquetOracle {
@@ -73,7 +85,7 @@ func productParquetFixture(t *testing.T, path string, rows int, noisy bool) map[
 		if noisy {
 			value := fmt.Sprintf("v%d", i)
 			record.Attrs = append(record.Attrs, model.Attribute{Namespace: "attributes", Path: fmt.Sprintf("/custom/%d", i%1000), ValueType: "string", StringValue: &value})
-			record.SearchValues = append(record.SearchValues, "trace-"+record.RecordID)
+			record.SearchValues = append(record.SearchValues, productParquetTrace(i))
 		}
 		staged := engine.StageRecord{
 			Version: engine.ConversionProtocolVersion, GlobalOrdinal: i,
@@ -293,6 +305,9 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 	}
 	if os.Getenv("EVENTGLASS_PRODUCT_UNIFIED") == "1" {
 		measureProductUnified(t, ctx, root, stage, analytics, payload, rows, noisy)
+	}
+	if os.Getenv("EVENTGLASS_PRODUCT_COMPACT_TERMS") == "1" {
+		measureProductCompactTerms(t, stage, single, analytics, payload, rows, noisy)
 	}
 	analyticsInfo, err := os.Stat(analytics)
 	if err != nil {

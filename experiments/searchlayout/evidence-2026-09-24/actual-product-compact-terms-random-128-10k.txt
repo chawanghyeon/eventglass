@@ -1,0 +1,5 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:310: compact_terms rows=10000 noisy=true random_trace_128=true random_trace_256=false terms=10008 postings=40104 raw_bytes=413444 zstd_bytes=210775 single_plus_index=966985 pair_bytes=768847
+    product_parquet_test.go:324: actual_converter rows=10000 noisy=true analytics_bytes=313418 payload_bytes=455429 pair_bytes=768847 single_bytes=756210
+--- PASS: TestActualConverterSingleParquetParity (1.69s)
+PASS
