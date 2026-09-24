@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 )
 
 // A covering posting repeats the four small aggregate/scoring fields for each
@@ -139,17 +138,9 @@ func runRowScan(ctx context.Context, src rangeSource, c corpus, q query) (result
 	if len(q.Terms) == 0 || q.K < 0 || q.K > 1000 || q.Tenant < -1 || q.Tenant > 255 {
 		return result{}, errors.New("invalid row-scan query")
 	}
-	terms := make([]string, 0, len(q.Terms))
-	seen := make(map[string]bool)
-	for _, term := range q.Terms {
-		term = strings.ToLower(term)
-		if term == "" {
-			return result{}, errors.New("empty query term")
-		}
-		if !seen[term] {
-			terms = append(terms, term)
-			seen[term] = true
-		}
+	terms, err := normalizeQueryTerms(q.Terms)
+	if err != nil {
+		return result{}, err
 	}
 	idf := make([]float64, len(terms))
 	for i, term := range terms {

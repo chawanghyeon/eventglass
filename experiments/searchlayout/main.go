@@ -68,6 +68,10 @@ func writeRaw(path string, docs []document) (int64, error) {
 
 // scanRaw is the no-index control: one compressed object, full exact scan.
 func scanRaw(path string, c corpus, q query) (result, error) {
+	terms, err := normalizeQueryTerms(q.Terms)
+	if err != nil {
+		return result{}, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return result{}, err
@@ -81,8 +85,8 @@ func scanRaw(path string, c corpus, q query) (result, error) {
 	decoder := json.NewDecoder(zr)
 	out := result{Groups: make(map[uint16]aggregate)}
 	var best topHeap
-	idf := make([]float64, len(q.Terms))
-	for i, term := range q.Terms {
+	idf := make([]float64, len(terms))
+	for i, term := range terms {
 		df := c.DF[term]
 		idf[i] = math.Log1p((float64(c.Count-df) + 0.5) / (float64(df) + 0.5))
 	}
@@ -101,12 +105,12 @@ func scanRaw(path string, c corpus, q query) (result, error) {
 		words := tokenize(d.Text)
 		freq := frequencies(words)
 		matched := 0
-		for _, term := range q.Terms {
+		for _, term := range terms {
 			if freq[term] > 0 {
 				matched++
 			}
 		}
-		if matched == 0 || (q.All && matched != len(q.Terms)) {
+		if matched == 0 || (q.All && matched != len(terms)) {
 			continue
 		}
 		out.Count++
@@ -117,7 +121,7 @@ func scanRaw(path string, c corpus, q query) (result, error) {
 		out.Groups[d.Group] = agg
 		if q.K > 0 {
 			score := 0.0
-			for i, term := range q.Terms {
+			for i, term := range terms {
 				if freq[term] > 0 {
 					t := float64(freq[term])
 					score += idf[i] * t * 2.2 / (t + 1.2*(0.25+0.75*float64(len(words))/c.AvgLen))

@@ -595,6 +595,25 @@ type query struct {
 	K      int
 }
 
+func normalizeQueryTerms(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("query has no terms")
+	}
+	seen := make(map[string]bool, len(raw))
+	terms := make([]string, 0, len(raw))
+	for _, value := range raw {
+		term := strings.ToLower(value)
+		if term == "" {
+			return nil, errors.New("empty query term")
+		}
+		if !seen[term] {
+			seen[term] = true
+			terms = append(terms, term)
+		}
+	}
+	return terms, nil
+}
+
 type aggregate struct {
 	Count int    `json:"count"`
 	Sum   uint64 `json:"sum"`
@@ -653,17 +672,9 @@ func run(ctx context.Context, src rangeSource, c corpus, q query, m mode) (resul
 	if q.K < 0 || q.K > 1000 || len(q.Terms) == 0 || q.Tenant < -1 || q.Tenant > 255 {
 		return result{}, errors.New("invalid query")
 	}
-	seen := make(map[string]bool)
-	terms := make([]string, 0, len(q.Terms))
-	for _, raw := range q.Terms {
-		term := strings.ToLower(raw)
-		if term == "" {
-			return result{}, errors.New("empty query term")
-		}
-		if !seen[term] {
-			seen[term] = true
-			terms = append(terms, term)
-		}
+	terms, err := normalizeQueryTerms(q.Terms)
+	if err != nil {
+		return result{}, err
 	}
 	idf := make([]float64, len(terms))
 	for i, term := range terms {
