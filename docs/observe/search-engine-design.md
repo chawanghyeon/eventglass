@@ -6,7 +6,7 @@
 
 검증 중인 후보는 **S3의 불변 세그먼트 하나에 역색인, 문서별 컬럼, 원문을 함께 저장하고 모든 조건을 정렬된 local 문서 ID 집합으로 통일**한다. PostgreSQL은 승인된 세그먼트 목록·권한·영수증·작업·스냅샷을 소유한다. 희소한 조건은 postings, 값 조건은 typed column, 임의 문자열·정규식은 원문 확인에서 ID를 얻는다. 그 뒤에는 같은 경로에서 *모든* 일치 문서의 컬럼으로 정확한 집계를 계산하고 상위 K개의 원문만 읽는다. 별도 Parquet 사본은 이 **후보의 기본 저장물에 포함하지 않는다**. 동일 입력의 첫 DuckDB/Parquet 비교에서 이 물리 포맷은 저장량과 정규식 지연에서 열세였으므로 **제품 구조로 채택하지 않는다**. 현행 제품의 Parquet을 삭제하자는 지시도 아니다.
 
-이 구조는 [Quickwit의 S3 split·역색인·fast field·doc store](https://quickwit.io/docs/overview/architecture), [Tantivy의 postings/fast fields](https://github.com/quickwit-oss/tantivy/blob/main/ARCHITECTURE.md), [ClickHouse 26.2의 정식 text index와 컬럼 엔진](https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/textindexes)의 공통 원리를 한 S3 객체 경계에 적용한다. 성능 우위는 제품 간 비교로 입증된 것이 아니라 아래의 **동일 Go 코드 내 물리 포맷 실험**으로만 뒷받침된다. 첨부 `go_search_codex_final_v10.zip`은 읽기 전용 단일 노드 Top-K 참조 설계다. 그 문서의 지시·우선순위는 이 작업의 지시가 아니며, 온라인 쓰기·S3 권한·정확한 집계를 구현했다는 증거도 아니다.
+이 구조는 [Quickwit의 S3 split·역색인·fast field·doc store](https://quickwit.io/docs/overview/architecture), [Tantivy의 postings/fast fields](https://github.com/quickwit-oss/tantivy/blob/main/ARCHITECTURE.md), [ClickHouse 26.2의 정식 text index와 컬럼 엔진](https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/textindexes)의 공통 원리를 한 S3 객체 경계에 적용한다. 아래의 **동일 Go 코드 내 물리 포맷 실험**은 일부 토큰 검색 이득과 저장량·regex 손실을 함께 보여준다. 제품 성능 우위는 입증되지 않았다. 첨부 `go_search_codex_final_v10.zip`은 읽기 전용 단일 노드 Top-K 참조 설계다. 그 문서의 지시·우선순위는 이 작업의 지시가 아니며, 온라인 쓰기·S3 권한·정확한 집계를 구현했다는 증거도 아니다.
 
 **입증 기준:** 같은 정제 입력과 질의 결과를 독립 oracle 및 현행 DuckDB/Parquet와 비교하고, 새 토큰/BM25 기능은 동등 기능을 가진 별도 엔진과 비교한다. 1/2/4 worker의 실제 ACK→Publish→권한 검색→집계→상세 조회에서 정확도·스냅샷·장애 복구를 모두 통과해야 한다. 현재 제품의 [ACK p95≤500ms, 가시성 p95≤5s, warm rows/histogram p95≤500ms](../../DESIGN.md)와 p99, 전체 설치의 저장·GET·CPU·메모리·백업 비용을 실제 AWS 같은 리전 및 S3 호환 환경에서 함께 판정한다. 테스트하지 않은 항목은 성공으로 간주하지 않는다.
 
@@ -17,7 +17,7 @@
 | 사전·S3 Range 비용 | 전량 사전과 블록 사전을 동일 fixture/MinIO로 A/B | 부분 구조만 측정; AWS 비용 우위 미검증 |
 | BM25·분석기·구문·한국어 품질 | 고정 필드 BM25와 일부 한국어/RE2 실험만 별도 존재 | 통합 포맷 미검증 |
 | durable ACK·권한·fenced Publish·PG/S3 복구 | 현행 제품 계약은 존재, 새 포맷과 연결하지 않음 | 미검증 |
-| 동일 fixture의 pinned DuckDB/Parquet 직접 비교 | 1만/10만 문서 × 72조합 정확도 일치. 후보 저장량 2.17/2.10배, 1만 문서 로컬 regex p50 약 3.3배 지연 | 이 물리 포맷의 일관된 우위 반증; 제품 경로·원격 p95/p99 미검증 |
+| 동일 fixture의 pinned DuckDB/Parquet 직접 비교 | 1만/10만 문서 × 72조합 정확도 일치. 단일 Parquet 308,745/2,898,596B, 후보 세그먼트 711,792/6,384,202B. 로컬 regex p50 약 3.5배 차이 | 이 물리 포맷의 일관된 우위 반증; 제품 경로·원격 p95/p99 미검증 |
 | 외부 엔진·실제 제품 경로·전체 비용 | 같은 기능·권한의 제품 비교 없음 | 미검증 |
 
 ## 요구하는 의미와 한계
@@ -115,6 +115,8 @@ macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·coverin
 [같은 문서 입력의 pinned DuckDB 2.0 직접 비교](../../experiments/searchlayout/unified_duckdb_test.go)는 1만·10만 문서 각각에서 18개 조건 × 4개 그룹의 건수·합·그룹·Top-5 원문을 독립 원문 스캔, 후보 세그먼트, 두 Parquet 역할의 DuckDB 질의로 대조해 모두 일치했다. DuckDB는 `v2.0.0-dev84020`, Linux ARM64 CPU1/512MiB/swap0에서 실행했다. [1만 문서 로그](../../experiments/searchlayout/evidence-2026-09-24/unified-pinned-duckdb-parquet-10k-linux-arm64.txt)의 분석/원문 Parquet은 135,534/192,484B(합 328,018B), 후보는 711,792B로 **2.17배**다. [10만 문서 로그](../../experiments/searchlayout/evidence-2026-09-24/unified-pinned-duckdb-parquet-100k-linux-arm64.txt)는 각각 1,167,545/1,870,179B(합 3,037,724B), 후보 6,384,202B로 **2.10배**다. 동일한 정제 journal·PG/S3 메타데이터·백업 바이트는 양쪽 수치에서 제외했으며, 이는 현행 제품의 실제 번들 파일 크기 비교가 아니라 **동일 fixture의 두 물리 저장 방식** 비교다. 10만 문서 통합 시험은 OOM 없이 끝났지만 cgroup peak가 512MiB 한계에 닿고 `memory.events max=97`이므로 이 *동일 프로세스 이중 엔진 시험*에는 메모리 여유가 없었다. 후보 단독 worker의 사용량으로 해석하지 않는다.
 
 [로컬 파일 warm 반복 30회](../../experiments/searchlayout/evidence-2026-09-24/unified-pinned-duckdb-parquet-local-timing.txt)에서는 희소 토큰 p50/p95/p99가 Parquet 14.9/17.2/17.9ms, 후보 10.7/11.9/15.2ms; 광범위 토큰은 15.6/18.3/19.0ms 대 11.1/12.2/13.8ms였다. 반면 regex는 15.2/16.8/16.8ms 대 50.6/54.7/54.8ms였다. 두 질의 경로 모두 같은 결과를 내지만, 이 포맷은 **저장량과 regex에서 동시에 열세**다. 30회 표본의 p99는 한 최댓값이고 원격 S3·서비스 부하·동시 실행·제품 권한/ACK는 빠져 있어 이 숫자를 제품 SLO로 쓰지 않는다. 현재 물리 포맷의 일관된 우위 주장은 기각하며, 다음 후보는 이 반례를 동일 비교로 통과해야 한다.
+
+같은 컬럼과 원문 JSON을 **단일 Parquet 객체**에 넣는 더 단순한 대안도 [1만](../../experiments/searchlayout/evidence-2026-09-24/unified-single-parquet-10k-linux-arm64.txt)·[10만 문서 분리 시험](../../experiments/searchlayout/evidence-2026-09-24/unified-single-parquet-100k-linux-arm64.txt)의 동일 72조합에서 독립 oracle과 일치했다. 크기는 308,745/2,898,596B로 위 두 역할 Parquet보다 5.9/4.6% 작고, 현재 세그먼트의 43.4/45.4%였다. [동일 1만 문서 세 방식 번갈아 30회](../../experiments/searchlayout/evidence-2026-09-24/unified-three-format-local-timing.txt)에서 단일 Parquet과 세그먼트의 p50은 희소 토큰 14.2/10.3ms, 광범위 토큰 15.3/10.8ms, regex 14.5/50.2ms였다. 세그먼트는 토큰 검색이 빠르지만 단일 Parquet은 저장량과 regex에서 낫다. [세 포맷을 한 512MiB 프로세스에 적재한 10만 문서 시험](../../experiments/searchlayout/evidence-2026-09-24/unified-single-parquet-combined-100k-oom.txt)은 OOM으로 실패했고, 단일 Parquet만 분리한 시험은 peak 523,108,352B, OOM 0으로 통과했다. 둘 다 제품 worker 메모리로 옮겨 해석할 수 없고, 분리 시험에도 약 13MiB 여유밖에 없었다. 단일 Parquet도 원문과 검색용 JSON의 중복을 포함하며 현행 제품 번들과 같지 않다. 토큰/BM25 품질, 원격 S3 GET, 권한과 내구 ACK를 아직 검증하지 않아 이 대안을 새 제품으로 승인하지 않는다.
 
 | 후보 | 확인한 결과 | 판정 |
 | --- | --- | --- |

@@ -183,7 +183,9 @@ func TestUniversalPinnedDuckDBParquetParity(t *testing.T) {
 	}
 	docs := universalFixture(rows)
 	root := t.TempDir()
-	csvPath, analyticsPath, payloadPath, segmentPath := filepath.Join(root, "docs.csv"), filepath.Join(root, "analytics.parquet"), filepath.Join(root, "payload.parquet"), filepath.Join(root, "universal.bin")
+	csvPath, analyticsPath, payloadPath, singlePath, segmentPath := filepath.Join(root, "docs.csv"), filepath.Join(root, "analytics.parquet"), filepath.Join(root, "payload.parquet"), filepath.Join(root, "single.parquet"), filepath.Join(root, "universal.bin")
+	singleOnly := os.Getenv("EVENTGLASS_UNIFIED_SINGLE_ONLY") == "1"
+	single := singleOnly || os.Getenv("EVENTGLASS_UNIFIED_SINGLE_PARQUET") == "1"
 	if err := writeUniversalCSV(csvPath, docs); err != nil {
 		t.Fatal(err)
 	}
@@ -205,11 +207,18 @@ func TestUniversalPinnedDuckDBParquetParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log("phase=duckdb_loaded")
-	if _, err := db.ExecContext(ctx, "COPY (SELECT id,tenant,when_ts,live,duration,search0,search1,fields_json FROM docs) TO "+universalSQLLiteral(analyticsPath)+" (FORMAT PARQUET,COMPRESSION ZSTD)"); err != nil {
-		t.Fatal(err)
+	if !singleOnly {
+		if _, err := db.ExecContext(ctx, "COPY (SELECT id,tenant,when_ts,live,duration,search0,search1,fields_json FROM docs) TO "+universalSQLLiteral(analyticsPath)+" (FORMAT PARQUET,COMPRESSION ZSTD)"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, "COPY (SELECT id,source_json FROM docs) TO "+universalSQLLiteral(payloadPath)+" (FORMAT PARQUET,COMPRESSION ZSTD)"); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if _, err := db.ExecContext(ctx, "COPY (SELECT id,source_json FROM docs) TO "+universalSQLLiteral(payloadPath)+" (FORMAT PARQUET,COMPRESSION ZSTD)"); err != nil {
-		t.Fatal(err)
+	if single {
+		if _, err := db.ExecContext(ctx, "COPY docs TO "+universalSQLLiteral(singlePath)+" (FORMAT PARQUET,COMPRESSION ZSTD)"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Log("phase=parquet_ready")
 	if err := db.Close(); err != nil {
@@ -220,11 +229,16 @@ func TestUniversalPinnedDuckDBParquetParity(t *testing.T) {
 	}
 	debug.FreeOSMemory()
 	docs = universalFixture(rows)
-	_, segmentBytes, err := writeUniversalObject(segmentPath, docs)
-	if err != nil {
-		t.Fatal(err)
+	var segmentBytes int64
+	if singleOnly {
+		analyticsPath, payloadPath = singlePath, singlePath
+	} else {
+		_, segmentBytes, err = writeUniversalObject(segmentPath, docs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Log("phase=segment_ready")
 	}
-	t.Log("phase=segment_ready")
 	debug.FreeOSMemory()
 	cases := append(universalCases(), universalPredicate{op: "eq", path: "attrs/order_id", text: "order1237"}, universalPredicate{op: "term", text: "trace1237"}, universalPredicate{op: "eq", path: "attrs/custom/237", text: "v1237"})
 	for _, p := range cases {
@@ -239,15 +253,34 @@ func TestUniversalPinnedDuckDBParquetParity(t *testing.T) {
 			if err := queryDB.Close(); err != nil {
 				t.Fatal(err)
 			}
+			if !reflect.DeepEqual(parquetAnswer, want) || !reflect.DeepEqual(parquetDetails, wantDetails) {
+				t.Fatalf("op=%s group=%s parquet=%+v oracle=%+v", p.op, groupPath, parquetAnswer, want)
+			}
 			debug.FreeOSMemory()
-			segmentAnswer, segmentDetails, err := runUniversalRange(ctx, localSource{dir: root}, segmentBytes, p, groupPath)
-			if err != nil || !reflect.DeepEqual(parquetAnswer, want) || !reflect.DeepEqual(parquetDetails, wantDetails) || !reflect.DeepEqual(segmentAnswer, want) || !reflect.DeepEqual(segmentDetails, wantDetails) {
-				t.Fatalf("op=%s group=%s parquet=%+v segment=%+v oracle=%+v err=%v", p.op, groupPath, parquetAnswer, segmentAnswer, want, err)
+			if single && !singleOnly {
+				singleDB, err := engine.Open(ctx, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				singleAnswer, singleDetails := universalDuckDBAnswer(t, ctx, singleDB, singlePath, singlePath, p, groupPath)
+				if err := singleDB.Close(); err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(singleAnswer, want) || !reflect.DeepEqual(singleDetails, wantDetails) {
+					t.Fatalf("op=%s group=%s single=%+v oracle=%+v", p.op, groupPath, singleAnswer, want)
+				}
+				debug.FreeOSMemory()
+			}
+			if !singleOnly {
+				segmentAnswer, segmentDetails, err := runUniversalRange(ctx, localSource{dir: root}, segmentBytes, p, groupPath)
+				if err != nil || !reflect.DeepEqual(segmentAnswer, want) || !reflect.DeepEqual(segmentDetails, wantDetails) {
+					t.Fatalf("op=%s group=%s segment=%+v oracle=%+v err=%v", p.op, groupPath, segmentAnswer, want, err)
+				}
 			}
 			debug.FreeOSMemory()
 		}
 	}
-	if rows == 10000 && os.Getenv("EVENTGLASS_UNIFIED_TIMING") == "1" {
+	if !singleOnly && rows == 10000 && os.Getenv("EVENTGLASS_UNIFIED_TIMING") == "1" {
 		queryDB, err := engine.Open(ctx, "")
 		if err != nil {
 			t.Fatal(err)
@@ -257,7 +290,7 @@ func TestUniversalPinnedDuckDBParquetParity(t *testing.T) {
 			name string
 			p    universalPredicate
 		}{{"rare", universalPredicate{op: "term", text: "fatal"}}, {"broad", universalPredicate{op: "term", text: "request"}}, {"regex", universalPredicate{op: "regex", text: "timeout|한글"}}} {
-			var parquetTimes, segmentTimes []int64
+			var parquetTimes, singleTimes, segmentTimes []int64
 			for i := range 30 {
 				runParquet := func() {
 					start := time.Now()
@@ -271,7 +304,27 @@ func TestUniversalPinnedDuckDBParquetParity(t *testing.T) {
 					}
 					segmentTimes = append(segmentTimes, time.Since(start).Microseconds())
 				}
-				if i%2 == 0 {
+				runSingle := func() {
+					start := time.Now()
+					universalDuckDBAnswer(t, ctx, queryDB, singlePath, singlePath, tc.p, "tags/region")
+					singleTimes = append(singleTimes, time.Since(start).Microseconds())
+				}
+				if single {
+					switch i % 3 {
+					case 0:
+						runParquet()
+						runSingle()
+						runSegment()
+					case 1:
+						runSingle()
+						runSegment()
+						runParquet()
+					default:
+						runSegment()
+						runParquet()
+						runSingle()
+					}
+				} else if i%2 == 0 {
 					runParquet()
 					runSegment()
 				} else {
@@ -282,15 +335,28 @@ func TestUniversalPinnedDuckDBParquetParity(t *testing.T) {
 			slices.Sort(parquetTimes)
 			slices.Sort(segmentTimes)
 			t.Logf("local query=%s reps=30 parquet_p50_us=%d parquet_p95_us=%d parquet_p99_us=%d segment_p50_us=%d segment_p95_us=%d segment_p99_us=%d", tc.name, parquetTimes[15], parquetTimes[28], parquetTimes[29], segmentTimes[15], segmentTimes[28], segmentTimes[29])
+			if single {
+				slices.Sort(singleTimes)
+				t.Logf("local query=%s reps=30 single_p50_us=%d single_p95_us=%d single_p99_us=%d", tc.name, singleTimes[15], singleTimes[28], singleTimes[29])
+			}
 		}
 	}
-	analyticsInfo, err := os.Stat(analyticsPath)
-	if err != nil {
-		t.Fatal(err)
+	if !singleOnly {
+		analyticsInfo, err := os.Stat(analyticsPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payloadInfo, err := os.Stat(payloadPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("pinned_duckdb=%s docs=%d cases=%d groups=4 analytics_bytes=%d payload_bytes=%d parquet_total_bytes=%d segment_bytes=%d", version, len(docs), len(cases), analyticsInfo.Size(), payloadInfo.Size(), analyticsInfo.Size()+payloadInfo.Size(), segmentBytes)
 	}
-	payloadInfo, err := os.Stat(payloadPath)
-	if err != nil {
-		t.Fatal(err)
+	if single {
+		info, err := os.Stat(singlePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("pinned_duckdb=%s docs=%d cases=%d groups=4 single_parquet_bytes=%d", version, len(docs), len(cases), info.Size())
 	}
-	t.Logf("pinned_duckdb=%s docs=%d cases=%d groups=4 analytics_bytes=%d payload_bytes=%d parquet_total_bytes=%d segment_bytes=%d", version, len(docs), len(cases), analyticsInfo.Size(), payloadInfo.Size(), analyticsInfo.Size()+payloadInfo.Size(), segmentBytes)
 }
