@@ -291,6 +291,9 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 	if os.Getenv("EVENTGLASS_PRODUCT_POSTINGS") == "1" {
 		measureProductPostingSidecar(t, ctx, db, root, single, rows, noisy)
 	}
+	if os.Getenv("EVENTGLASS_PRODUCT_UNIFIED") == "1" {
+		measureProductUnified(t, ctx, root, stage, analytics, payload, rows, noisy)
+	}
 	analyticsInfo, err := os.Stat(analytics)
 	if err != nil {
 		t.Fatal(err)

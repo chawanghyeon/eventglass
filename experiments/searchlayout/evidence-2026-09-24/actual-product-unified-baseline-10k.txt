@@ -1,0 +1,19 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:295: product_unified query=fatal count=52 sum=204
+    product_parquet_test.go:295: product_unified query=request count=4948 sum=19796
+    product_parquet_test.go:295: product_unified query=regex count=52 sum=204
+    product_parquet_test.go:295: product_unified query=dynamic count=2500 sum=10000
+    product_parquet_test.go:295: product_unified query=service count=1667 sum=6666
+    product_parquet_test.go:295: product_unified query=scope_or count=5000 sum=20000
+    product_parquet_test.go:295: product_unified rows=10000 noisy=false segment_bytes=640120 pair_bytes=243321
+    product_parquet_test.go:295: product_unified_parts core=24217 fields=73737 postings=308 source=540288 dictionary=319 other=1251
+    product_parquet_test.go:309: actual_converter rows=10000 noisy=false analytics_bytes=107369 payload_bytes=135952 pair_bytes=243321 single_bytes=230684
+--- PASS: TestActualConverterSingleParquetParity (1.18s)
+PASS
+161206272
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0

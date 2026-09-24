@@ -10,9 +10,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -39,6 +41,7 @@ type universalBlock struct {
 
 type universalCore struct {
 	Tenant   []int   `json:"tenant"`
+	Project  []int64 `json:"project,omitempty"`
 	When     []int64 `json:"when"`
 	Live     []bool  `json:"live"`
 	Duration []int64 `json:"duration"`
@@ -63,7 +66,11 @@ func writeUniversalObject(path string, docs []universalDoc) (universalDirectory,
 		}
 		return writePart(f, data, true)
 	}
-	dir.Core, err = writeJSON(universalCore{Tenant: s.Tenant, When: s.When, Live: s.Live, Duration: s.Duration})
+	projects := s.Project
+	if !slices.ContainsFunc(projects, func(project int64) bool { return project != 0 }) {
+		projects = nil
+	}
+	dir.Core, err = writeJSON(universalCore{Tenant: s.Tenant, Project: projects, When: s.When, Live: s.Live, Duration: s.Duration})
 	if err != nil {
 		return dir, 0, err
 	}
@@ -234,7 +241,18 @@ func universalBlockFor(blocks []universalBlock, key string) int {
 	return sort.Search(len(blocks), func(i int) bool { return blocks[i].First > key }) - 1
 }
 
+type universalScope struct {
+	tenant  int
+	project int64
+	start   int64
+	end     int64
+}
+
 func runUniversalRange(ctx context.Context, src rangeSource, size int64, p universalPredicate, groupPath string) (universalAnswer, []universalDoc, error) {
+	return runUniversalRangeScoped(ctx, src, size, p, groupPath, universalScope{tenant: 1, start: 20, end: 80})
+}
+
+func runUniversalRangeScoped(ctx context.Context, src rangeSource, size int64, p universalPredicate, groupPath string, scope universalScope) (universalAnswer, []universalDoc, error) {
 	dir, err := readUniversalDirectory(ctx, src, size)
 	if err != nil {
 		return universalAnswer{}, nil, err
@@ -270,14 +288,17 @@ func runUniversalRange(ctx context.Context, src rangeSource, size int64, p unive
 	if err := read(dir.Core, &core); err != nil {
 		return universalAnswer{}, nil, err
 	}
-	if len(core.Tenant) != dir.Count || len(core.When) != dir.Count || len(core.Live) != dir.Count || len(core.Duration) != dir.Count {
+	if len(core.Tenant) != dir.Count || len(core.When) != dir.Count || len(core.Live) != dir.Count || len(core.Duration) != dir.Count || len(core.Project) != 0 && len(core.Project) != dir.Count {
 		return universalAnswer{}, nil, errors.New("invalid universal core")
 	}
+	if scope.project != 0 && len(core.Project) != dir.Count {
+		return universalAnswer{}, nil, errors.New("project scope missing from universal core")
+	}
 	s := universalSegment{Tenant: core.Tenant, When: core.When, Live: core.Live, Duration: core.Duration,
-		Search: make([][]string, dir.Count), Fields: make(map[string][]universalEntry), terms: make(map[string][]int), exact: make(map[string][]int)}
+		Fields: make(map[string][]universalEntry), terms: make(map[string][]int), exact: make(map[string][]int), scans: make(map[string][]int)}
 	neededFields := map[string]bool{groupPath: true}
 	neededTerms := make(map[string]bool)
-	needsSource := false
+	neededScans := make(map[string]universalPredicate)
 	var walk func(universalPredicate)
 	walk = func(p universalPredicate) {
 		switch p.op {
@@ -286,7 +307,7 @@ func runUniversalRange(ctx context.Context, src rangeSource, size int64, p unive
 		case "eq", "neq", "gte", "exists", "null", "array":
 			neededFields[p.path] = true
 		case "contains", "regex":
-			needsSource = true
+			neededScans[p.op+"\x00"+p.text] = p
 		}
 		for _, child := range p.children {
 			walk(child)
@@ -345,9 +366,11 @@ func runUniversalRange(ctx context.Context, src rangeSource, size int64, p unive
 		}
 	}
 	pageCache := make(map[int][]universalDoc)
-	readPage := func(page int) ([]universalDoc, error) {
-		if docs, ok := pageCache[page]; ok {
-			return docs, nil
+	readPage := func(page int, retain bool) ([]universalDoc, error) {
+		if retain {
+			if docs, ok := pageCache[page]; ok {
+				return docs, nil
+			}
 		}
 		var docs []universalDoc
 		if err := read(dir.Sources[page], &docs); err != nil {
@@ -360,31 +383,54 @@ func runUniversalRange(ctx context.Context, src rangeSource, size int64, p unive
 			if d.ID != page*universalPageDocs+i {
 				return nil, errors.New("invalid source document ID")
 			}
+			if d.Tenant != core.Tenant[d.ID] || d.When != core.When[d.ID] || d.Live != core.Live[d.ID] || d.Duration != core.Duration[d.ID] || len(core.Project) != 0 && d.Project != core.Project[d.ID] {
+				return nil, errors.New("source document differs from indexed scope or aggregate columns")
+			}
 		}
-		pageCache[page] = docs
+		if retain {
+			pageCache[page] = docs
+		}
 		return docs, nil
 	}
-	if needsSource {
+	if len(neededScans) > 0 {
+		compiled := make(map[string]*regexp.Regexp)
+		for key, pred := range neededScans {
+			s.scans[key] = nil
+			if pred.op == "regex" {
+				re, err := regexp.Compile(pred.text)
+				if err != nil {
+					return universalAnswer{}, nil, err
+				}
+				compiled[key] = re
+			}
+		}
 		for page := range dir.Sources {
-			docs, err := readPage(page)
+			docs, err := readPage(page, false)
 			if err != nil {
 				return universalAnswer{}, nil, err
 			}
 			for _, d := range docs {
-				s.Search[d.ID] = d.Search
+				for key, pred := range neededScans {
+					for _, scalar := range d.Search {
+						if pred.op == "contains" && strings.Contains(scalar, pred.text) || pred.op == "regex" && compiled[key].MatchString(scalar) {
+							s.scans[key] = append(s.scans[key], d.ID)
+							break
+						}
+					}
+				}
 			}
 		}
 	}
 	var ids []int
 	for _, id := range selectUniversal(s, p) {
-		if s.Tenant[id] == 1 && s.When[id] >= 20 && s.When[id] < 80 && s.Live[id] {
+		if s.Tenant[id] == scope.tenant && (scope.project == 0 || core.Project[id] == scope.project) && s.When[id] >= scope.start && s.When[id] < scope.end && s.Live[id] {
 			ids = append(ids, id)
 		}
 	}
 	answer := reduceUniversal(s, ids, groupPath)
 	var details []universalDoc
 	for _, id := range answer.top {
-		page, err := readPage(id / universalPageDocs)
+		page, err := readPage(id/universalPageDocs, true)
 		if err != nil {
 			return universalAnswer{}, nil, err
 		}

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"reflect"
@@ -21,6 +22,8 @@ type universalValue struct {
 
 type universalDoc struct {
 	ID, Tenant int
+	Project    int64           `json:"Project,omitempty"`
+	Canonical  json.RawMessage `json:"Canonical,omitempty"`
 	When       int64
 	Live       bool
 	Duration   int64
@@ -35,6 +38,7 @@ type universalEntry struct {
 
 type universalSegment struct {
 	Tenant   []int
+	Project  []int64
 	When     []int64
 	Live     []bool
 	Duration []int64
@@ -42,6 +46,7 @@ type universalSegment struct {
 	Fields   map[string][]universalEntry
 	terms    map[string][]int
 	exact    map[string][]int
+	scans    map[string][]int
 }
 
 func universalKey(path, kind, value string) string {
@@ -54,6 +59,7 @@ func makeUniversalSegment(docs []universalDoc) universalSegment {
 	s := universalSegment{Fields: make(map[string][]universalEntry), terms: make(map[string][]int), exact: make(map[string][]int)}
 	for id, d := range docs {
 		s.Tenant = append(s.Tenant, d.Tenant)
+		s.Project = append(s.Project, d.Project)
 		s.When = append(s.When, d.When)
 		s.Live = append(s.Live, d.Live)
 		s.Duration = append(s.Duration, d.Duration)
@@ -139,6 +145,9 @@ func selectUniversal(s universalSegment, p universalPredicate) []int {
 			}
 		}
 	case "contains", "regex":
+		if ids, ok := s.scans[p.op+"\x00"+p.text]; ok {
+			return slices.Clone(ids)
+		}
 		var re *regexp.Regexp
 		if p.op == "regex" {
 			re = regexp.MustCompile(p.text)
