@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -23,7 +24,19 @@ type productParquetOracle struct {
 	sum   int64
 }
 
-func productParquetFixture(t *testing.T, path string, rows int, noisy bool) (map[string][]byte, map[string]productParquetOracle) {
+func productParquetRaw(i int, noisy bool) ([]byte, error) {
+	message := "request completed"
+	if i%97 == 0 {
+		message = "fatal timeout 한글"
+	}
+	rawFields := map[string]any{"message": message, "service": []string{"api", "worker", "sdk"}[i%3], "latency": int64(i % 1000), "secret": "[Filtered]"}
+	if noisy {
+		rawFields["trace"] = fmt.Sprintf("trace-%064x", i)
+	}
+	return json.Marshal(rawFields)
+}
+
+func productParquetFixture(t *testing.T, path string, rows int, noisy bool) map[string]productParquetOracle {
 	t.Helper()
 	f, err := os.Create(path)
 	if err != nil {
@@ -31,7 +44,6 @@ func productParquetFixture(t *testing.T, path string, rows int, noisy bool) (map
 	}
 	defer f.Close()
 	encoder := json.NewEncoder(f)
-	wantRaw := make(map[string][]byte, rows)
 	want := map[string]productParquetOracle{"scalar": {}, "regex": {}, "dynamic": {}, "dynamic_sparse": {}}
 	const epoch = int64(1_700_000_000_000_000)
 	for i := range rows {
@@ -44,11 +56,7 @@ func productParquetFixture(t *testing.T, path string, rows int, noisy bool) (map
 		severity := int16(i % 10)
 		latency := int64(i % 1000)
 		latencyText := fmt.Sprint(latency)
-		rawFields := map[string]any{"message": message, "service": service, "latency": latency, "secret": "[Filtered]"}
-		if noisy {
-			rawFields["trace"] = fmt.Sprintf("trace-%064x", i)
-		}
-		raw, err := json.Marshal(rawFields)
+		raw, err := productParquetRaw(i, noisy)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -75,7 +83,6 @@ func productParquetFixture(t *testing.T, path string, rows int, noisy bool) (map
 		if err := encoder.Encode(staged); err != nil {
 			t.Fatal(err)
 		}
-		wantRaw[id] = raw
 		if project != 10 {
 			continue
 		}
@@ -102,7 +109,7 @@ func productParquetFixture(t *testing.T, path string, rows int, noisy bool) (map
 			want["dynamic_sparse"] = entry
 		}
 	}
-	return wantRaw, want
+	return want
 }
 
 func productParquetMetric(t *testing.T, ctx context.Context, db *sql.DB, path, query string) productParquetOracle {
@@ -129,7 +136,11 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 	root := t.TempDir()
 	stage := filepath.Join(root, "selected.jsonl")
 	noisy := os.Getenv("EVENTGLASS_PRODUCT_PARQUET_NOISY") == "1"
-	wantRaw, want := productParquetFixture(t, stage, rows, noisy)
+	want := productParquetFixture(t, stage, rows, noisy)
+	firstRaw, err := productParquetRaw(0, noisy)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := engine.ConversionRequest{
 		Version: engine.ConversionProtocolVersion, StagePath: stage,
 		OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"),
@@ -171,30 +182,36 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 		}
 	}
 	for _, path := range []string{payload, single} {
-		rows, err := db.QueryContext(ctx, "SELECT record_id,raw_json FROM read_parquet(?) ORDER BY record_id", path)
+		resultRows, err := db.QueryContext(ctx, "SELECT record_id,raw_json FROM read_parquet(?) ORDER BY record_id", path)
 		if err != nil {
 			t.Fatal(err)
 		}
 		seen := 0
-		for rows.Next() {
+		for resultRows.Next() {
 			var id, raw string
-			if err := rows.Scan(&id, &raw); err != nil {
-				rows.Close()
+			if err := resultRows.Scan(&id, &raw); err != nil {
+				resultRows.Close()
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual([]byte(raw), wantRaw[id]) || !strings.Contains(raw, "[Filtered]") {
-				rows.Close()
+			value, err := strconv.ParseUint(id, 16, 64)
+			if err != nil || value == 0 || value > uint64(rows) {
+				resultRows.Close()
+				t.Fatalf("invalid record id=%s err=%v", id, err)
+			}
+			wantRaw, err := productParquetRaw(int(value)-1, noisy)
+			if err != nil || !reflect.DeepEqual([]byte(raw), wantRaw) || !strings.Contains(raw, "[Filtered]") {
+				resultRows.Close()
 				t.Fatalf("raw mismatch id=%s", id)
 			}
 			seen++
 		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
+		if err := resultRows.Err(); err != nil {
+			resultRows.Close()
 			t.Fatal(err)
 		}
-		rows.Close()
-		if seen != len(wantRaw) {
-			t.Fatalf("path=%s records=%d want=%d", path, seen, len(wantRaw))
+		resultRows.Close()
+		if seen != rows {
+			t.Fatalf("path=%s records=%d want=%d", path, seen, rows)
 		}
 	}
 	// The current child requires distinct analytics and payload paths. A hard
@@ -259,14 +276,14 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 				}
 			} else {
 				var gotID, raw string
-				if err := db.QueryRowContext(ctx, "SELECT record_id,raw_json FROM read_parquet(?)", output).Scan(&gotID, &raw); err != nil || gotID != id || !reflect.DeepEqual([]byte(raw), wantRaw[id]) {
+				if err := db.QueryRowContext(ctx, "SELECT record_id,raw_json FROM read_parquet(?)", output).Scan(&gotID, &raw); err != nil || gotID != id || !reflect.DeepEqual([]byte(raw), firstRaw) {
 					t.Fatalf("product detail source=%s id=%s err=%v", source.name, gotID, err)
 				}
 			}
 		}
 	}
 	if os.Getenv("EVENTGLASS_PRODUCT_GATEWAY") == "1" {
-		measureProductGateway(t, ctx, root, db, analytics, payload, single, aggregate, detail, wantRaw, rows)
+		measureProductGateway(t, ctx, root, db, analytics, payload, single, aggregate, detail, firstRaw, rows)
 	}
 	if os.Getenv("EVENTGLASS_PRODUCT_POSTINGS") == "1" {
 		measureProductPostingSidecar(t, ctx, db, root, single, rows, noisy)

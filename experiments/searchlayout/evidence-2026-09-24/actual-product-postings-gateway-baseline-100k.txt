@@ -1,0 +1,18 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:289: posting_sidecar noisy=false base_bytes=2208874 postings_bytes=330363 total_bytes=2539237 posting_rows=301031 unique_terms=8
+    product_parquet_test.go:289: posting_query source=local noisy=false term=fatal matches=516 reps=30 scan_p50_us=5918 scan_p95_us=7343 scan_p99_us=8134 index_p50_us=5001 index_p95_us=5989 index_p99_us=6240
+    product_parquet_test.go:289: posting_query source=gateway noisy=false term=fatal matches=516 reps=30 scan_p50_us=23021 scan_p95_us=24228 scan_p99_us=25972 index_p50_us=28089 index_p95_us=32822 index_p99_us=33580
+    product_parquet_test.go:289: posting_gateway noisy=false term=fatal scan_get_p50=2 index_get_p50=3 scan_bytes_p50=2208874 index_bytes_p50=2539237 scan_get_range=2..2 index_get_range=3..3
+    product_parquet_test.go:289: posting_query source=local noisy=false term=request matches=49484 reps=30 scan_p50_us=4547 scan_p95_us=5012 scan_p99_us=6016 index_p50_us=9329 index_p95_us=11174 index_p99_us=14942
+    product_parquet_test.go:289: posting_query source=gateway noisy=false term=request matches=49484 reps=30 scan_p50_us=21758 scan_p95_us=29544 scan_p99_us=30097 index_p50_us=29122 index_p95_us=38743 index_p99_us=40569
+    product_parquet_test.go:289: posting_gateway noisy=false term=request scan_get_p50=2 index_get_p50=3 scan_bytes_p50=2208874 index_bytes_p50=2539237 scan_get_range=2..2 index_get_range=3..3
+    product_parquet_test.go:303: actual_converter rows=100000 noisy=false analytics_bytes=1010847 payload_bytes=1305023 pair_bytes=2315870 single_bytes=2208874
+--- PASS: TestActualConverterSingleParquetParity (9.53s)
+PASS
+536870912
+low 0
+high 0
+max 536
+oom 0
+oom_kill 0
+oom_group_kill 0

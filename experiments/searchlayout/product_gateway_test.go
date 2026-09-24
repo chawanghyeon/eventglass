@@ -65,7 +65,7 @@ func (s *productFileRangeStore) take(keys ...string) productRangeCount {
 	return total
 }
 
-func measureProductGateway(t *testing.T, ctx context.Context, root string, db *sql.DB, analytics, payload, single string, aggregate, detail engine.QueryOperation, wantRaw map[string][]byte, rows int) {
+func measureProductGateway(t *testing.T, ctx context.Context, root string, db *sql.DB, analytics, payload, single string, aggregate, detail engine.QueryOperation, firstRaw []byte, rows int) {
 	t.Helper()
 	files := map[string]string{"analytics": analytics, "payload": payload, "single": single}
 	store := &productFileRangeStore{paths: files, counts: make(map[string]productRangeCount)}
@@ -136,7 +136,7 @@ func measureProductGateway(t *testing.T, ctx context.Context, root string, db *s
 					}
 				} else {
 					var gotID, raw string
-					if err := db.QueryRowContext(ctx, "SELECT record_id,raw_json FROM read_parquet(?)", output).Scan(&gotID, &raw); err != nil || gotID != id || !reflect.DeepEqual([]byte(raw), wantRaw[id]) {
+					if err := db.QueryRowContext(ctx, "SELECT record_id,raw_json FROM read_parquet(?)", output).Scan(&gotID, &raw); err != nil || gotID != id || !reflect.DeepEqual([]byte(raw), firstRaw) {
 						t.Fatalf("gateway detail source=%s id=%s err=%v", source.name, gotID, err)
 					}
 				}
