@@ -1,0 +1,6 @@
+=== RUN   TestBlockDictionaryWithInlinePostings
+    dictionary_test.go:193: dictionary profile=baseline terms=4100 inline=1 blocks=9 oldCatalog=48363 oldPostings=151157 oldTotal=199520 newBlocks=36778 sparse=94 externalPostings=151143 newTotal=188015
+    dictionary_test.go:193: dictionary profile=noisy terms=104100 inline=100001 blocks=204 oldCatalog=1894112 oldPostings=518137 oldTotal=2412249 newBlocks=1290335 sparse=4874 externalPostings=151143 newTotal=1446352
+--- PASS: TestBlockDictionaryWithInlinePostings (0.34s)
+PASS
+ok  	github.com/chawanghyeon/eventglass/experiments/searchlayout	0.698s
