@@ -1,0 +1,14 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:266: posting_sidecar noisy=false base_bytes=230684 postings_bytes=34165 total_bytes=264849 posting_rows=30104 unique_terms=8
+    product_parquet_test.go:266: posting_query noisy=false term=fatal matches=52 reps=30 scan_p50_us=1407 scan_p95_us=2895 scan_p99_us=2971 index_p50_us=1883 index_p95_us=5219 index_p99_us=5873
+    product_parquet_test.go:266: posting_query noisy=false term=request matches=4948 reps=30 scan_p50_us=1296 scan_p95_us=1578 scan_p99_us=3393 index_p50_us=2336 index_p95_us=2662 index_p99_us=2743
+    product_parquet_test.go:280: actual_converter rows=10000 noisy=false analytics_bytes=107369 payload_bytes=135952 pair_bytes=243321 single_bytes=230684
+--- PASS: TestActualConverterSingleParquetParity (1.04s)
+PASS
+151797760
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0

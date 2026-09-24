@@ -118,7 +118,13 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 	if os.Getenv("EVENTGLASS_PRODUCT_PARQUET") != "1" {
 		t.Skip("opt-in actual converter Parquet comparison")
 	}
-	const rows = 10000
+	rows := 10000
+	if value := os.Getenv("EVENTGLASS_PRODUCT_PARQUET_ROWS"); value != "" {
+		if value != "100000" {
+			t.Fatal("EVENTGLASS_PRODUCT_PARQUET_ROWS must be 100000 when set")
+		}
+		rows = 100000
+	}
 	ctx := context.Background()
 	root := t.TempDir()
 	stage := filepath.Join(root, "selected.jsonl")
@@ -135,7 +141,7 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 		bundles = append(bundles, bundle)
 		return nil
 	})
-	if err != nil || summary.DuckDBVersion != "v2.0.0-dev84020" || len(bundles) != 1 || bundles[0].RowCount != rows {
+	if err != nil || summary.DuckDBVersion != "v2.0.0-dev84020" || len(bundles) != 1 || bundles[0].RowCount != int64(rows) {
 		t.Fatalf("conversion summary=%+v bundles=%d err=%v", summary, len(bundles), err)
 	}
 	analytics, payload := bundles[0].Analytics.Path, bundles[0].Payload.Path
@@ -208,7 +214,7 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 	plan, err := queryplan.BuildPlan(model.DatasetSpec{
 		TenantID: 1, ProjectIDs: []int64{10}, Kinds: []model.Kind{model.KindLog},
 		TimeBasis: model.QueryTimeEvent, StartUS: 1_700_000_000_000_000,
-		EndUS: 1_700_000_000_000_000 + rows*1000, Filter: canonical,
+		EndUS: 1_700_000_000_000_000 + int64(rows)*1000, Filter: canonical,
 	}, model.SnapshotScope{LaneCuts: cuts}, filter)
 	if err != nil {
 		t.Fatal(err)
@@ -248,7 +254,7 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 			}
 			if operation.Kind == "aggregate" {
 				var count int64
-				if err := db.QueryRowContext(ctx, "SELECT m0_valid FROM read_parquet(?)", output).Scan(&count); err != nil || count != rows/2 {
+				if err := db.QueryRowContext(ctx, "SELECT m0_valid FROM read_parquet(?)", output).Scan(&count); err != nil || count != int64(rows/2) {
 					t.Fatalf("product aggregate source=%s count=%d err=%v", source.name, count, err)
 				}
 			} else {
@@ -261,6 +267,9 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 	}
 	if os.Getenv("EVENTGLASS_PRODUCT_GATEWAY") == "1" {
 		measureProductGateway(t, ctx, root, db, analytics, payload, single, aggregate, detail, wantRaw, rows)
+	}
+	if os.Getenv("EVENTGLASS_PRODUCT_POSTINGS") == "1" {
+		measureProductPostingSidecar(t, ctx, db, root, single, rows, noisy)
 	}
 	analyticsInfo, err := os.Stat(analytics)
 	if err != nil {
