@@ -1,0 +1,19 @@
+=== RUN   TestProductCompactSplitMergePinnedGeneration
+    product_compact_generations_test.go:196: compact_generation rows=100000 split=4 merged=1 queries=6 split_index_bytes=4603914 merged_index_bytes=4612212 pinned_old_generation=1
+    product_compact_generations_test.go:205: compact_generation_minio_upload put=5 put_bytes=9216126 head=5 verify_get=5 verify_bytes=9216126
+    product_compact_generations_test.go:205: compact_generation_minio term="request" filter="" segments=4 reps=30 p50_us=29678 p95_us=42568 p99_us=42705 cpu_p50_us=26155 cpu_p95_us=36204 gets_per_query=4 bytes_per_query=4603914
+    product_compact_generations_test.go:205: compact_generation_minio term="request" filter="" segments=1 reps=30 p50_us=28894 p95_us=32163 p99_us=38428 cpu_p50_us=26989 cpu_p95_us=29936 gets_per_query=1 bytes_per_query=4612212
+    product_compact_generations_test.go:205: compact_generation_minio term="request" filter="latency" segments=4 reps=30 p50_us=83694 p95_us=92658 p99_us=92980 cpu_p50_us=80215 cpu_p95_us=85981 gets_per_query=4 bytes_per_query=4603914
+    product_compact_generations_test.go:205: compact_generation_minio term="request" filter="latency" segments=1 reps=30 p50_us=85552 p95_us=101984 p99_us=110065 cpu_p50_us=82954 cpu_p95_us=98717 gets_per_query=1 bytes_per_query=4612212
+    product_compact_generations_test.go:205: compact_generation_minio term="trace-6b19e101442883646595f233b371e57d" filter="" segments=4 reps=30 p50_us=29694 p95_us=44441 p99_us=48251 cpu_p50_us=26994 cpu_p95_us=33304 gets_per_query=4 bytes_per_query=4603914
+    product_compact_generations_test.go:205: compact_generation_minio term="trace-6b19e101442883646595f233b371e57d" filter="" segments=1 reps=30 p50_us=29269 p95_us=33423 p99_us=33596 cpu_p50_us=27682 cpu_p95_us=30861 gets_per_query=1 bytes_per_query=4612212
+    product_compact_generations_test.go:205: compact_generation_minio_query range_get=450 range_bytes=829451340
+--- PASS: TestProductCompactSplitMergePinnedGeneration (17.83s)
+PASS
+440369152
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0
