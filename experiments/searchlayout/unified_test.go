@@ -13,33 +13,33 @@ import (
 
 // This is a semantic probe for one doc-ID space, not a new on-disk format.
 type universalValue struct {
-	kind string // absent is represented by no entry; null is explicit.
-	s    string
-	i    int64
-	a    []string
+	Kind string // absent is represented by no entry; null is explicit.
+	S    string
+	I    int64
+	A    []string
 }
 
 type universalDoc struct {
-	id, tenant int
-	when       int64
-	live       bool
-	duration   int64
-	search     []string // each searchable scalar stays separate
-	fields     map[string]universalValue
+	ID, Tenant int
+	When       int64
+	Live       bool
+	Duration   int64
+	Search     []string // each searchable scalar stays separate
+	Fields     map[string]universalValue
 }
 
 type universalEntry struct {
-	id int
-	v  universalValue
+	ID int
+	V  universalValue
 }
 
 type universalSegment struct {
-	tenant   []int
-	when     []int64
-	live     []bool
-	duration []int64
-	search   [][]string
-	fields   map[string][]universalEntry
+	Tenant   []int
+	When     []int64
+	Live     []bool
+	Duration []int64
+	Search   [][]string
+	Fields   map[string][]universalEntry
 	terms    map[string][]int
 	exact    map[string][]int
 }
@@ -51,15 +51,15 @@ func universalKey(path, kind, value string) string {
 }
 
 func makeUniversalSegment(docs []universalDoc) universalSegment {
-	s := universalSegment{fields: make(map[string][]universalEntry), terms: make(map[string][]int), exact: make(map[string][]int)}
+	s := universalSegment{Fields: make(map[string][]universalEntry), terms: make(map[string][]int), exact: make(map[string][]int)}
 	for id, d := range docs {
-		s.tenant = append(s.tenant, d.tenant)
-		s.when = append(s.when, d.when)
-		s.live = append(s.live, d.live)
-		s.duration = append(s.duration, d.duration)
-		s.search = append(s.search, slices.Clone(d.search))
+		s.Tenant = append(s.Tenant, d.Tenant)
+		s.When = append(s.When, d.When)
+		s.Live = append(s.Live, d.Live)
+		s.Duration = append(s.Duration, d.Duration)
+		s.Search = append(s.Search, slices.Clone(d.Search))
 		seen := make(map[string]bool)
-		for _, scalar := range d.search {
+		for _, scalar := range d.Search {
 			for _, term := range strings.Fields(scalar) {
 				if !seen[term] {
 					s.terms[term] = append(s.terms[term], id)
@@ -67,10 +67,10 @@ func makeUniversalSegment(docs []universalDoc) universalSegment {
 				}
 			}
 		}
-		for path, v := range d.fields {
-			s.fields[path] = append(s.fields[path], universalEntry{id: id, v: v})
-			if v.kind == "string" {
-				key := universalKey(path, v.kind, v.s)
+		for path, v := range d.Fields {
+			s.Fields[path] = append(s.Fields[path], universalEntry{ID: id, V: v})
+			if v.Kind == "string" {
+				key := universalKey(path, v.Kind, v.S)
 				s.exact[key] = append(s.exact[key], id)
 			}
 		}
@@ -120,22 +120,22 @@ func selectUniversal(s universalSegment, p universalPredicate) []int {
 	case "eq":
 		return slices.Clone(s.exact[universalKey(p.path, "string", p.text)])
 	case "gte", "exists", "null", "neq", "array":
-		for _, e := range s.fields[p.path] {
+		for _, e := range s.Fields[p.path] {
 			match := false
 			switch p.op {
 			case "gte":
-				match = e.v.kind == "int" && e.v.i >= p.n
+				match = e.V.Kind == "int" && e.V.I >= p.n
 			case "exists":
 				match = true
 			case "null":
-				match = e.v.kind == "null"
+				match = e.V.Kind == "null"
 			case "neq":
-				match = e.v.kind == "string" && e.v.s != p.text
+				match = e.V.Kind == "string" && e.V.S != p.text
 			case "array":
-				match = e.v.kind == "array" && slices.Contains(e.v.a, p.text)
+				match = e.V.Kind == "array" && slices.Contains(e.V.A, p.text)
 			}
 			if match {
-				out = append(out, e.id)
+				out = append(out, e.ID)
 			}
 		}
 	case "contains", "regex":
@@ -143,7 +143,7 @@ func selectUniversal(s universalSegment, p universalPredicate) []int {
 		if p.op == "regex" {
 			re = regexp.MustCompile(p.text)
 		}
-		for id, scalars := range s.search {
+		for id, scalars := range s.Search {
 			for _, scalar := range scalars {
 				if p.op == "contains" && strings.Contains(scalar, p.text) || p.op == "regex" && re.MatchString(scalar) {
 					out = append(out, id)
@@ -153,7 +153,7 @@ func selectUniversal(s universalSegment, p universalPredicate) []int {
 		}
 	case "and", "or":
 		if len(p.children) == 0 && p.op == "and" {
-			for id := range s.tenant {
+			for id := range s.Tenant {
 				out = append(out, id)
 			}
 			break
@@ -167,7 +167,7 @@ func selectUniversal(s universalSegment, p universalPredicate) []int {
 		}
 	case "not":
 		selected := selectUniversal(s, p.children[0])
-		for id, cursor := 0, 0; id < len(s.tenant); id++ {
+		for id, cursor := 0, 0; id < len(s.Tenant); id++ {
 			if cursor < len(selected) && selected[cursor] == id {
 				cursor++
 			} else {
@@ -181,10 +181,10 @@ func selectUniversal(s universalSegment, p universalPredicate) []int {
 }
 
 func oracleUniversal(d universalDoc, p universalPredicate) bool {
-	v, present := d.fields[p.path]
+	v, present := d.Fields[p.path]
 	switch p.op {
 	case "term":
-		for _, scalar := range d.search {
+		for _, scalar := range d.Search {
 			for _, word := range strings.Fields(scalar) {
 				if word == p.text {
 					return true
@@ -192,26 +192,26 @@ func oracleUniversal(d universalDoc, p universalPredicate) bool {
 			}
 		}
 	case "eq":
-		return present && v.kind == "string" && v.s == p.text
+		return present && v.Kind == "string" && v.S == p.text
 	case "neq":
-		return present && v.kind == "string" && v.s != p.text
+		return present && v.Kind == "string" && v.S != p.text
 	case "gte":
-		return present && v.kind == "int" && v.i >= p.n
+		return present && v.Kind == "int" && v.I >= p.n
 	case "exists":
 		return present
 	case "null":
-		return present && v.kind == "null"
+		return present && v.Kind == "null"
 	case "array":
-		return present && v.kind == "array" && slices.Contains(v.a, p.text)
+		return present && v.Kind == "array" && slices.Contains(v.A, p.text)
 	case "contains":
-		for _, scalar := range d.search {
+		for _, scalar := range d.Search {
 			if strings.Contains(scalar, p.text) {
 				return true
 			}
 		}
 	case "regex":
 		re := regexp.MustCompile(p.text)
-		for _, scalar := range d.search {
+		for _, scalar := range d.Search {
 			if re.MatchString(scalar) {
 				return true
 			}
@@ -246,27 +246,27 @@ func universalGroup(v universalValue, present bool) string {
 	if !present {
 		return "missing"
 	}
-	return fmt.Sprintf("%s:%s:%d", v.kind, v.s, v.i)
+	return fmt.Sprintf("%s:%s:%d", v.Kind, v.S, v.I)
 }
 
 func reduceUniversal(s universalSegment, ids []int, groupPath string) universalAnswer {
 	a := universalAnswer{count: len(ids), group: make(map[string]int64)}
-	entries := s.fields[groupPath]
+	entries := s.Fields[groupPath]
 	cursor := 0
 	for _, id := range ids {
-		for cursor < len(entries) && entries[cursor].id < id {
+		for cursor < len(entries) && entries[cursor].ID < id {
 			cursor++
 		}
 		key := universalGroup(universalValue{}, false)
-		if cursor < len(entries) && entries[cursor].id == id {
-			key = universalGroup(entries[cursor].v, true)
+		if cursor < len(entries) && entries[cursor].ID == id {
+			key = universalGroup(entries[cursor].V, true)
 		}
-		a.sum += s.duration[id]
-		a.group[key] += s.duration[id]
+		a.sum += s.Duration[id]
+		a.group[key] += s.Duration[id]
 	}
 	slices.SortFunc(ids, func(a, b int) int {
-		if s.duration[a] != s.duration[b] {
-			if s.duration[a] > s.duration[b] {
+		if s.Duration[a] != s.Duration[b] {
+			if s.Duration[a] > s.Duration[b] {
 				return -1
 			}
 			return 1
@@ -299,36 +299,36 @@ func TestUniversalSelectionAndAggregation(t *testing.T) {
 		rng := rand.New(rand.NewSource(seed))
 		docs := make([]universalDoc, 200)
 		for id := range docs {
-			d := universalDoc{id: id, tenant: rng.Intn(3), when: int64(rng.Intn(100)), live: rng.Intn(10) != 0,
-				duration: int64(rng.Intn(1000)), search: []string{messages[rng.Intn(len(messages))], messages[rng.Intn(len(messages))]}, fields: make(map[string]universalValue)}
+			d := universalDoc{ID: id, Tenant: rng.Intn(3), When: int64(rng.Intn(100)), Live: rng.Intn(10) != 0,
+				Duration: int64(rng.Intn(1000)), Search: []string{messages[rng.Intn(len(messages))], messages[rng.Intn(len(messages))]}, Fields: make(map[string]universalValue)}
 			if rng.Intn(4) != 0 {
-				d.fields["tags/region"] = universalValue{kind: "string", s: []string{"east", "west", "한글"}[rng.Intn(3)]}
+				d.Fields["tags/region"] = universalValue{Kind: "string", S: []string{"east", "west", "한글"}[rng.Intn(3)]}
 			}
 			if rng.Intn(5) != 0 {
 				if rng.Intn(10) == 0 {
-					d.fields["attrs/status"] = universalValue{kind: "string", s: "500"}
+					d.Fields["attrs/status"] = universalValue{Kind: "string", S: "500"}
 				} else {
-					d.fields["attrs/status"] = universalValue{kind: "int", i: int64(rng.Intn(600))}
+					d.Fields["attrs/status"] = universalValue{Kind: "int", I: int64(rng.Intn(600))}
 				}
 			}
 			if rng.Intn(3) == 0 {
-				d.fields["attrs/note"] = universalValue{kind: "null"}
+				d.Fields["attrs/note"] = universalValue{Kind: "null"}
 			} else if rng.Intn(3) == 0 {
-				d.fields["attrs/note"] = universalValue{kind: "string", s: "present"}
+				d.Fields["attrs/note"] = universalValue{Kind: "string", S: "present"}
 			}
 			if rng.Intn(2) == 0 {
-				d.fields["attrs/features"] = universalValue{kind: "array", a: []string{"checkout", "billing"}}
+				d.Fields["attrs/features"] = universalValue{Kind: "array", A: []string{"checkout", "billing"}}
 			}
-			d.fields["attrs/order_id"] = universalValue{kind: "string", s: fmt.Sprintf("order-%d-%d", seed, id)}
-			d.fields["attrs/a.b"] = universalValue{kind: "string", s: "flat"}
-			d.fields["attrs/a/b"] = universalValue{kind: "string", s: "nested"}
-			d.search = append(d.search, d.fields["attrs/order_id"].s)
+			d.Fields["attrs/order_id"] = universalValue{Kind: "string", S: fmt.Sprintf("order-%d-%d", seed, id)}
+			d.Fields["attrs/a.b"] = universalValue{Kind: "string", S: "flat"}
+			d.Fields["attrs/a/b"] = universalValue{Kind: "string", S: "nested"}
+			d.Search = append(d.Search, d.Fields["attrs/order_id"].S)
 			docs[id] = d
 		}
 		s := makeUniversalSegment(docs)
 		oracleDuration := make([]int64, len(docs))
 		for id := range docs {
-			oracleDuration[id] = docs[id].duration
+			oracleDuration[id] = docs[id].Duration
 		}
 		cases := append(universalCases(), universalPredicate{op: "eq", path: "attrs/order_id", text: fmt.Sprintf("order-%d-7", seed)})
 		for _, p := range cases {
@@ -336,14 +336,14 @@ func TestUniversalSelectionAndAggregation(t *testing.T) {
 			var gotIDs, wantIDs []int
 			for _, id := range selected {
 				d := docs[id]
-				if d.tenant == 1 && d.when >= 20 && d.when < 80 && d.live {
+				if d.Tenant == 1 && d.When >= 20 && d.When < 80 && d.Live {
 					gotIDs = append(gotIDs, id)
 				}
 			}
 			for _, d := range docs {
-				allowed := d.tenant == 1 && d.when >= 20 && d.when < 80 && d.live
+				allowed := d.Tenant == 1 && d.When >= 20 && d.When < 80 && d.Live
 				if allowed && oracleUniversal(d, p) {
-					wantIDs = append(wantIDs, d.id)
+					wantIDs = append(wantIDs, d.ID)
 				}
 			}
 			if !slices.Equal(gotIDs, wantIDs) {
@@ -354,12 +354,12 @@ func TestUniversalSelectionAndAggregation(t *testing.T) {
 				want := universalAnswer{group: make(map[string]int64), top: slices.Clone(wantIDs)}
 				for _, id := range wantIDs {
 					want.count++
-					want.sum += docs[id].duration
+					want.sum += docs[id].Duration
 					key := "missing"
-					if v, present := docs[id].fields[groupPath]; present {
-						key = fmt.Sprintf("%s:%s:%d", v.kind, v.s, v.i)
+					if v, present := docs[id].Fields[groupPath]; present {
+						key = fmt.Sprintf("%s:%s:%d", v.Kind, v.S, v.I)
 					}
-					want.group[key] += docs[id].duration
+					want.group[key] += docs[id].Duration
 				}
 				sort.Slice(want.top, func(i, j int) bool {
 					a, b := want.top[i], want.top[j]
@@ -386,7 +386,7 @@ func BenchmarkUniversalSelection(b *testing.B) {
 		if id%1000 == 0 {
 			word = "fatal"
 		}
-		docs[id] = universalDoc{id: id, tenant: id % 4, live: true, duration: int64(id % 1000), search: []string{word}}
+		docs[id] = universalDoc{ID: id, Tenant: id % 4, Live: true, Duration: int64(id % 1000), Search: []string{word}}
 	}
 	s := makeUniversalSegment(docs)
 	for _, term := range []string{"fatal", "request"} {
@@ -395,7 +395,7 @@ func BenchmarkUniversalSelection(b *testing.B) {
 			for range b.N {
 				var sum int64
 				for _, id := range selectUniversal(s, p) {
-					sum += s.duration[id]
+					sum += s.Duration[id]
 				}
 				universalSink = sum
 			}
@@ -404,8 +404,8 @@ func BenchmarkUniversalSelection(b *testing.B) {
 			for range b.N {
 				var sum int64
 				for id, d := range docs {
-					if d.search[0] == term {
-						sum += docs[id].duration
+					if d.Search[0] == term {
+						sum += docs[id].Duration
 					}
 				}
 				universalSink = sum
@@ -417,7 +417,7 @@ func BenchmarkUniversalSelection(b *testing.B) {
 		for range b.N {
 			var sum int64
 			for _, id := range selectUniversal(s, p) {
-				sum += s.duration[id]
+				sum += s.Duration[id]
 			}
 			universalSink = sum
 		}
@@ -426,8 +426,8 @@ func BenchmarkUniversalSelection(b *testing.B) {
 		for range b.N {
 			var sum int64
 			for _, d := range docs {
-				if strings.Contains(d.search[0], "fatal") {
-					sum += d.duration
+				if strings.Contains(d.Search[0], "fatal") {
+					sum += d.Duration
 				}
 			}
 			universalSink = sum

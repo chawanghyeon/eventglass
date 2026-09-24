@@ -1,0 +1,11 @@
+=== RUN   TestUniversalRangeRoundTrip
+    unified_range_test.go:415: local docs=10000 objectBytes=715490 directoryBytes=136754 coreBytes=2734 terms=10007 fields=1007 verified=72
+--- PASS: TestUniversalRangeRoundTrip (2.28s)
+PASS
+82751488
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0
