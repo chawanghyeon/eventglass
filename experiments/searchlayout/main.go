@@ -192,11 +192,16 @@ func execute() error {
 	segmentDocs := flag.Int("segment", 10000, "documents per immutable segment")
 	pageDocs := flag.Int("page", 1024, "documents per compressed column/source page")
 	repetitions := flag.Int("reps", 5, "timed repetitions per query")
+	matrix := flag.Bool("matrix", false, "compare persisted physical layouts against the same full-scan oracle")
+	profile := flag.String("profile", "baseline", "matrix corpus: baseline, noisy, clustered, or wide_fields")
 	minioEndpoint := flag.String("minio-endpoint", "", "optional temporary local MinIO endpoint")
 	minioBucket := flag.String("minio-bucket", "eventglass-search-probe", "temporary local MinIO bucket")
 	flag.Parse()
 	if *n < 1 || *vocabulary < 1 || *repetitions < 1 {
 		return fmt.Errorf("invalid flags")
+	}
+	if *matrix {
+		return executeMatrix(*n, *vocabulary, *segmentDocs, *pageDocs, *repetitions, *profile, *minioEndpoint, *minioBucket)
 	}
 	dir, err := os.MkdirTemp("", "eventglass-go-layout-")
 	if err != nil {

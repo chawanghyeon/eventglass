@@ -37,6 +37,8 @@ func TestQueryMatchesFullScan(t *testing.T) {
 		{Terms: []string{"timeout"}, Tenant: -1, K: 10},
 		{Terms: []string{"request"}, Tenant: -1, K: 10},
 		{Terms: []string{"fatal", "timeout"}, Tenant: -1, K: 10},
+		{Terms: []string{"tag7"}, Tenant: -1, K: 10},
+		{Terms: []string{"timeout", "tag7"}, All: true, Tenant: -1, K: 10},
 		{Terms: []string{"service", "request"}, All: true, Tenant: 3, K: 10},
 		{Terms: []string{"missing"}, Tenant: -1, K: 10},
 		{Terms: []string{"request"}, Tenant: 2, K: 0},
@@ -140,5 +142,92 @@ func TestCancelledQuery(t *testing.T) {
 	_, err = run(ctx, localSource{dir: dir}, c, query{Terms: []string{"request"}, Tenant: -1, K: 10}, densePayload)
 	if err == nil {
 		t.Fatal("cancelled query succeeded")
+	}
+}
+
+func TestPersistedAlternativeLayoutsMatchFullScan(t *testing.T) {
+	root := t.TempDir()
+	docs := generated(12_000, 997)
+	baseDir := filepath.Join(root, "shared")
+	if _, err := build(baseDir, docs, 2000, 256); err != nil {
+		t.Fatal(err)
+	}
+	base, err := load(baseDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	packedDir := filepath.Join(root, "packed")
+	if _, err := buildPacked(packedDir, docs, 2000, 256); err != nil {
+		t.Fatal(err)
+	}
+	packed, err := load(packedDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverDir := filepath.Join(root, "covering")
+	cover, err := buildCovering(coverDir, docs, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowDir := filepath.Join(root, "row")
+	row, err := buildRowOnly(rowDir, baseDir, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, layout := range []struct {
+		dir string
+		c   corpus
+	}{{baseDir, base}, {packedDir, packed}, {coverDir, cover}, {rowDir, row}} {
+		if size, err := storedSize(layout.dir, layout.c); err != nil || size == 0 {
+			t.Fatalf("missing persisted layout: %d %v", size, err)
+		}
+	}
+	raw := filepath.Join(root, "raw.jsonl.z")
+	if _, err := writeRaw(raw, docs); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []query{
+		{Terms: []string{"fatal"}, Tenant: -1, K: 10},
+		{Terms: []string{"timeout"}, Tenant: -1, K: 10},
+		{Terms: []string{"request"}, Tenant: -1, K: 10},
+		{Terms: []string{"fatal", "timeout"}, Tenant: -1, K: 10},
+		{Terms: []string{"tag7"}, Tenant: -1, K: 10},
+		{Terms: []string{"timeout", "tag7"}, All: true, Tenant: -1, K: 10},
+		{Terms: []string{"service", "request"}, All: true, Tenant: 3, K: 10},
+		{Terms: []string{"missing"}, Tenant: -1, K: 10},
+	} {
+		want, err := scanRaw(raw, base, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		covered, err := run(context.Background(), localSource{dir: coverDir}, cover, q, denseColumns)
+		if err != nil || !equivalent(covered, want) {
+			t.Fatalf("covering query %+v: %v equivalent=%v", q, err, equivalent(covered, want))
+		}
+		bitpacked, err := run(context.Background(), localSource{dir: packedDir}, packed, q, denseColumns)
+		if err != nil || !equivalent(bitpacked, want) {
+			t.Fatalf("packed query %+v: %v equivalent=%v", q, err, equivalent(bitpacked, want))
+		}
+		scanned, err := runRowScan(context.Background(), localSource{dir: rowDir}, row, q)
+		if err != nil || !equivalent(scanned, want) {
+			t.Fatalf("row query %+v: %v equivalent=%v", q, err, equivalent(scanned, want))
+		}
+	}
+}
+
+func TestPackedColumnsRoundTripBounds(t *testing.T) {
+	docs := []document{
+		{Tenant: 0, Group: 0, Duration: 65535, Text: "one"},
+		{Tenant: 255, Group: 65535, Duration: 0, Text: strings.Repeat("x ", 254) + "x"},
+	}
+	got, err := decodePackedColumns(encodePackedColumns(docs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 12 || got[0] != 0 || got[5] != 1 || got[6] != 255 || got[11] != 255 {
+		t.Fatalf("incorrect packed columns: %v", got)
+	}
+	if _, err := decodePackedColumns([]byte{0}); err == nil {
+		t.Fatal("accepted truncated packed page")
 	}
 }

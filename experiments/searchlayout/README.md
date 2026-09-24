@@ -1,29 +1,41 @@
 # S3 search layout experiment
 
-This is an isolated Go experiment, not a production Eventglass query path. It tests one physical idea: each immutable object holds sorted term postings, compressed typed column pages, and compressed source pages. All three use the same local document ID. A small binary catalog stores the vocabulary once, document frequencies, and byte ranges; it is written after the objects. The query walks matching IDs once to update exact `COUNT`/`SUM` by group and BM25 top 10, then reads source pages only for the winning hits. It never treats the top 10 as the aggregation input.
+This isolated Go program compares physical formats for **BM25 top K plus exact `COUNT`/`SUM` by group over every matching document**. It does not change Eventglass's production DuckDB/Parquet path or its PostgreSQL/S3 authority rules. All results are checked against an independent compressed-JSONL full scan, including group counts and sums, hit IDs, scores, and source text.
 
-The recommended **fixed read policy** for this experiment is one column span per matching segment, plus postings and winning source pages. This uses no per-query optimizer. Sparse pages, a column-and-source span, and two coalescing budgets remain here only as controls. A production implementation would need its own measured segment size and page size; the values below are experiment settings, not universal constants.
+Every indexed format has immutable S3-range-addressable segments, a compact vocabulary/catalog, and a shared local document ID. Four complete persisted formats were built and reloaded:
 
-Run on the repository's Go 1.27.1 ARM64 host:
+| Format | Per-term postings | Per-document aggregate/scoring fields | Source |
+| --- | --- | --- | --- |
+| `shared` | Delta doc ID + term frequency | Zlib-compressed six-byte rows | Compressed pages |
+| `packed_shared` | Same | Per-page minimum and bit-packed deltas | Same pages |
+| `covering` | Doc ID, frequency, and **repeated** fields | Inside every term posting | Same pages |
+| `row_only` | None | Same columns as `shared` | Same pages; scans all rows |
+
+The indexed query walks all matching IDs once, updates exact aggregates and a BM25 top-K heap, then fetches source pages for winners. It never aggregates only the top K. `shared` and `packed_shared` use the same **fixed** read policy: one column span per matching segment. The earlier sparse/coalesced controls remain in the code; they do not select a production query strategy. This separation of postings, fast fields, and result source is also a [documented search-engine architecture](https://github.com/quickwit-oss/tantivy/blob/main/ARCHITECTURE.md); this experiment tests its S3-oriented byte layout and exact aggregation tradeoff.
+
+Run on the root Go 1.27.1 ARM64 module:
 
 ```sh
 go test ./experiments/searchlayout -count=1
 go vet ./experiments/searchlayout
-go run ./experiments/searchlayout -n 1000000 -vocabulary 4093 -segment 100000 -page 256 -reps 5 > /tmp/searchlayout.json
+go run ./experiments/searchlayout -matrix -n 1000000 -vocabulary 4093 -segment 100000 -page 256 -reps 3 -profile baseline > /tmp/searchlayout.json
 ```
 
-The checked-in [one-million-document result](results-arm64-1m.json) was generated on `darwin/arm64` with warm local files. Every indexed result, including all groups, sums, hit IDs, scores, and source text, was compared with an independent zlib JSONL full scan. The 10 segments plus catalog occupied **13.39 MB**, versus **10.83 MB** for the compressed JSONL without an index (1.24×). The indexed size comprised 3.56 MB postings, 6.02 MB columns, 3.37 MB source, and 0.44 MB catalog. These numbers reflect a narrow, repetitive synthetic corpus, not general log compression.
+`-profile` also accepts `noisy` (two unique tokens per row), `clustered` (term bursts), and `wide_fields` (full-width tenant/group/duration values). Each format is built in a temporary directory, loaded from its manifest, and compared to the same oracle. `-minio-endpoint` plus temporary credentials uploads all four formats and checks signed S3 Range GETs. Query medians below use warm local files on `darwin/arm64`; they are **not** DuckDB, Lucene, AWS S3, or end-to-end service comparisons.
 
-| Query | Matching documents | Exact groups | Full scan median | Fixed column-span median | Range GETs / bytes |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `fatal` | 100 | 100 | 857 ms | 1.46 ms | 30 / 6.03 MB |
-| `timeout` | 9,900 | 2,048 | 861 ms | 14.33 ms | 30 / 6.03 MB |
-| `request` | 990,000 | 2,048 | 899 ms | 56.52 ms | 21 / 6.03 MB |
-| `fatal OR timeout` | 10,000 | 2,048 | 857 ms | 14.18 ms | 40 / 6.03 MB |
-| `service AND request`, tenant 3 | 247,500 | 512 | 717 ms | 42.83 ms | 31 / 6.03 MB |
+The [one-million-document result](matrix-arm64-million.json) used 10 segments of 100,000 documents and 256-document pages. It had 4,100 indexed terms. Storage includes every segment and its catalog; the control compressed JSONL was 10.83 MB.
 
-The sparse policy reduced `fatal` to 0.16 MB but needed 120 GETs; for `timeout`, it needed 3,930 GETs and still read 6.03 MB. The column-and-source span used 20–30 GETs but about 9.4 MB. A query whose matches scatter across every page cannot retain both sparse transfer and low request count with this one-copy column layout. The [long-tail vocabulary result](results-arm64-longtail.json), with 100,003 distinct terms over 100,000 documents, occupied 2.44 MB versus 1.09 MB compressed JSONL (2.25×); the catalog alone was 1.16 MB. The storage advantage is therefore workload dependent.
+| Format | Stored | `fatal`, 100 matches | `timeout`, 9,900 matches | `request`, 990,000 matches |
+| --- | ---: | ---: | ---: | ---: |
+| `shared` | 13.39 MB | 1.80 ms; 30 GET / 6.03 MB | 13.45 ms; 30 GET / 6.03 MB | 55.70 ms; 21 GET / 6.03 MB |
+| `packed_shared` | **10.20 MB** | 1.51 ms; 30 GET / 2.84 MB | 23.78 ms; 30 GET / 2.84 MB | 64.08 ms; 21 GET / 2.85 MB |
+| `covering` | 30.38 MB | 0.51 ms; 20 GET / 9.8 KB | 1.57 ms; 20 GET / 53 KB | 76.51 ms; 11 GET / 4.02 MB |
+| `row_only` | 9.47 MB | 297.79 ms; 10 GET / 9.39 MB | 303.46 ms; 10 GET / 9.39 MB | 350.90 ms; 10 GET / 9.39 MB |
 
-The optional `-minio-endpoint` path uploaded the segment objects to disposable local MinIO and used AWS SDK signed S3 Range GET. In the [MinIO result](results-arm64-minio.json), the 100,000-document `timeout` query matched the local answer; three runs had a 23.28 ms median, 30 GETs, and 612,154 transferred bytes. MinIO checks the wire path, **not** AWS latency or price. Local filesystem medians are also not a Lucene or DuckDB comparison. The full scan is a simple Go control, not DuckDB.
+The [noisy result](matrix-arm64-noisy.json) used 50,000 rows and 104,100 actual terms. Compressed JSONL was 1.64 MB; `packed_shared` was 4.12 MB, with **2.19 MB in its catalog alone**. [Wide-field data](matrix-arm64-wide-fields.json) reduced packed-versus-plain storage by only 4.8%, while `timeout` took 4.37 ms packed versus 1.84 ms plain locally. The [clustered result](matrix-arm64-clustered.json) reduced `timeout` to one matching segment: packed read 3 ranges / 31 KB instead of 30 ranges / 293 KB on the same-size scattered baseline. These fixtures deliberately expose limits, not a representative production mix.
 
-**Conclusion:** this layout demonstrates exact aggregation and ranked search over a shared, single-copy source/column/posting segment, with moderate storage overhead on the main fixture and bounded Range GETs under the fixed policy. It does **not** prove superiority or a universally optimal layout. Production acceptance still requires representative real logs, Korean tokenization and phrase/position search, updates/deletes/compaction, concurrent S3 measurements, and integration with Eventglass's PostgreSQL authorization, durable receipts, fenced publication, and PG/S3 recovery. No production data format or transaction semantics were changed here.
+With one 100,000-document segment and 1,024-document pages, the [local MinIO result](matrix-arm64-minio.json) persisted `packed_shared` at 1.00 MB, `shared` at 1.12 MB, `covering` at 3.00 MB, and `row_only` at 0.72 MB; compressed JSONL was 1.08 MB. The signed S3 Range `timeout` query returned the exact oracle result at 5 GET / 310 KB packed, 5 GET / 427 KB plain, 4 GET / 14 KB covering, and 1 GET / 713 KB row-only. MinIO localhost timings varied across runs and cannot predict AWS latency. The original [read-policy result](results-arm64-1m.json) and [long-tail vocabulary result](results-arm64-longtail.json) are retained as controls.
+
+**Decision from these tests:** `packed_shared` is the best storage/I/O compromise for the narrow-field fixture and gives exact search plus aggregation without duplicating values in every term. It is a candidate, not a universal winner: covering postings buy much faster sparse queries with roughly 3× storage here; full-width fields make bit packing less useful; unique tokens make catalog cost dominant. For a single-copy column layout, scattered matches require either many small Range GETs or a larger contiguous column read. Avoiding both requires replicated covering data or a warm cache. This is a physical tradeoff, not a missing query optimizer.
+
+Same-region AWS S3 transfer to an AWS service is generally uncharged, but [GET requests are billed](https://docs.aws.amazon.com/AmazonS3/latest/userguide/download-objects.html). No AWS price or latency was inferred from MinIO. Production acceptance still requires real sanitized workload distributions, query mix and concurrency, CPU/RSS limits, Korean analyzers and phrase/position search, updates/deletes/compaction, actual AWS measurements, and integration with Eventglass's durable receipts, authorization, fenced publication, and PG/S3 recovery.

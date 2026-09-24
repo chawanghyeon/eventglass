@@ -34,6 +34,7 @@ type part struct {
 	Size   int64  `json:"size"`
 	CRC32C uint32 `json:"crc32c"`
 	Zlib   bool   `json:"zlib,omitempty"`
+	Packed bool   `json:"packed,omitempty"`
 }
 
 type segment struct {
@@ -58,6 +59,14 @@ type posting struct{ id, tf int }
 
 // build writes immutable segment objects first and the catalog last.
 func build(dir string, docs []document, segmentDocs, pageDocs int) (corpus, error) {
+	return buildWithColumns(dir, docs, segmentDocs, pageDocs, false)
+}
+
+func buildPacked(dir string, docs []document, segmentDocs, pageDocs int) (corpus, error) {
+	return buildWithColumns(dir, docs, segmentDocs, pageDocs, true)
+}
+
+func buildWithColumns(dir string, docs []document, segmentDocs, pageDocs int, packed bool) (corpus, error) {
 	if segmentDocs <= 0 || pageDocs <= 0 || len(docs) == 0 {
 		return corpus{}, errors.New("invalid build dimensions")
 	}
@@ -115,33 +124,30 @@ func build(dir string, docs []document, segmentDocs, pageDocs int) (corpus, erro
 		}
 		for start := base; start < end; start += pageDocs {
 			stop := min(start+pageDocs, end)
-			buf := make([]byte, 0, (stop-start)*6)
-			for _, d := range docs[start:stop] {
-				buf = append(buf, d.Tenant)
-				buf = binary.LittleEndian.AppendUint16(buf, d.Group)
-				buf = binary.LittleEndian.AppendUint16(buf, d.Duration)
-				buf = append(buf, byte(len(tokenize(d.Text))))
+			var buf []byte
+			if packed {
+				buf = encodePackedColumns(docs[start:stop])
+			} else {
+				buf = make([]byte, 0, (stop-start)*6)
+				for _, d := range docs[start:stop] {
+					buf = append(buf, d.Tenant)
+					buf = binary.LittleEndian.AppendUint16(buf, d.Group)
+					buf = binary.LittleEndian.AppendUint16(buf, d.Duration)
+					buf = append(buf, byte(len(tokenize(d.Text))))
+				}
 			}
-			p, err := writePart(f, buf, true)
+			p, err := writePart(f, buf, !packed)
 			if err != nil {
 				f.Close()
 				return corpus{}, err
 			}
+			p.Packed = packed
 			s.Columns = append(s.Columns, p)
 		}
-		for start := base; start < end; start += pageDocs {
-			stop := min(start+pageDocs, end)
-			var buf []byte
-			for _, d := range docs[start:stop] {
-				buf = binary.LittleEndian.AppendUint32(buf, uint32(len(d.Text)))
-				buf = append(buf, d.Text...)
-			}
-			p, err := writePart(f, buf, true)
-			if err != nil {
-				f.Close()
-				return corpus{}, err
-			}
-			s.Sources = append(s.Sources, p)
+		s.Sources, err = writeSourcePages(f, docs[base:end], pageDocs)
+		if err != nil {
+			f.Close()
+			return corpus{}, err
 		}
 		if err := f.Close(); err != nil {
 			return corpus{}, err
@@ -152,22 +158,46 @@ func build(dir string, docs []document, segmentDocs, pageDocs int) (corpus, erro
 		}
 		c.Segs = append(c.Segs, s)
 	}
+	if err := writeCatalog(dir, c); err != nil {
+		return corpus{}, err
+	}
+	return c, nil
+}
+
+func writeSourcePages(f *os.File, docs []document, pageDocs int) ([]part, error) {
+	var pages []part
+	for start := 0; start < len(docs); start += pageDocs {
+		var buf []byte
+		for _, d := range docs[start:min(start+pageDocs, len(docs))] {
+			buf = binary.LittleEndian.AppendUint32(buf, uint32(len(d.Text)))
+			buf = append(buf, d.Text...)
+		}
+		p, err := writePart(f, buf, true)
+		if err != nil {
+			return nil, err
+		}
+		pages = append(pages, p)
+	}
+	return pages, nil
+}
+
+func writeCatalog(dir string, c corpus) error {
 	manifest, err := marshalCorpus(c)
 	if err != nil {
-		return corpus{}, err
+		return err
 	}
 	var packed bytes.Buffer
 	zw := zlib.NewWriter(&packed)
 	if _, err := zw.Write(manifest); err != nil {
-		return corpus{}, err
+		return err
 	}
 	if err := zw.Close(); err != nil {
-		return corpus{}, err
+		return err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "manifest.bin.z"), packed.Bytes(), 0o600); err != nil {
-		return corpus{}, err
+		return err
 	}
-	return c, nil
+	return nil
 }
 
 func load(dir string) (corpus, error) {
@@ -277,15 +307,22 @@ func decodePart(payload []byte, p part) ([]byte, error) {
 	if crc32.Checksum(payload, crcTable) != p.CRC32C {
 		return nil, errors.New("range checksum mismatch")
 	}
-	if !p.Zlib {
-		return payload, nil
+	value := payload
+	if p.Zlib {
+		zr, err := zlib.NewReader(bytes.NewReader(payload))
+		if err != nil {
+			return nil, err
+		}
+		defer zr.Close()
+		value, err = io.ReadAll(zr)
+		if err != nil {
+			return nil, err
+		}
 	}
-	zr, err := zlib.NewReader(bytes.NewReader(payload))
-	if err != nil {
-		return nil, err
+	if p.Packed {
+		return decodePackedColumns(value)
 	}
-	defer zr.Close()
-	return io.ReadAll(zr)
+	return value, nil
 }
 
 func readPart(ctx context.Context, src rangeSource, s segment, p part) ([]byte, error) {
@@ -468,11 +505,16 @@ func (a *accessor) source(local int) (string, error) {
 }
 
 type iterator struct {
-	data []byte
-	pos  int
-	id   int
-	tf   int
-	ok   bool
+	data     []byte
+	pos      int
+	id       int
+	tf       int
+	ok       bool
+	covering bool
+	tenant   uint8
+	group    uint16
+	duration uint16
+	length   uint8
 }
 
 func (it *iterator) next() error {
@@ -492,6 +534,16 @@ func (it *iterator) next() error {
 	it.pos += n
 	it.id += int(delta)
 	it.tf = int(tf)
+	if it.covering {
+		if len(it.data)-it.pos < 6 {
+			return io.ErrUnexpectedEOF
+		}
+		it.tenant = it.data[it.pos]
+		it.group = binary.LittleEndian.Uint16(it.data[it.pos+1:])
+		it.duration = binary.LittleEndian.Uint16(it.data[it.pos+3:])
+		it.length = it.data[it.pos+5]
+		it.pos += 6
+	}
 	it.ok = true
 	return nil
 }
@@ -625,6 +677,7 @@ func run(ctx context.Context, src rangeSource, c corpus, q query, m mode) (resul
 	var best topHeap
 	accessors := make([]*accessor, len(c.Segs))
 	for segmentIndex, seg := range c.Segs {
+		covering := len(seg.Columns) == 0
 		its := make([]iterator, len(terms))
 		if q.All {
 			missing := false
@@ -648,7 +701,7 @@ func run(ctx context.Context, src rangeSource, c corpus, q query, m mode) (resul
 			if err != nil {
 				return result{}, err
 			}
-			its[i] = iterator{data: raw, id: -1}
+			its[i] = iterator{data: raw, id: -1, covering: covering}
 			if err := its[i].next(); err != nil {
 				return result{}, err
 			}
@@ -657,9 +710,13 @@ func run(ctx context.Context, src rangeSource, c corpus, q query, m mode) (resul
 		if !any {
 			continue
 		}
-		a := newAccessor(ctx, src, seg, m)
+		accessMode := m
+		if covering {
+			accessMode = sparse
+		}
+		a := newAccessor(ctx, src, seg, accessMode)
 		accessors[segmentIndex] = a
-		if m == coalesced2 || m == coalesced4 {
+		if !covering && (m == coalesced2 || m == coalesced4) {
 			needed, err := neededColumnPages(seg, its, q.All)
 			if err != nil {
 				return result{}, err
@@ -683,9 +740,20 @@ func run(ctx context.Context, src rangeSource, c corpus, q query, m mode) (resul
 				break
 			}
 			matched := 0
+			var tenant uint8
+			var group, duration uint16
+			var length uint8
+			haveFields := false
 			clear(contributions)
 			for i := range its {
 				if its[i].ok && its[i].id == minID {
+					if covering {
+						if haveFields && (tenant != its[i].tenant || group != its[i].group || duration != its[i].duration || length != its[i].length) {
+							return result{}, errors.New("inconsistent covering fields")
+						}
+						tenant, group, duration, length = its[i].tenant, its[i].group, its[i].duration, its[i].length
+						haveFields = true
+					}
 					contributions[i] = its[i].tf
 					matched++
 					if err := its[i].next(); err != nil {
@@ -699,9 +767,12 @@ func run(ctx context.Context, src rangeSource, c corpus, q query, m mode) (resul
 			if minID < 0 || minID >= seg.Count {
 				return result{}, errors.New("posting document ID out of bounds")
 			}
-			tenant, group, duration, length, err := a.column(minID)
-			if err != nil {
-				return result{}, err
+			if !covering {
+				var err error
+				tenant, group, duration, length, err = a.column(minID)
+				if err != nil {
+					return result{}, err
+				}
 			}
 			if q.Tenant >= 0 && int(tenant) != q.Tenant {
 				continue

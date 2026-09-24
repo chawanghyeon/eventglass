@@ -26,10 +26,14 @@ func appendPart(dst []byte, p part) []byte {
 	dst = appendUint(dst, uint64(p.Offset))
 	dst = appendUint(dst, uint64(p.Size))
 	dst = binary.LittleEndian.AppendUint32(dst, p.CRC32C)
+	flag := byte(0)
 	if p.Zlib {
-		return append(dst, 1)
+		flag |= 1
 	}
-	return append(dst, 0)
+	if p.Packed {
+		flag |= 2
+	}
+	return append(dst, flag)
 }
 
 func marshalCorpus(c corpus) ([]byte, error) {
@@ -138,10 +142,10 @@ func (r *manifestReader) part() (part, error) {
 	if err != nil {
 		return part{}, err
 	}
-	if raw[4] > 1 {
+	if raw[4] > 3 {
 		return part{}, errors.New("invalid codec flag")
 	}
-	return part{Offset: int64(offset), Size: int64(size), CRC32C: binary.LittleEndian.Uint32(raw), Zlib: raw[4] == 1}, nil
+	return part{Offset: int64(offset), Size: int64(size), CRC32C: binary.LittleEndian.Uint32(raw), Zlib: raw[4]&1 != 0, Packed: raw[4]&2 != 0}, nil
 }
 
 func unmarshalCorpus(data []byte) (corpus, error) {
@@ -229,7 +233,7 @@ func unmarshalCorpus(data []byte) (corpus, error) {
 			prev = id
 		}
 		numColumns, err := r.uint()
-		if err != nil || numColumns == 0 || numColumns > 1_000_000 {
+		if err != nil || numColumns > 1_000_000 {
 			return corpus{}, errors.New("invalid column page count")
 		}
 		for range numColumns {
@@ -240,7 +244,8 @@ func unmarshalCorpus(data []byte) (corpus, error) {
 			seg.Columns = append(seg.Columns, p)
 		}
 		numSources, err := r.uint()
-		if err != nil || numSources != numColumns {
+		expectedPages := (int(n) + int(pageDocs) - 1) / int(pageDocs)
+		if err != nil || numSources > 1_000_000 || int(numSources) != expectedPages || (numColumns != 0 && numSources != numColumns) || (numColumns == 0 && numPostings == 0) {
 			return corpus{}, errors.New("invalid source page count")
 		}
 		for range numSources {
@@ -257,7 +262,7 @@ func unmarshalCorpus(data []byte) (corpus, error) {
 	}
 	expectedBase := 0
 	for _, seg := range c.Segs {
-		if seg.Base != expectedBase || len(seg.Columns) != (seg.Count+seg.PageDocs-1)/seg.PageDocs {
+		if seg.Base != expectedBase || (len(seg.Columns) != 0 && len(seg.Columns) != (seg.Count+seg.PageDocs-1)/seg.PageDocs) {
 			return corpus{}, errors.New("invalid segment coverage")
 		}
 		expectedBase += seg.Count
