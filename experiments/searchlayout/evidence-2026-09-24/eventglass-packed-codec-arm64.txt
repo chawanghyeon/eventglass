@@ -1,0 +1,24 @@
+goos: linux
+goarch: arm64
+pkg: github.com/chawanghyeon/eventglass/experiments/searchlayout
+BenchmarkPackedDecode/narrow/reference         	  200394	      5766 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/narrow/reference         	  207918	      5771 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/narrow/reference         	  208615	      5698 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/narrow/reference         	  209736	      5707 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/narrow/reference         	  209223	      5720 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/narrow/word              	  550760	      2128 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/narrow/word              	  550748	      2142 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/narrow/word              	  553714	      2120 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/narrow/word              	  557130	      2127 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/narrow/word              	  533288	      2112 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/reference           	   98250	     13436 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/reference           	   97981	     12239 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/reference           	   98306	     12228 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/reference           	   98420	     12184 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/reference           	   98440	     12191 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/word                	  554779	      2121 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/word                	  554965	      2125 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/word                	  552720	      2140 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/word                	  555423	      2201 ns/op	    1536 B/op	       1 allocs/op
+BenchmarkPackedDecode/wide/word                	  552435	      2131 ns/op	    1536 B/op	       1 allocs/op
+PASS

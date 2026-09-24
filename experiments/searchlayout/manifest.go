@@ -33,6 +33,9 @@ func appendPart(dst []byte, p part) []byte {
 	if p.Packed {
 		flag |= 2
 	}
+	if p.Bitmap {
+		flag |= 4
+	}
 	return append(dst, flag)
 }
 
@@ -142,10 +145,10 @@ func (r *manifestReader) part() (part, error) {
 	if err != nil {
 		return part{}, err
 	}
-	if raw[4] > 3 {
+	if raw[4] > 7 || raw[4]&6 == 6 {
 		return part{}, errors.New("invalid codec flag")
 	}
-	return part{Offset: int64(offset), Size: int64(size), CRC32C: binary.LittleEndian.Uint32(raw), Zlib: raw[4]&1 != 0, Packed: raw[4]&2 != 0}, nil
+	return part{Offset: int64(offset), Size: int64(size), CRC32C: binary.LittleEndian.Uint32(raw), Zlib: raw[4]&1 != 0, Packed: raw[4]&2 != 0, Bitmap: raw[4]&4 != 0}, nil
 }
 
 func unmarshalCorpus(data []byte) (corpus, error) {

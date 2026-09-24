@@ -80,6 +80,14 @@ func executeMatrix(n, vocabulary, segmentDocs, pageDocs, repetitions int, profil
 	if err != nil {
 		return err
 	}
+	hybridDir := filepath.Join(dir, "hybrid")
+	if _, err := buildHybrid(hybridDir, docs, segmentDocs, pageDocs); err != nil {
+		return err
+	}
+	hybrid, err := load(hybridDir)
+	if err != nil {
+		return err
+	}
 	coverDir := filepath.Join(dir, "covering")
 	cover, err := buildCovering(coverDir, docs, base)
 	if err != nil {
@@ -100,7 +108,7 @@ func executeMatrix(n, vocabulary, segmentDocs, pageDocs, repetitions int, profil
 		dir  string
 		c    corpus
 	}
-	layouts := []layout{{"shared", baseDir, base}, {"packed_shared", packedDir, packed}, {"covering", coverDir, cover}, {"row_only", rowDir, row}}
+	layouts := []layout{{"shared", baseDir, base}, {"packed_shared", packedDir, packed}, {"hybrid", hybridDir, hybrid}, {"covering", coverDir, cover}, {"row_only", rowDir, row}}
 	storage := make(map[string]any)
 	catalogSizes := make(map[string]int64)
 	for _, layout := range layouts {

@@ -17,6 +17,68 @@ func TestQueryTermsNormalizeOnce(t *testing.T) {
 	}
 }
 
+func TestBitmapPostingIterator(t *testing.T) {
+	encoded := encodeBitmapPostings([]posting{{id: 0, tf: 1}, {id: 2, tf: 3}, {id: 5, tf: 2}, {id: 8, tf: 1}}, 9)
+	it, err := newIterator(encoded, part{Bitmap: true}, 9, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []posting{{id: 0, tf: 1}, {id: 2, tf: 3}, {id: 5, tf: 2}, {id: 8, tf: 1}} {
+		if !it.ok || it.id != want.id || it.tf != want.tf {
+			t.Fatalf("got id=%d tf=%d ok=%v; want %+v", it.id, it.tf, it.ok, want)
+		}
+		if err := it.next(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if it.ok {
+		t.Fatal("unexpected trailing posting")
+	}
+	if _, err := newIterator(encoded[:len(encoded)-1], part{Bitmap: true}, 9, false); err == nil {
+		t.Fatal("accepted missing bitmap term frequency")
+	}
+	corrupt := slices.Clone(encoded)
+	corrupt[1] |= 0x80
+	if _, err := newIterator(corrupt, part{Bitmap: true}, 9, false); err == nil {
+		t.Fatal("accepted bitmap bit outside segment")
+	}
+}
+
+func TestHybridBitmapQueryAgainstFullScan(t *testing.T) {
+	docs := generated(10_000, 100)
+	dir := t.TempDir()
+	if _, err := buildHybrid(dir, docs, 10_000, 256); err != nil {
+		t.Fatal(err)
+	}
+	c, err := load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	term := ""
+	for candidate, p := range c.Segs[0].Postings {
+		if p.Bitmap {
+			term = candidate
+			break
+		}
+	}
+	if term == "" {
+		t.Fatal("fixture did not select a bitmap posting")
+	}
+	raw := filepath.Join(dir, "raw.jsonl.z")
+	if _, err := writeRaw(raw, docs); err != nil {
+		t.Fatal(err)
+	}
+	q := query{Terms: []string{term}, Tenant: -1, K: 10}
+	want, err := scanRaw(raw, c, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := run(context.Background(), localSource{dir: dir}, c, q, denseColumns)
+	if err != nil || !equivalent(got, want) {
+		t.Fatalf("bitmap query differs from full scan: %v equivalent=%v", err, equivalent(got, want))
+	}
+}
+
 func TestRandomizedLayoutsAgainstFullScan(t *testing.T) {
 	words := []string{"alpha", "beta", "request", "한글", "café", "trace-42"}
 	for seed := int64(0); seed < 20; seed++ {
@@ -46,6 +108,14 @@ func TestRandomizedLayoutsAgainstFullScan(t *testing.T) {
 				t.Fatal(err)
 			}
 			packed, err := load(packedDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			hybridDir := filepath.Join(root, "hybrid")
+			if _, err := buildHybrid(hybridDir, docs, segmentDocs, pageDocs); err != nil {
+				t.Fatal(err)
+			}
+			hybrid, err := load(hybridDir)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -90,6 +160,9 @@ func TestRandomizedLayoutsAgainstFullScan(t *testing.T) {
 					}},
 					{"packed", func() (result, error) {
 						return run(context.Background(), localSource{dir: packedDir}, packed, q, denseColumns)
+					}},
+					{"hybrid", func() (result, error) {
+						return run(context.Background(), localSource{dir: hybridDir}, hybrid, q, denseColumns)
 					}},
 					{"covering", func() (result, error) {
 						return run(context.Background(), localSource{dir: coverDir}, cover, q, denseColumns)

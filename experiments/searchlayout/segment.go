@@ -14,6 +14,7 @@ import (
 	"hash/crc32"
 	"io"
 	"math"
+	"math/bits"
 	"os"
 	"path/filepath"
 	"sort"
@@ -35,6 +36,7 @@ type part struct {
 	CRC32C uint32 `json:"crc32c"`
 	Zlib   bool   `json:"zlib,omitempty"`
 	Packed bool   `json:"packed,omitempty"`
+	Bitmap bool   `json:"bitmap,omitempty"`
 }
 
 type segment struct {
@@ -59,14 +61,18 @@ type posting struct{ id, tf int }
 
 // build writes immutable segment objects first and the catalog last.
 func build(dir string, docs []document, segmentDocs, pageDocs int) (corpus, error) {
-	return buildWithColumns(dir, docs, segmentDocs, pageDocs, false)
+	return buildWithColumns(dir, docs, segmentDocs, pageDocs, false, false)
 }
 
 func buildPacked(dir string, docs []document, segmentDocs, pageDocs int) (corpus, error) {
-	return buildWithColumns(dir, docs, segmentDocs, pageDocs, true)
+	return buildWithColumns(dir, docs, segmentDocs, pageDocs, true, false)
 }
 
-func buildWithColumns(dir string, docs []document, segmentDocs, pageDocs int, packed bool) (corpus, error) {
+func buildHybrid(dir string, docs []document, segmentDocs, pageDocs int) (corpus, error) {
+	return buildWithColumns(dir, docs, segmentDocs, pageDocs, true, true)
+}
+
+func buildWithColumns(dir string, docs []document, segmentDocs, pageDocs int, packed, hybrid bool) (corpus, error) {
 	if segmentDocs <= 0 || pageDocs <= 0 || len(docs) == 0 {
 		return corpus{}, errors.New("invalid build dimensions")
 	}
@@ -115,12 +121,22 @@ func buildWithColumns(dir string, docs []document, segmentDocs, pageDocs int, pa
 				encoded = binary.AppendUvarint(encoded, uint64(p.tf))
 				prev = p.id
 			}
+			bitmap := false
+			if hybrid && len(lists[term]) > s.Count/8 {
+				candidate := encodeBitmapPostings(lists[term], s.Count)
+				if partSize(candidate) < partSize(encoded) {
+					encoded, bitmap = candidate, true
+				}
+			}
 			// Varints are smaller for short lists; long lists benefit from zlib.
 			s.Postings[term], err = writePart(f, encoded, len(encoded) >= 64)
 			if err != nil {
 				f.Close()
 				return corpus{}, err
 			}
+			p := s.Postings[term]
+			p.Bitmap = bitmap
+			s.Postings[term] = p
 		}
 		for start := base; start < end; start += pageDocs {
 			stop := min(start+pageDocs, end)
@@ -162,6 +178,26 @@ func buildWithColumns(dir string, docs []document, segmentDocs, pageDocs int, pa
 		return corpus{}, err
 	}
 	return c, nil
+}
+
+func encodeBitmapPostings(list []posting, count int) []byte {
+	data := make([]byte, (count+7)/8, (count+7)/8+len(list))
+	for _, p := range list {
+		data[p.id/8] |= 1 << (p.id % 8)
+		data = append(data, byte(p.tf))
+	}
+	return data
+}
+
+func partSize(raw []byte) int {
+	if len(raw) < 64 {
+		return len(raw)
+	}
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	_, _ = zw.Write(raw)
+	_ = zw.Close()
+	return buf.Len()
 }
 
 func writeSourcePages(f *os.File, docs []document, pageDocs int) ([]part, error) {
@@ -505,19 +541,48 @@ func (a *accessor) source(local int) (string, error) {
 }
 
 type iterator struct {
-	data     []byte
-	pos      int
-	id       int
-	tf       int
-	ok       bool
-	covering bool
-	tenant   uint8
-	group    uint16
-	duration uint16
-	length   uint8
+	data       []byte
+	pos        int
+	id         int
+	tf         int
+	ok         bool
+	covering   bool
+	bitmap     bool
+	bitmapDocs int
+	bitmapPos  int
+	tfPos      int
+	tenant     uint8
+	group      uint16
+	duration   uint16
+	length     uint8
 }
 
 func (it *iterator) next() error {
+	if it.bitmap {
+		for it.bitmapPos < it.bitmapDocs {
+			value := it.data[it.bitmapPos/8] >> (it.bitmapPos % 8)
+			if value == 0 {
+				it.bitmapPos = (it.bitmapPos + 8) &^ 7
+				continue
+			}
+			it.bitmapPos += bits.TrailingZeros8(value)
+			if it.bitmapPos >= it.bitmapDocs {
+				break
+			}
+			if it.tfPos >= len(it.data) || it.data[it.tfPos] == 0 {
+				return errors.New("invalid bitmap term frequency")
+			}
+			it.id, it.tf, it.ok = it.bitmapPos, int(it.data[it.tfPos]), true
+			it.bitmapPos++
+			it.tfPos++
+			return nil
+		}
+		if it.tfPos != len(it.data) {
+			return errors.New("trailing bitmap term frequencies")
+		}
+		it.ok = false
+		return nil
+	}
 	if it.pos == len(it.data) {
 		it.ok = false
 		return nil
@@ -548,13 +613,37 @@ func (it *iterator) next() error {
 	return nil
 }
 
+func newIterator(raw []byte, p part, docs int, covering bool) (iterator, error) {
+	it := iterator{data: raw, id: -1, covering: covering, bitmap: p.Bitmap, bitmapDocs: docs}
+	if p.Bitmap {
+		if covering || docs <= 0 || len(raw) < (docs+7)/8 {
+			return iterator{}, errors.New("invalid bitmap posting")
+		}
+		it.tfPos = (docs + 7) / 8
+		if docs%8 != 0 && raw[it.tfPos-1]&^byte((1<<(docs%8))-1) != 0 {
+			return iterator{}, errors.New("bitmap posting exceeds document count")
+		}
+		frequencyCount := 0
+		for _, value := range raw[:it.tfPos] {
+			frequencyCount += bits.OnesCount8(value)
+		}
+		if len(raw)-it.tfPos != frequencyCount {
+			return iterator{}, errors.New("bitmap term frequency count mismatch")
+		}
+	}
+	return it, it.next()
+}
+
 func neededColumnPages(seg segment, its []iterator, all bool) ([]bool, error) {
 	probe := make([]iterator, len(its))
 	for i := range its {
 		if its[i].data == nil {
 			continue
 		}
-		probe[i] = iterator{data: its[i].data, id: -1}
+		probe[i] = iterator{data: its[i].data, id: -1, bitmap: its[i].bitmap, bitmapDocs: seg.Count, tfPos: its[i].tfPos}
+		if probe[i].bitmap {
+			probe[i].tfPos = (seg.Count + 7) / 8
+		}
 		if err := probe[i].next(); err != nil {
 			return nil, err
 		}
@@ -712,8 +801,8 @@ func run(ctx context.Context, src rangeSource, c corpus, q query, m mode) (resul
 			if err != nil {
 				return result{}, err
 			}
-			its[i] = iterator{data: raw, id: -1, covering: covering}
-			if err := its[i].next(); err != nil {
+			its[i], err = newIterator(raw, p, seg.Count, covering)
+			if err != nil {
 				return result{}, err
 			}
 			any = any || its[i].ok

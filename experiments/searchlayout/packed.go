@@ -66,12 +66,19 @@ func decodePackedColumns(data []byte) ([]byte, error) {
 		}
 		packed := data[:size]
 		data = data[size:]
+		mask := uint32(1<<bitWidth) - 1
 		for row := 0; row < int(count); row++ {
-			var delta uint32
-			for bit := 0; bit < int(bitWidth); bit++ {
-				position := row*int(bitWidth) + bit
-				delta |= uint32((packed[position/8]>>(position%8))&1) << bit
+			bit := row * int(bitWidth)
+			byteIndex := bit / 8
+			var window uint32
+			if len(packed)-byteIndex >= 4 {
+				window = binary.LittleEndian.Uint32(packed[byteIndex:])
+			} else {
+				for i, value := range packed[byteIndex:] {
+					window |= uint32(value) << (8 * i)
+				}
 			}
+			delta := (window >> (bit % 8)) & mask
 			value := uint32(minimum[field]) + delta
 			if value > 65535 || (field == 0 || field == 3) && value > 255 {
 				return nil, errors.New("packed column overflow")
