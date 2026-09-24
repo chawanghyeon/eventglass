@@ -285,6 +285,9 @@ func TestActualConverterSingleParquetParity(t *testing.T) {
 	if os.Getenv("EVENTGLASS_PRODUCT_GATEWAY") == "1" {
 		measureProductGateway(t, ctx, root, db, analytics, payload, single, aggregate, detail, firstRaw, rows)
 	}
+	if os.Getenv("EVENTGLASS_PRODUCT_MINIO") == "1" {
+		measureProductMinIO(t, ctx, root, db, analytics, payload, single, aggregate, detail, firstRaw, rows)
+	}
 	if os.Getenv("EVENTGLASS_PRODUCT_POSTINGS") == "1" {
 		measureProductPostingSidecar(t, ctx, db, root, single, rows, noisy)
 	}

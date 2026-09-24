@@ -1,0 +1,17 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:289: product_minio_upload rows=100000 put=3 put_bytes=4524744 head=3 verify_get=3 verify_bytes=4524744
+    product_parquet_test.go:289: product_gateway backend=minio kind=aggregate source=pair reps=30 p50_us=22941 p95_us=28236 p99_us=29607 s3_get_p50=1 s3_bytes_p50=1010847 s3_get_range=1..1 s3_bytes_range=1010847..1010847
+    product_parquet_test.go:289: product_gateway backend=minio kind=aggregate source=single reps=30 p50_us=25085 p95_us=27086 p99_us=27358 s3_get_p50=2 s3_bytes_p50=2208874 s3_get_range=2..2 s3_bytes_range=2208874..2208874
+    product_parquet_test.go:289: product_gateway backend=minio kind=detail source=pair reps=30 p50_us=31970 p95_us=34195 p99_us=34602 s3_get_p50=2 s3_bytes_p50=2315870 s3_get_range=2..2 s3_bytes_range=2315870..2315870
+    product_parquet_test.go:289: product_gateway backend=minio kind=detail source=single reps=30 p50_us=36683 p95_us=40563 p99_us=42242 s3_get_p50=4 s3_bytes_p50=4417748 s3_get_range=4..4 s3_bytes_range=4417748..4417748
+    product_parquet_test.go:289: product_minio_query rows=100000 range_get=270 range_bytes=298600170
+    product_parquet_test.go:306: actual_converter rows=100000 noisy=false analytics_bytes=1010847 payload_bytes=1305023 pair_bytes=2315870 single_bytes=2208874
+--- PASS: TestActualConverterSingleParquetParity (8.94s)
+PASS
+536875008
+low 0
+high 0
+max 758
+oom 0
+oom_kill 0
+oom_group_kill 0
