@@ -1,0 +1,36 @@
+=== RUN   TestUniversalPinnedDuckDBParquetParity
+    unified_duckdb_test.go:190: phase=csv_ready
+    unified_duckdb_test.go:207: phase=duckdb_loaded
+    unified_duckdb_test.go:214: phase=parquet_ready
+    unified_duckdb_test.go:227: phase=segment_ready
+    unified_duckdb_test.go:231: phase=query op=term
+    unified_duckdb_test.go:231: phase=query op=eq
+    unified_duckdb_test.go:231: phase=query op=gte
+    unified_duckdb_test.go:231: phase=query op=exists
+    unified_duckdb_test.go:231: phase=query op=null
+    unified_duckdb_test.go:231: phase=query op=neq
+    unified_duckdb_test.go:231: phase=query op=array
+    unified_duckdb_test.go:231: phase=query op=eq
+    unified_duckdb_test.go:231: phase=query op=eq
+    unified_duckdb_test.go:231: phase=query op=contains
+    unified_duckdb_test.go:231: phase=query op=regex
+    unified_duckdb_test.go:231: phase=query op=and
+    unified_duckdb_test.go:231: phase=query op=or
+    unified_duckdb_test.go:231: phase=query op=not
+    unified_duckdb_test.go:231: phase=query op=and
+    unified_duckdb_test.go:231: phase=query op=eq
+    unified_duckdb_test.go:231: phase=query op=term
+    unified_duckdb_test.go:231: phase=query op=eq
+    unified_duckdb_test.go:284: local query=rare reps=30 parquet_p50_us=14860 parquet_p95_us=17170 parquet_p99_us=17851 segment_p50_us=10744 segment_p95_us=11896 segment_p99_us=15150
+    unified_duckdb_test.go:284: local query=broad reps=30 parquet_p50_us=15565 parquet_p95_us=18335 parquet_p99_us=18964 segment_p50_us=11079 segment_p95_us=12205 segment_p99_us=13830
+    unified_duckdb_test.go:284: local query=regex reps=30 parquet_p50_us=15180 parquet_p95_us=16807 parquet_p99_us=16817 segment_p50_us=50612 segment_p95_us=54717 segment_p99_us=54769
+    unified_duckdb_test.go:295: pinned_duckdb=v2.0.0-dev84020 docs=10000 cases=18 groups=4 analytics_bytes=135534 payload_bytes=192484 parquet_total_bytes=328018 segment_bytes=711792
+--- PASS: TestUniversalPinnedDuckDBParquetParity (8.14s)
+PASS
+147668992
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0

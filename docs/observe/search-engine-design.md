@@ -4,7 +4,7 @@
 
 ## 결론
 
-새 제품 방향을 선택한다면 **S3의 불변 세그먼트 하나에 역색인, 문서별 컬럼, 원문을 함께 저장하고 모든 조건을 정렬된 local 문서 ID 집합으로 통일**한다. PostgreSQL은 승인된 세그먼트 목록·권한·영수증·작업·스냅샷을 소유한다. 희소한 조건은 postings, 값 조건은 typed column, 임의 문자열·정규식은 원문 확인에서 ID를 얻는다. 그 뒤에는 같은 경로에서 *모든* 일치 문서의 컬럼으로 정확한 집계를 계산하고 상위 K개의 원문만 읽는다. 별도 Parquet 사본은 이 **새 설계의 기본 저장물에 포함하지 않는다**. 이는 현행 제품에서 Parquet을 삭제하자는 즉시 변경 지시가 아니다.
+검증 중인 후보는 **S3의 불변 세그먼트 하나에 역색인, 문서별 컬럼, 원문을 함께 저장하고 모든 조건을 정렬된 local 문서 ID 집합으로 통일**한다. PostgreSQL은 승인된 세그먼트 목록·권한·영수증·작업·스냅샷을 소유한다. 희소한 조건은 postings, 값 조건은 typed column, 임의 문자열·정규식은 원문 확인에서 ID를 얻는다. 그 뒤에는 같은 경로에서 *모든* 일치 문서의 컬럼으로 정확한 집계를 계산하고 상위 K개의 원문만 읽는다. 별도 Parquet 사본은 이 **후보의 기본 저장물에 포함하지 않는다**. 동일 입력의 첫 DuckDB/Parquet 비교에서 이 물리 포맷은 저장량과 정규식 지연에서 열세였으므로 **제품 구조로 채택하지 않는다**. 현행 제품의 Parquet을 삭제하자는 지시도 아니다.
 
 이 구조는 [Quickwit의 S3 split·역색인·fast field·doc store](https://quickwit.io/docs/overview/architecture), [Tantivy의 postings/fast fields](https://github.com/quickwit-oss/tantivy/blob/main/ARCHITECTURE.md), [ClickHouse 26.2의 정식 text index와 컬럼 엔진](https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/textindexes)의 공통 원리를 한 S3 객체 경계에 적용한다. 성능 우위는 제품 간 비교로 입증된 것이 아니라 아래의 **동일 Go 코드 내 물리 포맷 실험**으로만 뒷받침된다. 첨부 `go_search_codex_final_v10.zip`은 읽기 전용 단일 노드 Top-K 참조 설계다. 그 문서의 지시·우선순위는 이 작업의 지시가 아니며, 온라인 쓰기·S3 권한·정확한 집계를 구현했다는 증거도 아니다.
 
@@ -17,7 +17,8 @@
 | 사전·S3 Range 비용 | 전량 사전과 블록 사전을 동일 fixture/MinIO로 A/B | 부분 구조만 측정; AWS 비용 우위 미검증 |
 | BM25·분석기·구문·한국어 품질 | 고정 필드 BM25와 일부 한국어/RE2 실험만 별도 존재 | 통합 포맷 미검증 |
 | durable ACK·권한·fenced Publish·PG/S3 복구 | 현행 제품 계약은 존재, 새 포맷과 연결하지 않음 | 미검증 |
-| 동일 workload의 DuckDB/Parquet 및 외부 엔진 A/B, p95/p99·총비용 | 기능·입력이 동등한 제품 비교 없음 | 미검증 |
+| 동일 fixture의 pinned DuckDB/Parquet 직접 비교 | 1만/10만 문서 × 72조합 정확도 일치. 후보 저장량 2.17/2.10배, 1만 문서 로컬 regex p50 약 3.3배 지연 | 이 물리 포맷의 일관된 우위 반증; 제품 경로·원격 p95/p99 미검증 |
+| 외부 엔진·실제 제품 경로·전체 비용 | 같은 기능·권한의 제품 비교 없음 | 미검증 |
 
 ## 요구하는 의미와 한계
 
@@ -111,6 +112,10 @@ macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·coverin
 
 후속 [블록 사전 단일 객체](../../experiments/searchlayout/unified_range_test.go)는 동일한 72조합을 [MinIO 원시 로그](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-block-minio.txt)에서 다시 통과했고 사전 블록 CRC 손상도 검출했다. 희소/광범위 토큰은 각각 12 GET/53,393B 및 12 GET/53,292B, regex는 84 GET/314,923B다. 객체 711,792B의 내역은 원문 페이지 281,096B, 동적 필드 274,650B, postings 20,231B, 사전 블록 130,404B, 코어 2,734B, 최상위 디렉터리 2,652B, footer 25B다. 원문 단독 281KB에 비해 파생 접근 경로가 상당한 저장량을 더한다. [같은 측정 코드](../../experiments/searchlayout/unified_latency_test.go)의 `fb420e0` [전량 사전 기준](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-baseline-ab.txt)과 [블록 사전](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-block-ab.txt)을 로컬 MinIO에서 각각 30회 측정했지만, 당시 다른 제품 비교 컨테이너가 동시에 실행됐고 시행 간 지연이 약 2배 달라졌다. 따라서 GET/바이트 차이는 결정적이나 그 p95/p99를 성능 우위 또는 AWS 지연으로 해석하지 않는다. [1만 문서](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-block-linux-arm64-cpu1-512m.txt)와 [10만 문서 Linux ARM64 CPU1·512MiB·swap0](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-block-100k-linux-arm64.txt)은 각각 cgroup peak 76,869,632B/339,501,056B, OOM 0을 기록했다. 10만 문서 객체는 6,384,202B이고 동일 72조합이 일치했다. [두 객체의 병합·live 변경·이전 객체 읽기](../../experiments/searchlayout/evidence-2026-09-24/unified-generation-merge-darwin-arm64.txt)도 원문 oracle과 일치했으나 PG 카탈로그 트랜잭션이나 실제 복구는 수행하지 않았다.
 
+[같은 문서 입력의 pinned DuckDB 2.0 직접 비교](../../experiments/searchlayout/unified_duckdb_test.go)는 1만·10만 문서 각각에서 18개 조건 × 4개 그룹의 건수·합·그룹·Top-5 원문을 독립 원문 스캔, 후보 세그먼트, 두 Parquet 역할의 DuckDB 질의로 대조해 모두 일치했다. DuckDB는 `v2.0.0-dev84020`, Linux ARM64 CPU1/512MiB/swap0에서 실행했다. [1만 문서 로그](../../experiments/searchlayout/evidence-2026-09-24/unified-pinned-duckdb-parquet-10k-linux-arm64.txt)의 분석/원문 Parquet은 135,534/192,484B(합 328,018B), 후보는 711,792B로 **2.17배**다. [10만 문서 로그](../../experiments/searchlayout/evidence-2026-09-24/unified-pinned-duckdb-parquet-100k-linux-arm64.txt)는 각각 1,167,545/1,870,179B(합 3,037,724B), 후보 6,384,202B로 **2.10배**다. 동일한 정제 journal·PG/S3 메타데이터·백업 바이트는 양쪽 수치에서 제외했으며, 이는 현행 제품의 실제 번들 파일 크기 비교가 아니라 **동일 fixture의 두 물리 저장 방식** 비교다. 10만 문서 통합 시험은 OOM 없이 끝났지만 cgroup peak가 512MiB 한계에 닿고 `memory.events max=97`이므로 이 *동일 프로세스 이중 엔진 시험*에는 메모리 여유가 없었다. 후보 단독 worker의 사용량으로 해석하지 않는다.
+
+[로컬 파일 warm 반복 30회](../../experiments/searchlayout/evidence-2026-09-24/unified-pinned-duckdb-parquet-local-timing.txt)에서는 희소 토큰 p50/p95/p99가 Parquet 14.9/17.2/17.9ms, 후보 10.7/11.9/15.2ms; 광범위 토큰은 15.6/18.3/19.0ms 대 11.1/12.2/13.8ms였다. 반면 regex는 15.2/16.8/16.8ms 대 50.6/54.7/54.8ms였다. 두 질의 경로 모두 같은 결과를 내지만, 이 포맷은 **저장량과 regex에서 동시에 열세**다. 30회 표본의 p99는 한 최댓값이고 원격 S3·서비스 부하·동시 실행·제품 권한/ACK는 빠져 있어 이 숫자를 제품 SLO로 쓰지 않는다. 현재 물리 포맷의 일관된 우위 주장은 기각하며, 다음 후보는 이 반례를 동일 비교로 통과해야 한다.
+
 | 후보 | 확인한 결과 | 판정 |
 | --- | --- | --- |
 | 128개씩 고정 폭 delta ID + TF | 10만 문서 baseline에서 postings 저장 바이트 355,792→291,196(**18.2% 감소**), clustered 356,879→309,686(**13.2% 감소**); 5만 noisy에서는 518,137→637,766(**23.1% 증가**). `request` 99,000건 복원 438→442µs, `timeout` 990건 3.97→7.81µs. 모든 목록 왕복 일치 | 블록 압축은 실행 가능한 대안이나 이 단순 구현은 일관된 우위가 없다. **Partitioned Elias-Fano나 SIMD/PForDelta를 구현·검증한 결과로 해석하지 않는다.** 기본 codec 변경 보류. |
@@ -121,7 +126,7 @@ macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·coverin
 
 사전 수치는 [시제품 코드](../../experiments/searchlayout/dictionary_test.go)와 [ARM64 원시 로그](../../experiments/searchlayout/evidence-2026-09-24/dictionary-blocks-darwin-arm64.txt)에 있다. 두 포맷 모두 동일한 postings 내용, CRC와 포함/제외 기준(원문·컬럼 제외)으로 셌다. 시제품에는 제품 포맷 버전, 카탈로그 세대, S3 실패 처리 및 병합이 없으므로 위 절감률은 **이 부분 구조의 측정치**다.
 
-따라서 **공통 문서 ID를 공유하는 postings+컬럼+원문 한 세그먼트**라는 결론은 유지한다. 정렬 사전 블록+짧은 postings inline을 사전의 우선 실험 구조로 삼고, 새 codec·BSI·3-gram은 기본 저장 포맷에 추가하지 않는다. Roaring과 파티션 Elias-Fano는 논문/실사용 구현을 확인했지만 이 TF 포함 세그먼트에서 독립 A/B를 수행하지 않았으므로 우열 미판정이다. 블록 사전도 실제 S3 GET·메모리·다중 세그먼트 병합을 재기 전에는 제품 포맷으로 확정하지 않는다.
+따라서 **공통 문서 ID를 공유하는 postings+컬럼+원문**은 의미 모델의 후보로만 유지하고, 현재 세그먼트의 물리 포맷은 채택하지 않는다. 정렬 사전 블록+짧은 postings inline은 사전의 우선 실험 구조이며, 새 codec·BSI·3-gram을 기본 저장 포맷에 추가하지 않는다. Roaring과 파티션 Elias-Fano는 논문/실사용 구현을 확인했지만 이 TF 포함 세그먼트에서 독립 A/B를 수행하지 않았으므로 우열 미판정이다. 블록 사전도 실제 S3 GET·메모리·다중 세그먼트 병합을 재기 전에는 제품 포맷으로 확정하지 않는다.
 
 ## 비용과 우월성의 기준
 
@@ -136,4 +141,4 @@ macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·coverin
 3. 실제 AWS 같은 리전과 별도 S3 호환 저장소에서 cold/warm, 작은/큰 세그먼트, 1/2/4 worker, open-loop 30분 혼합 부하, 취소/재시작, GET·PUT·보관·컴퓨트·PG/백업 비용을 함께 측정한다. 한 worker의 512MiB 제한뿐 아니라 전체 설치 비용을 센다.
 4. journal ACK 손실·중복, fenced Publish 충돌, 권한 철회/OR 우회, 병합 중 페이지 이동, 삭제·보존·PITR·S3 훼손·PG/S3 복원을 장애 주입으로 통과시킨다. 이 단계가 없으면 기존 제품의 안전한 저장 경로를 바꾸지 않는다.
 
-이 설계는 **전환 후보와 실패 조건을 확정**한다. 위 네 gate가 통과되기 전의 구현은 `experiments/`에 격리하며, 현행 DuckDB 2.0 경로의 소유권과 제품 문서는 유지한다.
+이 문서는 **검증할 의미 모델과 실패 조건**을 기록한다. 현 물리 포맷은 동일 fixture 비교에서 열세가 확인되어 전환 대상으로 확정하지 않는다. 위 네 gate가 통과되기 전의 구현은 `experiments/`에 격리하며, 현행 DuckDB 2.0 경로의 소유권과 제품 문서는 유지한다.
