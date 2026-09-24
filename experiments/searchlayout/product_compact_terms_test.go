@@ -17,11 +17,13 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/chawanghyeon/eventglass/internal/engine"
+	"github.com/chawanghyeon/eventglass/internal/model"
 	"github.com/chawanghyeon/eventglass/internal/storage"
 	"github.com/klauspost/compress/zstd"
 )
@@ -33,9 +35,10 @@ type compactPosting struct {
 type compactCoreRow struct {
 	project, severity int64
 	service           string
+	attrs             json.RawMessage
 }
 
-func compactDecodeCore(body []byte, rows int) ([]compactCoreRow, []byte, error) {
+func compactDecodeCore(body []byte, rows int, withAttrs bool) ([]compactCoreRow, []byte, error) {
 	if len(body) < 8 {
 		return nil, nil, io.ErrUnexpectedEOF
 	}
@@ -69,13 +72,46 @@ func compactDecodeCore(body []byte, rows int) ([]compactCoreRow, []byte, error) 
 			return nil, nil, io.ErrUnexpectedEOF
 		}
 		data = data[width:]
-		core[i] = compactCoreRow{project, severity, string(data[:length])}
+		core[i] = compactCoreRow{project: project, severity: severity, service: string(data[:length])}
 		data = data[length:]
+		if withAttrs {
+			length, width = binary.Uvarint(data)
+			if width <= 0 || length > uint64(len(data)-width) {
+				return nil, nil, io.ErrUnexpectedEOF
+			}
+			data = data[width:]
+			core[i].attrs = data[:length]
+			data = data[length:]
+		}
 	}
 	if len(data) != 0 {
 		return nil, nil, errors.New("trailing core bytes")
 	}
 	return core, body[8+coreSize:], nil
+}
+
+func compactDynamicMatch(raw json.RawMessage, filter string) (bool, error) {
+	var attrs []model.Attribute
+	if err := json.Unmarshal(raw, &attrs); err != nil {
+		return false, err
+	}
+	for _, attr := range attrs {
+		if attr.Namespace != "attributes" {
+			continue
+		}
+		switch filter {
+		case "latency":
+			if attr.Path == "/latency" && attr.ValueType == "integer" && attr.IntegerValue != nil {
+				value, err := strconv.ParseInt(*attr.IntegerValue, 10, 64)
+				return value >= 500, err
+			}
+		case "sparse":
+			if attr.Path == "/custom/236" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func compactLookup(packed []byte, target string) ([]compactPosting, error) {
@@ -159,6 +195,7 @@ func measureProductCompactTerms(t *testing.T, ctx context.Context, db *sql.DB, s
 	dec := json.NewDecoder(f)
 	lists := make(map[string][]compactPosting)
 	var coreRaw []byte
+	withAttrs := os.Getenv("EVENTGLASS_PRODUCT_COMPACT_DYNAMIC") == "1"
 	for id := range rows {
 		var staged engine.StageRecord
 		if err := dec.Decode(&staged); err != nil {
@@ -171,6 +208,14 @@ func measureProductCompactTerms(t *testing.T, ctx context.Context, db *sql.DB, s
 		coreRaw = binary.AppendVarint(coreRaw, int64(*staged.Record.SeverityNumber))
 		coreRaw = binary.AppendUvarint(coreRaw, uint64(len(*staged.Record.Service)))
 		coreRaw = append(coreRaw, *staged.Record.Service...)
+		if withAttrs {
+			attrs, err := json.Marshal(staged.Record.Attrs)
+			if err != nil {
+				t.Fatal(err)
+			}
+			coreRaw = binary.AppendUvarint(coreRaw, uint64(len(attrs)))
+			coreRaw = append(coreRaw, attrs...)
+		}
 		perDoc := make(map[string]uint64)
 		for _, value := range staged.Record.SearchValues {
 			for _, term := range strings.Fields(strings.ToLower(value)) {
@@ -223,13 +268,37 @@ func measureProductCompactTerms(t *testing.T, ctx context.Context, db *sql.DB, s
 	combined := binary.LittleEndian.AppendUint64(nil, uint64(len(corePacked)))
 	combined = append(combined, corePacked...)
 	combined = append(combined, packed...)
-	coreRows, checkPacked, err := compactDecodeCore(combined, rows)
+	coreRows, checkPacked, err := compactDecodeCore(combined, rows, withAttrs)
 	if err != nil || !bytes.Equal(checkPacked, packed) || len(coreRows) != rows {
 		t.Fatalf("core roundtrip rows=%d err=%v", len(coreRows), err)
+	}
+	wantAttrs := 1
+	if noisy {
+		wantAttrs++
 	}
 	for id, row := range coreRows {
 		if row.project != int64(10+id%2) || row.severity != int64(id%10) || row.service != []string{"api", "worker", "sdk"}[id%3] {
 			t.Fatalf("core mismatch at id=%d: %+v", id, row)
+		}
+		if withAttrs {
+			var attrs []model.Attribute
+			if err := json.Unmarshal(row.attrs, &attrs); err != nil || len(attrs) != wantAttrs {
+				t.Fatalf("attribute core mismatch at id=%d: %v", id, err)
+			}
+			if attrs[0].Namespace != "attributes" || attrs[0].Path != "/latency" || attrs[0].ValueType != "integer" || attrs[0].IntegerValue == nil || *attrs[0].IntegerValue != strconv.Itoa(id%1000) {
+				t.Fatalf("latency source mismatch at id=%d", id)
+			}
+			if noisy && (attrs[1].Namespace != "attributes" || attrs[1].Path != fmt.Sprintf("/custom/%d", id%1000) || attrs[1].ValueType != "string" || attrs[1].StringValue == nil || *attrs[1].StringValue != productParquetCustom(id)) {
+				t.Fatalf("custom source mismatch at id=%d", id)
+			}
+			matched, err := compactDynamicMatch(row.attrs, "latency")
+			if err != nil || matched != (id%1000 >= 500) {
+				t.Fatalf("latency core mismatch at id=%d: %v", id, err)
+			}
+			matched, err = compactDynamicMatch(row.attrs, "sparse")
+			if err != nil || matched != (noisy && id%1000 == 236) {
+				t.Fatalf("sparse core mismatch at id=%d: %v", id, err)
+			}
 		}
 	}
 	decoder, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
@@ -351,41 +420,58 @@ func measureProductCompactTerms(t *testing.T, ctx context.Context, db *sql.DB, s
 		}
 		return info.Size()
 	}
-	t.Logf("compact_terms rows=%d noisy=%t random_trace_128=%t random_trace_256=%t terms=%d postings=%d raw_bytes=%d zstd_bytes=%d core_zstd_bytes=%d combined_bytes=%d single_plus_index=%d single_plus_complete=%d pair_bytes=%d", rows, noisy, os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_TRACE_128") == "1", os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_TRACE") == "1", len(terms), postings, len(raw), len(packed), len(corePacked), len(combined), stat(single)+int64(len(packed)), stat(single)+int64(len(combined)), stat(analytics)+stat(payload))
+	t.Logf("compact_terms rows=%d noisy=%t random_trace_128=%t random_trace_256=%t dynamic_attrs=%t terms=%d postings=%d raw_bytes=%d zstd_bytes=%d core_zstd_bytes=%d combined_bytes=%d single_plus_index=%d single_plus_complete=%d pair_bytes=%d", rows, noisy, os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_TRACE_128") == "1", os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_TRACE") == "1", withAttrs, len(terms), postings, len(raw), len(packed), len(corePacked), len(combined), stat(single)+int64(len(packed)), stat(single)+int64(len(combined)), stat(analytics)+stat(payload))
 	if rows == 100000 && os.Getenv("EVENTGLASS_PRODUCT_COMPACT_GATEWAY") == "1" {
-		measureCompactGateway(t, ctx, stage, single, combined, rows, noisy)
+		measureCompactGateway(t, ctx, stage, analytics, combined, rows, noisy)
 	}
 }
 
-func measureCompactGateway(t *testing.T, ctx context.Context, stage, single string, packed []byte, rows int, noisy bool) {
+func measureCompactGateway(t *testing.T, ctx context.Context, stage, analytics string, packed []byte, rows int, noisy bool) {
 	t.Helper()
 	indexPath := filepath.Join(filepath.Dir(stage), "compact-index.bin")
 	if err := os.WriteFile(indexPath, packed, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	store := &productFileRangeStore{paths: map[string]string{"single": single, "index": indexPath}, counts: make(map[string]productRangeCount)}
+	store := &productFileRangeStore{paths: map[string]string{"analytics": analytics, "index": indexPath}, counts: make(map[string]productRangeCount)}
 	var manifests []storage.ObjectManifest
-	for _, key := range []string{"single", "index"} {
+	for _, key := range []string{"analytics", "index"} {
 		evidence, err := storage.InspectFile(store.paths[key])
 		if err != nil {
 			t.Fatal(err)
 		}
 		manifests = append(manifests, storage.ObjectManifest{Capability: key, ObjectKey: key, Size: evidence.Bytes, SHA256: evidence.SHA256, BlockSize: evidence.BlockSize, BlockSHA256: evidence.BlockSHA256})
 	}
+	measureCompactGatewayStore(t, ctx, "file", store, manifests, packed, rows, noisy)
+	if os.Getenv("EVENTGLASS_PRODUCT_COMPACT_MINIO") == "1" {
+		measureCompactMinIO(t, ctx, indexPath, analytics, packed, rows, noisy)
+	}
+}
+
+func measureCompactGatewayStore(t *testing.T, ctx context.Context, backend string, store productMeasuredRangeStore, manifests []storage.ObjectManifest, packed []byte, rows int, noisy bool) {
+	t.Helper()
+	withAttrs := os.Getenv("EVENTGLASS_PRODUCT_COMPACT_DYNAMIC") == "1"
 	gateway, err := storage.NewGateway(store, manifests)
 	if err != nil {
 		t.Fatal(err)
 	}
 	server := httptest.NewServer(gateway)
 	defer server.Close()
-	for _, term := range []string{"fatal", "request", productParquetTrace(236)} {
+	cases := []struct{ term, filter string }{{"fatal", ""}, {"request", ""}, {productParquetTrace(236), ""}}
+	if withAttrs {
+		cases = append(cases, struct{ term, filter string }{"fatal", "latency"}, struct{ term, filter string }{"request", "latency"})
+		if noisy {
+			cases = append(cases, struct{ term, filter string }{"request", "sparse"})
+		}
+	}
+	for _, tc := range cases {
+		term := tc.term
 		if strings.HasPrefix(term, "trace-") && !noisy {
 			continue
 		}
 		type aggregate struct{ count, sum int64 }
 		want := make(map[string]aggregate)
 		for id := range rows {
-			if id%2 == 0 && (term == "fatal" && id%97 == 0 || term == "request" && id%97 != 0 || strings.HasPrefix(term, "trace-") && id == 236) {
+			if id%2 == 0 && (term == "fatal" && id%97 == 0 || term == "request" && id%97 != 0 || strings.HasPrefix(term, "trace-") && id == 236) && (tc.filter == "" || tc.filter == "latency" && id%1000 >= 500 || tc.filter == "sparse" && id%1000 == 236) {
 				service := []string{"api", "worker", "sdk"}[id%3]
 				value := want[service]
 				value.count++
@@ -393,19 +479,30 @@ func measureCompactGateway(t *testing.T, ctx context.Context, stage, single stri
 				want[service] = value
 			}
 		}
-		query := "SELECT service,count(*)::BIGINT,coalesce(sum(severity_number),0)::BIGINT FROM read_parquet(?) WHERE project_id=10 AND regexp_matches(message,'(^| )" + term + "( |$)') GROUP BY service"
+		from := "read_parquet(?) r"
+		where := "r.project_id=10 AND regexp_matches(r.message,'(^| )" + term + "( |$)')"
 		if strings.HasPrefix(term, "trace-") {
-			query = "SELECT service,count(*)::BIGINT,coalesce(sum(severity_number),0)::BIGINT FROM read_parquet(?) WHERE project_id=10 AND list_contains(search_values,'" + term + "') GROUP BY service"
+			where = "r.project_id=10 AND list_contains(r.search_values,'" + term + "')"
 		}
+		if tc.filter != "" {
+			from += ", UNNEST(r.attrs) AS x(attr)"
+			where += " AND attr.namespace='attributes'"
+			if tc.filter == "latency" {
+				where += " AND attr.path='/latency' AND attr.value_type='integer' AND attr.integer_value::BIGINT>=500"
+			} else {
+				where += " AND attr.path='/custom/236'"
+			}
+		}
+		query := "SELECT r.service,count(*)::BIGINT,coalesce(sum(r.severity_number),0)::BIGINT FROM " + from + " WHERE " + where + " GROUP BY r.service"
 		var scanTimes, indexTimes, scanGets, indexGets, scanBytes, indexBytes []int64
 		runScan := func() {
-			store.take("single")
+			store.take("analytics")
 			start := time.Now()
 			queryDB, err := engine.Open(ctx, "")
 			if err != nil {
 				t.Fatal(err)
 			}
-			resultRows, err := queryDB.QueryContext(ctx, query, server.URL+"/objects/single")
+			resultRows, err := queryDB.QueryContext(ctx, query, server.URL+"/objects/analytics")
 			got := make(map[string]aggregate)
 			if err == nil {
 				for resultRows.Next() {
@@ -425,10 +522,10 @@ func measureCompactGateway(t *testing.T, ctx context.Context, stage, single stri
 			}
 			closeErr := queryDB.Close()
 			if err != nil || closeErr != nil || !reflect.DeepEqual(got, want) {
-				t.Fatalf("gateway scan term=%q got=%v want=%v err=%v close=%v", term, got, want, err, closeErr)
+				t.Fatalf("gateway scan term=%q filter=%q got=%v want=%v err=%v close=%v", term, tc.filter, got, want, err, closeErr)
 			}
 			scanTimes = append(scanTimes, time.Since(start).Microseconds())
-			reads := store.take("single")
+			reads := store.take("analytics")
 			scanGets = append(scanGets, reads.gets)
 			scanBytes = append(scanBytes, reads.bytes)
 		}
@@ -449,7 +546,7 @@ func measureCompactGateway(t *testing.T, ctx context.Context, stage, single stri
 			if readErr != nil || closeErr != nil || response.StatusCode != http.StatusPartialContent || len(body) != len(packed) {
 				t.Fatalf("index Range status=%d size=%d read=%v close=%v", response.StatusCode, len(body), readErr, closeErr)
 			}
-			core, postingsData, err := compactDecodeCore(body, rows)
+			core, postingsData, err := compactDecodeCore(body, rows, withAttrs)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -464,6 +561,15 @@ func measureCompactGateway(t *testing.T, ctx context.Context, stage, single stri
 				}
 				row := core[p.id]
 				if row.project == 10 {
+					if tc.filter != "" {
+						match, err := compactDynamicMatch(row.attrs, tc.filter)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if !match {
+							continue
+						}
+					}
 					value := got[row.service]
 					value.count++
 					value.sum += row.severity
@@ -471,7 +577,7 @@ func measureCompactGateway(t *testing.T, ctx context.Context, stage, single stri
 				}
 			}
 			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("gateway compact term=%q got=%v want=%v", term, got, want)
+				t.Fatalf("gateway compact term=%q filter=%q got=%v want=%v", term, tc.filter, got, want)
 			}
 			indexTimes = append(indexTimes, time.Since(start).Microseconds())
 			reads := store.take("index")
@@ -490,6 +596,6 @@ func measureCompactGateway(t *testing.T, ctx context.Context, stage, single stri
 		for _, values := range [][]int64{scanTimes, indexTimes, scanGets, indexGets, scanBytes, indexBytes} {
 			slices.Sort(values)
 		}
-		t.Logf("compact_gateway term=%q reps=30 parquet_p50_us=%d parquet_p95_us=%d parquet_p99_us=%d compact_p50_us=%d compact_p95_us=%d compact_p99_us=%d parquet_get_p50=%d compact_get_p50=%d parquet_bytes_p50=%d compact_bytes_p50=%d", term, scanTimes[15], scanTimes[28], scanTimes[29], indexTimes[15], indexTimes[28], indexTimes[29], scanGets[15], indexGets[15], scanBytes[15], indexBytes[15])
+		t.Logf("compact_gateway backend=%s comparator=pair_analytics term=%q filter=%q reps=30 parquet_p50_us=%d parquet_p95_us=%d parquet_p99_us=%d compact_p50_us=%d compact_p95_us=%d compact_p99_us=%d parquet_get_p50=%d compact_get_p50=%d parquet_bytes_p50=%d compact_bytes_p50=%d", backend, term, tc.filter, scanTimes[15], scanTimes[28], scanTimes[29], indexTimes[15], indexTimes[28], indexTimes[29], scanGets[15], indexGets[15], scanBytes[15], indexBytes[15])
 	}
 }

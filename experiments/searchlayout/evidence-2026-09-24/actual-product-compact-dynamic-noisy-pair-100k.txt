@@ -1,0 +1,21 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:318: compact_lookup term="fatal" rows=100000 reps=30 parquet_p50_us=5746 parquet_p95_us=8257 parquet_p99_us=10124 compact_p50_us=1540 compact_p95_us=1809 compact_p99_us=2105
+    product_parquet_test.go:318: compact_lookup term="request" rows=100000 reps=30 parquet_p50_us=4181 parquet_p95_us=4865 parquet_p99_us=13680 compact_p50_us=2467 compact_p95_us=4646 compact_p99_us=7279
+    product_parquet_test.go:318: compact_lookup term="trace-00000000000000000000000000000000000000000000000000000000000000ed" rows=100000 reps=30 parquet_p50_us=5947 parquet_p95_us=8955 parquet_p99_us=10325 compact_p50_us=1746 compact_p95_us=2018 compact_p99_us=2558
+    product_parquet_test.go:318: compact_terms rows=100000 noisy=true random_trace_128=false random_trace_256=false dynamic_attrs=true terms=100008 postings=401031 raw_bytes=1392371 zstd_bytes=77839 core_zstd_bytes=234267 combined_bytes=312114 single_plus_index=3314093 single_plus_complete=3548368 pair_bytes=3343454
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="fatal" filter="" reps=30 parquet_p50_us=23061 parquet_p95_us=26915 parquet_p99_us=27030 compact_p50_us=8960 compact_p95_us=11005 compact_p99_us=11156 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1256703 compact_bytes_p50=312114
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="request" filter="" reps=30 parquet_p50_us=21426 parquet_p95_us=28076 parquet_p99_us=32624 compact_p50_us=13453 compact_p95_us=18989 compact_p99_us=19175 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1256703 compact_bytes_p50=312114
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="trace-00000000000000000000000000000000000000000000000000000000000000ed" filter="" reps=30 parquet_p50_us=23309 parquet_p95_us=28392 parquet_p99_us=29413 compact_p50_us=9219 compact_p95_us=12162 compact_p99_us=12186 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1256703 compact_bytes_p50=312114
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="fatal" filter="latency" reps=30 parquet_p50_us=40397 parquet_p95_us=45310 parquet_p99_us=45540 compact_p50_us=9409 compact_p95_us=9735 compact_p99_us=9771 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1256703 compact_bytes_p50=312114
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="request" filter="latency" reps=30 parquet_p50_us=329515 parquet_p95_us=340936 parquet_p99_us=342798 compact_p50_us=60775 compact_p95_us=63685 compact_p99_us=70788 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1256703 compact_bytes_p50=312114
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="request" filter="sparse" reps=30 parquet_p50_us=191248 parquet_p95_us=198503 parquet_p99_us=199211 compact_p50_us=59436 compact_p95_us=62232 compact_p99_us=62811 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1256703 compact_bytes_p50=312114
+    product_parquet_test.go:332: actual_converter rows=100000 noisy=true analytics_bytes=1256703 payload_bytes=2086751 pair_bytes=3343454 single_bytes=3236254
+--- PASS: TestActualConverterSingleParquetParity (31.97s)
+PASS
+memory.peak=536870912
+low 0
+high 0
+max 537
+oom 0
+oom_kill 0
+oom_group_kill 0

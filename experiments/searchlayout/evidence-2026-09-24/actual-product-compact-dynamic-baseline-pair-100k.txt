@@ -1,0 +1,18 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:318: compact_lookup term="fatal" rows=100000 reps=30 parquet_p50_us=5800 parquet_p95_us=6867 parquet_p99_us=7892 compact_p50_us=634 compact_p95_us=802 compact_p99_us=809
+    product_parquet_test.go:318: compact_lookup term="request" rows=100000 reps=30 parquet_p50_us=4187 parquet_p95_us=6618 parquet_p99_us=7295 compact_p50_us=2236 compact_p95_us=2763 compact_p99_us=2881
+    product_parquet_test.go:318: compact_terms rows=100000 noisy=false random_trace_128=false random_trace_256=false dynamic_attrs=true terms=8 postings=301031 raw_bytes=602146 zstd_bytes=214 core_zstd_bytes=47024 combined_bytes=47246 single_plus_index=2209088 single_plus_complete=2256120 pair_bytes=2315870
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="fatal" filter="" reps=30 parquet_p50_us=22932 parquet_p95_us=26811 parquet_p99_us=27734 compact_p50_us=6354 compact_p95_us=7127 compact_p99_us=8596 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1010847 compact_bytes_p50=47246
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="request" filter="" reps=30 parquet_p50_us=20715 parquet_p95_us=29014 parquet_p99_us=45645 compact_p50_us=10628 compact_p95_us=11819 compact_p99_us=12342 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1010847 compact_bytes_p50=47246
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="fatal" filter="latency" reps=30 parquet_p50_us=33795 parquet_p95_us=39018 parquet_p99_us=40310 compact_p50_us=5830 compact_p95_us=7526 compact_p99_us=7530 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1010847 compact_bytes_p50=47246
+    product_parquet_test.go:318: compact_gateway comparator=pair_analytics term="request" filter="latency" reps=30 parquet_p50_us=221302 parquet_p95_us=235084 parquet_p99_us=237365 compact_p50_us=35086 compact_p95_us=37952 compact_p99_us=39050 parquet_get_p50=1 compact_get_p50=1 parquet_bytes_p50=1010847 compact_bytes_p50=47246
+    product_parquet_test.go:332: actual_converter rows=100000 noisy=false analytics_bytes=1010847 payload_bytes=1305023 pair_bytes=2315870 single_bytes=2208874
+--- PASS: TestActualConverterSingleParquetParity (17.21s)
+PASS
+memory.peak=536870912
+low 0
+high 0
+max 210
+oom 0
+oom_kill 0
+oom_group_kill 0

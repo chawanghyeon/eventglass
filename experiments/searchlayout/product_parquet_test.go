@@ -48,6 +48,14 @@ func productParquetTrace(i int) string {
 	return "trace-" + fmt.Sprintf("%064x", i+1)
 }
 
+func productParquetCustom(i int) string {
+	if os.Getenv("EVENTGLASS_PRODUCT_PARQUET_RANDOM_ATTR") == "1" {
+		hash := sha256.Sum256([]byte(fmt.Sprintf("product-parquet-attr-%d", i)))
+		return fmt.Sprintf("%x", hash[:16])
+	}
+	return fmt.Sprintf("v%d", i)
+}
+
 func productParquetFixture(t *testing.T, path string, rows int, noisy bool) map[string]productParquetOracle {
 	t.Helper()
 	f, err := os.Create(path)
@@ -83,7 +91,7 @@ func productParquetFixture(t *testing.T, path string, rows int, noisy bool) map[
 			SchemaVersion: model.SchemaVersion, NormalizerVersion: model.NormalizerVersion, ScrubVersion: model.ScrubVersion,
 		}
 		if noisy {
-			value := fmt.Sprintf("v%d", i)
+			value := productParquetCustom(i)
 			record.Attrs = append(record.Attrs, model.Attribute{Namespace: "attributes", Path: fmt.Sprintf("/custom/%d", i%1000), ValueType: "string", StringValue: &value})
 			record.SearchValues = append(record.SearchValues, productParquetTrace(i))
 		}

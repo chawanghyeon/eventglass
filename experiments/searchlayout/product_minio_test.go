@@ -75,3 +75,53 @@ func measureProductMinIO(t *testing.T, ctx context.Context, root string, db *sql
 	after := store.OperationCounts()
 	t.Logf("product_minio_query rows=%d range_get=%d range_bytes=%d", rows, after.RangeRequests-upload.RangeRequests, after.RangeBytes-upload.RangeBytes)
 }
+
+func measureCompactMinIO(t *testing.T, ctx context.Context, index, analytics string, packed []byte, rows int, noisy bool) {
+	t.Helper()
+	endpoint, bucket := os.Getenv("EVENTGLASS_PRODUCT_MINIO_ENDPOINT"), os.Getenv("EVENTGLASS_PRODUCT_MINIO_BUCKET")
+	if endpoint == "" || bucket == "" {
+		t.Fatal("EVENTGLASS_PRODUCT_MINIO_ENDPOINT and EVENTGLASS_PRODUCT_MINIO_BUCKET are required")
+	}
+	store, err := storage.NewS3Store(ctx, storage.S3Config{
+		Endpoint: endpoint, Region: "us-east-1", Bucket: bucket,
+		Prefix:      fmt.Sprintf("searchlayout-compact-%d", time.Now().UnixNano()),
+		AccessKeyID: os.Getenv("AWS_ACCESS_KEY_ID"), SecretAccessKey: os.Getenv("AWS_SECRET_ACCESS_KEY"), PathStyle: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{"analytics": analytics, "index": index}
+	keys := []string{"analytics", "index"}
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := store.Delete(cleanupCtx, keys); err != nil {
+			t.Error(err)
+		}
+	})
+	var manifests []storage.ObjectManifest
+	for _, key := range keys {
+		evidence, err := storage.InspectFile(files[key])
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := os.Open(files[key])
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = store.PutStream(ctx, key, file, evidence.Bytes, evidence.SHA256)
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		manifests = append(manifests, storage.ObjectManifest{Capability: key, ObjectKey: key, Size: evidence.Bytes, SHA256: evidence.SHA256, BlockSize: evidence.BlockSize, BlockSHA256: evidence.BlockSHA256})
+	}
+	upload := store.OperationCounts()
+	t.Logf("compact_minio_upload rows=%d put=%d put_bytes=%d head=%d verify_get=%d verify_bytes=%d", rows, upload.PutRequests, upload.PutBytes, upload.HeadRequests, upload.FullGetRequests, upload.FullGetBytes)
+	meter := &productS3RangeMeter{S3Store: store, counts: make(map[string]productRangeCount)}
+	measureCompactGatewayStore(t, ctx, "minio", meter, manifests, packed, rows, noisy)
+	after := store.OperationCounts()
+	t.Logf("compact_minio_query rows=%d range_get=%d range_bytes=%d", rows, after.RangeRequests-upload.RangeRequests, after.RangeBytes-upload.RangeBytes)
+}
