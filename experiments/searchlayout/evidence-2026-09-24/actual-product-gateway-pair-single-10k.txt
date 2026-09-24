@@ -1,0 +1,15 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:263: product_gateway kind=aggregate source=pair reps=30 p50_us=21568 p95_us=25618 p99_us=30909 s3_get_p50=1 s3_bytes_p50=107369 s3_get_range=1..1 s3_bytes_range=107369..107369
+    product_parquet_test.go:263: product_gateway kind=aggregate source=single reps=30 p50_us=21649 p95_us=30716 p99_us=32466 s3_get_p50=1 s3_bytes_p50=230684 s3_get_range=1..1 s3_bytes_range=230684..230684
+    product_parquet_test.go:263: product_gateway kind=detail source=pair reps=30 p50_us=27168 p95_us=31179 p99_us=38191 s3_get_p50=2 s3_bytes_p50=243321 s3_get_range=2..2 s3_bytes_range=243321..243321
+    product_parquet_test.go:263: product_gateway kind=detail source=single reps=30 p50_us=29343 p95_us=38294 p99_us=45841 s3_get_p50=2 s3_bytes_p50=461368 s3_get_range=2..2 s3_bytes_range=461368..461368
+    product_parquet_test.go:277: actual_converter rows=10000 noisy=false analytics_bytes=107369 payload_bytes=135952 pair_bytes=243321 single_bytes=230684
+--- PASS: TestActualConverterSingleParquetParity (3.92s)
+PASS
+176422912
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0

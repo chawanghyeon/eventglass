@@ -18,7 +18,8 @@
 | BM25·분석기·구문·한국어 품질 | 고정 필드 BM25와 일부 한국어/RE2 실험만 별도 존재 | 통합 포맷 미검증 |
 | durable ACK·권한·fenced Publish·PG/S3 복구 | 현행 제품 계약은 존재, 새 포맷과 연결하지 않음 | 미검증 |
 | 동일 fixture의 pinned DuckDB/Parquet 직접 비교 | 1만/10만 문서 × 72조합 정확도 일치. 단일 Parquet 308,745/2,898,596B, 후보 세그먼트 711,792/6,384,202B. 로컬 regex p50 약 3.5배 차이 | 이 물리 포맷의 일관된 우위 반증; 제품 경로·원격 p95/p99 미검증 |
-| 외부 엔진·실제 제품 경로·전체 비용 | 같은 기능·권한의 제품 비교 없음 | 미검증 |
+| 실제 제품 변환기·질의 child·검증 Range 게이트웨이 | 두 1만 레코드 입력에서 두 역할/단일 Parquet의 집계·상세 정답, 저장량, 요청·바이트 대조 | 이 범위 통과; PG 권한·ACK·복구·실제 S3 미검증 |
+| 외부 엔진·전체 설치 비용 | 같은 기능·권한의 제품 비교 없음 | 미검증 |
 
 ## 요구하는 의미와 한계
 
@@ -119,6 +120,10 @@ macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·coverin
 같은 컬럼과 원문 JSON을 **단일 Parquet 객체**에 넣는 더 단순한 대안도 [1만](../../experiments/searchlayout/evidence-2026-09-24/unified-single-parquet-10k-linux-arm64.txt)·[10만 문서 분리 시험](../../experiments/searchlayout/evidence-2026-09-24/unified-single-parquet-100k-linux-arm64.txt)의 동일 72조합에서 독립 oracle과 일치했다. 크기는 308,745/2,898,596B로 위 두 역할 Parquet보다 5.9/4.6% 작고, 현재 세그먼트의 43.4/45.4%였다. [동일 1만 문서 세 방식 번갈아 30회](../../experiments/searchlayout/evidence-2026-09-24/unified-three-format-local-timing.txt)에서 단일 Parquet과 세그먼트의 p50은 희소 토큰 14.2/10.3ms, 광범위 토큰 15.3/10.8ms, regex 14.5/50.2ms였다. 세그먼트는 토큰 검색이 빠르지만 단일 Parquet은 저장량과 regex에서 낫다. [세 포맷을 한 512MiB 프로세스에 적재한 10만 문서 시험](../../experiments/searchlayout/evidence-2026-09-24/unified-single-parquet-combined-100k-oom.txt)은 OOM으로 실패했고, 단일 Parquet만 분리한 시험은 peak 523,108,352B, OOM 0으로 통과했다. 둘 다 제품 worker 메모리로 옮겨 해석할 수 없고, 분리 시험에도 약 13MiB 여유밖에 없었다. 단일 Parquet도 원문과 검색용 JSON의 중복을 포함하며 현행 제품 번들과 같지 않다. 토큰/BM25 품질, 원격 S3 GET, 권한과 내구 ACK를 아직 검증하지 않아 이 대안을 새 제품으로 승인하지 않는다.
 
 이후 [같은 HTTP Range 서버 첫 실행](../../experiments/searchlayout/evidence-2026-09-24/unified-http-range-three-queries-run1.txt)과 [독립 재실행](../../experiments/searchlayout/evidence-2026-09-24/unified-http-range-three-queries-run2.txt)에서 1만 문서의 희소/광범위 토큰·regex 정답을 원문 oracle과 다시 대조하고, 각각 번갈아 30회씩 요청을 셌다. 단일 Parquet은 세 질의 모두 **8 Range GET+2 HEAD, 2,469,960B/질의**였다. 실제 헤더는 작은 308,745B 객체 전체 범위를 8번 요청했다. 세그먼트는 토큰마다 **12 GET, 약 53KB**, regex는 **84 GET, 314,923B**였다. 같은 리전의 무료 전송만 고려하면 세그먼트의 바이트 절감이 요청료 절감은 아니다. 두 실행의 p50은 단일 Parquet/세그먼트가 희소 토큰 약 31/13ms, regex 약 24/58ms였으나 이는 loopback HTTP, 워커 1개, 합성 입력의 진단값이다. 실제 S3·제품 gateway·캐시·동시성·HTTP/TLS·월간 요청 분포가 빠졌으므로 AWS p95/p99와 총비용으로 확대하지 않는다.
+
+[실제 Eventglass 변환기와 질의 planner/child 비교](../../experiments/searchlayout/product_parquet_test.go)는 **정제 형식으로 직접 만든** 같은 1만 StageRecord를 현재 analytics/payload Parquet 두 역할로 변환한 뒤 두 파일의 컬럼과 원문을 하나의 Parquet으로 병합했다. SDK 수신·정규화·Accept를 거친 입력이라고 주장하지 않는다. 두 입력 모두 project 10/11, severity, 원문, 동적 속성과 검색 스칼라를 포함하며 두 번째 입력은 동적 경로 1,000개와 고유 검색값을 추가한다. 독립 Go 기대값에 대해 project 10의 검색 스칼라·regex·동적 정수 및 희소 사용자 정의 경로 필터 건수/합, 전체 1만 원문, 실제 query planner의 집계·상세 결과가 두 포맷에서 일치했다. [반복 입력 로그](../../experiments/searchlayout/evidence-2026-09-24/actual-converter-single-parquet-10k.txt)는 두 역할 합계 243,321B/단일 230,684B(**5.2% 절감**), [동적 입력 로그](../../experiments/searchlayout/evidence-2026-09-24/actual-converter-single-parquet-noisy-10k.txt)는 361,866B/349,229B(**3.5% 절감**)이다. 한 물리 파일의 두 로컬 hardlink를 서로 다른 역할 경로로 전달하면 기존 child가 동작한다. 같은 경로를 두 역할에 직접 지정하면 현재 입력 중복 검증이 거부하므로, 실제 S3에서는 한 객체 키에 대한 서로 다른 두 capability URL과 카탈로그 표현이 필요하다. 이 실험은 그 PG/S3 변경을 구현하지 않았다.
+
+[제품 검증 Range 게이트웨이 반복 입력](../../experiments/searchlayout/evidence-2026-09-24/actual-product-gateway-pair-single-10k.txt)과 [동적 입력](../../experiments/searchlayout/evidence-2026-09-24/actual-product-gateway-pair-single-noisy-10k.txt)은 같은 물리 객체 키에 서로 다른 두 capability를 발급하고 실제 query planner/child의 집계·상세 작업을 교차 순서로 각각 30회 수행했다. 등록하지 않은 capability는 404였고 모든 결과가 독립 기대값과 일치했다. 검증 게이트웨이의 캐시 없는 RangeStore에서는 집계가 두 역할 **1 GET/107,369 또는 143,450B**, 단일 객체 **1 GET/230,684 또는 349,229B**였다. 상세는 두 역할 **2 GET/243,321 또는 361,866B**, 단일 **2 GET/461,368 또는 698,458B**였다. 작은 파일이므로 블록 검증이 객체 대부분을 읽어 단일 객체의 집계 읽기 바이트가 **2.1~2.4배**다. 30회 p95/p99도 원시 로그에 있지만 loopback·파일 RangeStore·워커 1개의 작업 지연이다. 실제 S3 요청 과금, 1/2/4 worker 경쟁, PG 권한·ACK, 백업·복구, 제품 API 지연을 입증하지 못한다. 따라서 단일 Parquet을 채택하지 않고 비교 대상으로 유지한다.
 
 | 후보 | 확인한 결과 | 판정 |
 | --- | --- | --- |
