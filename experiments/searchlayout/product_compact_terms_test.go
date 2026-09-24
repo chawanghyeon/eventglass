@@ -184,19 +184,18 @@ func compactLookup(packed []byte, target string) ([]compactPosting, error) {
 	return nil, nil
 }
 
-// One compressed vocabulary favors storage; queries must decode the whole
-// block. It is not a random-access production index.
-func measureProductCompactTerms(t *testing.T, ctx context.Context, db *sql.DB, stage, single, analytics, payload string, rows int, noisy bool) {
+type compactBuilt struct {
+	combined, packed, raw, corePacked []byte
+	lists                             map[string][]compactPosting
+	terms                             []string
+	postings                          int
+}
+
+func buildCompact(t *testing.T, input io.Reader, rows int, withAttrs bool) compactBuilt {
 	t.Helper()
-	f, err := os.Open(stage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
-	dec := json.NewDecoder(f)
+	dec := json.NewDecoder(input)
 	lists := make(map[string][]compactPosting)
 	var coreRaw []byte
-	withAttrs := os.Getenv("EVENTGLASS_PRODUCT_COMPACT_DYNAMIC") == "1"
 	for id := range rows {
 		var staged engine.StageRecord
 		if err := dec.Decode(&staged); err != nil {
@@ -269,6 +268,22 @@ func measureProductCompactTerms(t *testing.T, ctx context.Context, db *sql.DB, s
 	combined := binary.LittleEndian.AppendUint64(nil, uint64(len(corePacked)))
 	combined = append(combined, corePacked...)
 	combined = append(combined, packed...)
+	return compactBuilt{combined, packed, raw, corePacked, lists, terms, postings}
+}
+
+// One compressed vocabulary favors storage; queries must decode the whole
+// block. It is not a random-access production index.
+func measureProductCompactTerms(t *testing.T, ctx context.Context, db *sql.DB, stage, single, analytics, payload string, rows int, noisy bool) {
+	t.Helper()
+	f, err := os.Open(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	withAttrs := os.Getenv("EVENTGLASS_PRODUCT_COMPACT_DYNAMIC") == "1"
+	built := buildCompact(t, f, rows, withAttrs)
+	combined, packed, raw, corePacked := built.combined, built.packed, built.raw, built.corePacked
+	lists, terms, postings := built.lists, built.terms, built.postings
 	coreRows, checkPacked, err := compactDecodeCore(combined, rows, withAttrs)
 	if err != nil || !bytes.Equal(checkPacked, packed) || len(coreRows) != rows {
 		t.Fatalf("core roundtrip rows=%d err=%v", len(coreRows), err)
@@ -322,7 +337,7 @@ func measureProductCompactTerms(t *testing.T, ctx context.Context, db *sql.DB, s
 	if count := read(); count != uint64(len(terms)) {
 		t.Fatalf("term count %d", count)
 	}
-	prevTerm = ""
+	prevTerm := ""
 	for _, want := range terms {
 		prefix, suffix := read(), read()
 		if prefix > uint64(len(prevTerm)) || suffix > uint64(len(decoded)) {
