@@ -1,0 +1,18 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:318: compact_terms rows=10000 noisy=true random_trace_128=true random_trace_256=false dynamic_attrs=true terms=10008 postings=40104 raw_bytes=413444 zstd_bytes=210775 core_zstd_bytes=250424 combined_bytes=461207 single_plus_index=1357811 single_plus_complete=1608243 pair_bytes=1159653
+    product_parquet_test.go:318: compact_residual rows=10000 source_page_rows=128 pages=79 source_bytes=438484 index_bytes=461207 total_bytes=899691 pair_bytes=1159653 delta_bytes=-259962
+    product_parquet_test.go:318: compact_compound rows=10000 object_bytes=899723 pair_bytes=1159653 delta_bytes=-259930
+    product_parquet_test.go:318: compact_compound_upload put=2 put_bytes=1571490 head=2 verify_get=2 verify_bytes=1571490
+    product_parquet_test.go:318: compact_compound_minio source=compound rows=10000 reps=30 p50_us=10054 p95_us=14215 p99_us=15202 cpu_p50_us=7962 cpu_p95_us=9347 get_p50=3 bytes_p50=2699169
+    product_parquet_test.go:318: compact_compound_minio source=payload rows=10000 reps=30 p50_us=22734 p95_us=26773 p99_us=35039 cpu_p50_us=22427 cpu_p95_us=24298 get_p50=1 bytes_p50=671767
+    product_parquet_test.go:318: compact_compound_minio_query range_get=120 range_bytes=101128080
+    product_parquet_test.go:332: actual_converter rows=10000 noisy=true analytics_bytes=487886 payload_bytes=671767 pair_bytes=1159653 single_bytes=1147036
+--- PASS: TestActualConverterSingleParquetParity (2.41s)
+PASS
+201666560
+low 0
+high 0
+max 0
+oom 0
+oom_kill 0
+oom_group_kill 0

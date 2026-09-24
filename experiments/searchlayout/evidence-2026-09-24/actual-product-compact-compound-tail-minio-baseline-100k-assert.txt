@@ -1,0 +1,20 @@
+=== RUN   TestActualConverterSingleParquetParity
+    product_parquet_test.go:318: compact_lookup term="fatal" rows=100000 reps=30 parquet_p50_us=8319 parquet_p95_us=11885 parquet_p99_us=12794 compact_p50_us=685 compact_p95_us=1328 compact_p99_us=1372
+    product_parquet_test.go:318: compact_lookup term="request" rows=100000 reps=30 parquet_p50_us=7411 parquet_p95_us=18320 parquet_p99_us=20026 compact_p50_us=2703 compact_p95_us=5093 compact_p99_us=5795
+    product_parquet_test.go:318: compact_terms rows=100000 noisy=false random_trace_128=false random_trace_256=false dynamic_attrs=true terms=8 postings=301031 raw_bytes=602146 zstd_bytes=214 core_zstd_bytes=47024 combined_bytes=47246 single_plus_index=2209088 single_plus_complete=2256120 pair_bytes=2315870
+    product_parquet_test.go:318: compact_residual rows=100000 source_page_rows=128 pages=782 source_bytes=2064297 index_bytes=47246 total_bytes=2111543 pair_bytes=2315870 delta_bytes=-204327
+    product_parquet_test.go:318: compact_compound rows=100000 object_bytes=2111575 pair_bytes=2315870 delta_bytes=-204295
+    product_parquet_test.go:318: compact_compound_upload put=2 put_bytes=3416598 head=2 verify_get=2 verify_bytes=3416598
+    product_parquet_test.go:318: compact_compound_minio source=compound rows=100000 reps=30 p50_us=11783 p95_us=32798 p99_us=41433 cpu_p50_us=9551 cpu_p95_us=12171 get_p50=3 bytes_p50=2111575
+    product_parquet_test.go:318: compact_compound_minio source=payload rows=100000 reps=30 p50_us=30362 p95_us=59630 p99_us=60461 cpu_p50_us=29348 cpu_p95_us=42865 get_p50=1 bytes_p50=1305023
+    product_parquet_test.go:318: compact_compound_minio_query range_get=120 range_bytes=102497940
+    product_parquet_test.go:332: actual_converter rows=100000 noisy=false analytics_bytes=1010847 payload_bytes=1305023 pair_bytes=2315870 single_bytes=2208874
+--- PASS: TestActualConverterSingleParquetParity (13.00s)
+PASS
+536875008
+low 0
+high 0
+max 598
+oom 0
+oom_kill 0
+oom_group_kill 0

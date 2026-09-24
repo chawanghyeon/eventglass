@@ -113,7 +113,13 @@ func measureProductCompactCompoundMinIO(t *testing.T, compound, payload string, 
 	}
 	defer decodeSource.Close()
 	runCompound := func() {
-		footer := readRange(compoundSize-32, 32)
+		pages := uint64((rows + 127) / 128)
+		tailSize := int64(pages*16 + 20 + 32)
+		if tailSize > compoundSize {
+			t.Fatal("invalid compound tail size")
+		}
+		tail := readRange(compoundSize-tailSize, tailSize)
+		footer := tail[len(tail)-32:]
 		if string(footer[:4]) != "CRS1" || crc32.ChecksumIEEE(footer[:28]) != binary.LittleEndian.Uint32(footer[28:]) {
 			t.Fatal("invalid compound footer")
 		}
@@ -123,6 +129,11 @@ func measureProductCompactCompoundMinIO(t *testing.T, compound, payload string, 
 		if indexSize < 8 || indexSize+sourceSize+32 != uint64(compoundSize) || coreSize > indexSize-8 {
 			t.Fatal("invalid compound ranges")
 		}
+		sourceFooter := tail[len(tail)-52 : len(tail)-32]
+		directory := binary.LittleEndian.Uint64(sourceFooter[8:16])
+		if string(sourceFooter[16:]) != "RSD1" || binary.LittleEndian.Uint64(sourceFooter[:8]) != pages || directory+pages*16+20 != sourceSize || indexSize+directory != uint64(compoundSize-tailSize) {
+			t.Fatal("invalid source directory")
+		}
 		corePacked := readRange(8, int64(coreSize))
 		coreBody := binary.LittleEndian.AppendUint64(nil, coreSize)
 		coreBody = append(coreBody, corePacked...)
@@ -130,13 +141,7 @@ func measureProductCompactCompoundMinIO(t *testing.T, compound, payload string, 
 		if err != nil {
 			t.Fatal(err)
 		}
-		sourceFooter := readRange(int64(indexSize+sourceSize-20), 20)
-		pages := binary.LittleEndian.Uint64(sourceFooter[:8])
-		directory := binary.LittleEndian.Uint64(sourceFooter[8:16])
-		if string(sourceFooter[16:]) != "RSD1" || pages != uint64((rows+127)/128) || directory+pages*16+20 != sourceSize {
-			t.Fatal("invalid source directory")
-		}
-		entry := readRange(int64(indexSize+directory+uint64(target/128)*16), 16)
+		entry := tail[(target/128)*16:][:16]
 		pageOffset, pageSize := binary.LittleEndian.Uint64(entry[:8]), binary.LittleEndian.Uint64(entry[8:])
 		if pageSize == 0 || pageOffset+pageSize > directory {
 			t.Fatal("invalid source page")
@@ -213,6 +218,9 @@ func measureProductCompactCompoundMinIO(t *testing.T, compound, payload string, 
 	for choice, label := range []string{"compound", "payload"} {
 		for _, values := range [][]int64{wall[choice], cpu[choice], gets[choice], readBytes[choice]} {
 			slices.Sort(values)
+		}
+		if choice == 0 && (gets[choice][0] != 3 || gets[choice][29] != 3 || readBytes[choice][0] != readBytes[choice][29]) {
+			t.Fatal("compound detail did not use three stable verified Range reads")
 		}
 		t.Logf("compact_compound_minio source=%s rows=%d reps=30 p50_us=%d p95_us=%d p99_us=%d cpu_p50_us=%d cpu_p95_us=%d get_p50=%d bytes_p50=%d", label, rows, wall[choice][15], wall[choice][28], wall[choice][29], cpu[choice][15], cpu[choice][28], gets[choice][15], readBytes[choice][15])
 	}
