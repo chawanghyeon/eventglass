@@ -1,0 +1,8 @@
+=== RUN   TestUniversalRangeRoundTrip
+    unified_range_test.go:504: local docs=10000 objectBytes=711792 directoryBytes=2652 coreBytes=2734 fieldBytes=274650 postingBytes=20231 sourceBytes=281096 dictionaryBytes=130404 terms=10007 fields=1007 verified=72
+    unified_range_test.go:537: minio query=rare GET=12 bytes=53393
+    unified_range_test.go:537: minio query=broad GET=12 bytes=53292
+    unified_range_test.go:537: minio query=regex GET=84 bytes=314923
+--- PASS: TestUniversalRangeRoundTrip (4.83s)
+PASS
+ok  	github.com/chawanghyeon/eventglass/experiments/searchlayout	5.218s

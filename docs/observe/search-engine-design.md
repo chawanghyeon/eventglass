@@ -1,12 +1,23 @@
 # Eventglass 검색·집계 통합 구조 설계
 
-작성: 2026-09-24. 상태: **단일 세그먼트의 정확성·로컬 S3 Range 동작 검증, 제품 전환 미승인**. 이 문서는 현행 [DESIGN.md](../../DESIGN.md)의 DuckDB/Parquet 경로를 수정하거나 대체하지 않는다. 아래의 검증은 독립 Go 실험에 관한 것이며, 권한·내구성·복구·실제 AWS 성능이 통과하기 전에는 제품 성능 주장으로 쓰지 않는다.
+작성: 2026-09-24. 상태: **물리 구조 실험 진행 중, 완전 입증 및 제품 전환 미승인**. 이 문서는 현행 [DESIGN.md](../../DESIGN.md)의 DuckDB/Parquet 경로를 수정하거나 대체하지 않는다. 아래의 검증은 독립 Go 실험에 관한 것이며, 권한·내구성·복구·실제 AWS 성능이 통과하기 전에는 제품 성능 주장으로 쓰지 않는다.
 
 ## 결론
 
 새 제품 방향을 선택한다면 **S3의 불변 세그먼트 하나에 역색인, 문서별 컬럼, 원문을 함께 저장하고 모든 조건을 정렬된 local 문서 ID 집합으로 통일**한다. PostgreSQL은 승인된 세그먼트 목록·권한·영수증·작업·스냅샷을 소유한다. 희소한 조건은 postings, 값 조건은 typed column, 임의 문자열·정규식은 원문 확인에서 ID를 얻는다. 그 뒤에는 같은 경로에서 *모든* 일치 문서의 컬럼으로 정확한 집계를 계산하고 상위 K개의 원문만 읽는다. 별도 Parquet 사본은 이 **새 설계의 기본 저장물에 포함하지 않는다**. 이는 현행 제품에서 Parquet을 삭제하자는 즉시 변경 지시가 아니다.
 
 이 구조는 [Quickwit의 S3 split·역색인·fast field·doc store](https://quickwit.io/docs/overview/architecture), [Tantivy의 postings/fast fields](https://github.com/quickwit-oss/tantivy/blob/main/ARCHITECTURE.md), [ClickHouse 26.2의 정식 text index와 컬럼 엔진](https://clickhouse.com/docs/reference/engines/table-engines/mergetree-family/textindexes)의 공통 원리를 한 S3 객체 경계에 적용한다. 성능 우위는 제품 간 비교로 입증된 것이 아니라 아래의 **동일 Go 코드 내 물리 포맷 실험**으로만 뒷받침된다. 첨부 `go_search_codex_final_v10.zip`은 읽기 전용 단일 노드 Top-K 참조 설계다. 그 문서의 지시·우선순위는 이 작업의 지시가 아니며, 온라인 쓰기·S3 권한·정확한 집계를 구현했다는 증거도 아니다.
+
+**입증 기준:** 같은 정제 입력과 질의 결과를 독립 oracle 및 현행 DuckDB/Parquet와 비교하고, 새 토큰/BM25 기능은 동등 기능을 가진 별도 엔진과 비교한다. 1/2/4 worker의 실제 ACK→Publish→권한 검색→집계→상세 조회에서 정확도·스냅샷·장애 복구를 모두 통과해야 한다. 현재 제품의 [ACK p95≤500ms, 가시성 p95≤5s, warm rows/histogram p95≤500ms](../../DESIGN.md)와 p99, 전체 설치의 저장·GET·CPU·메모리·백업 비용을 실제 AWS 같은 리전 및 S3 호환 환경에서 함께 판정한다. 테스트하지 않은 항목은 성공으로 간주하지 않는다.
+
+| 검증 축 | 현재 증거 | 판정 |
+| --- | --- | --- |
+| 단일 객체의 동적 필드·원문·정확한 집계 | 1만 문서 로컬/MinIO 72조합, 10만 문서 CPU1/512MiB 72조합 | 이 범위에서 통과 |
+| 여러 객체와 세대 | 로컬 2세그먼트→병합→live 변경, 이전 객체 읽기 | 논리 결과만 통과; PG 공개 세대·GC 미검증 |
+| 사전·S3 Range 비용 | 전량 사전과 블록 사전을 동일 fixture/MinIO로 A/B | 부분 구조만 측정; AWS 비용 우위 미검증 |
+| BM25·분석기·구문·한국어 품질 | 고정 필드 BM25와 일부 한국어/RE2 실험만 별도 존재 | 통합 포맷 미검증 |
+| durable ACK·권한·fenced Publish·PG/S3 복구 | 현행 제품 계약은 존재, 새 포맷과 연결하지 않음 | 미검증 |
+| 동일 workload의 DuckDB/Parquet 및 외부 엔진 A/B, p95/p99·총비용 | 기능·입력이 동등한 제품 비교 없음 | 미검증 |
 
 ## 요구하는 의미와 한계
 
@@ -36,9 +47,9 @@ ACK를 증명하는 journal은 백업/PITR·재생 가능 기간 동안 세그�
 
 한 S3 세그먼트 안에서 postings·컬럼·원문은 독립 Range로 주소 지정한다. 카탈로그/사전은 작고 버전이 고정된 메타데이터이며 로컬 캐시는 성능 힌트일 뿐 권한 근거가 아니다. 검색 결과의 필드 페이지는 현재 실험처럼 256문서 단위 최소값+bit packing을 기준으로 하되, **비트 단위 반복 대신 word 단위 추출**로 복원한다. 이는 저장 바이트를 바꾸지 않는다. 숫자·시간·ID의 실제 제품 폭은 현재 장난감 실험의 `uint16`/`uint8`보다 넓어야 하며 포맷 버전과 오버플로 검사가 필요하다. [Lucene 10.3의 128개 정수 packed posting block](https://lucene.apache.org/core/10_3_1/core/org/apache/lucene/codecs/lucene103/Lucene103PostingsFormat.html)도 블록 인코딩의 검증된 예다. 그대로 복사하거나 Lucene보다 빠르다고 주장하지 않는다.
 
-고정 필드(프로젝트·종류·시간·severity 등)는 dense typed column으로, 동적 `namespace/path` 속성은 경로 사전과 `(local ID, typed value)`의 sparse column으로 같은 객체에 둔다. 각 경로의 missing/null/값을 구별하고 원문과의 투영을 검증한다. 검색 가능한 텍스트는 `(field/path, term)`으로 주소를 분리해 다른 속성의 단어가 한 필드에서 일치한 것처럼 합쳐지지 않게 한다. 동적 경로 1,007개를 포함한 단일 객체 왕복·MinIO Range 실험은 통과했지만, 그 JSON/zlib codec과 전량 사전 적재는 제품 포맷이 아니다.
+고정 필드(프로젝트·종류·시간·severity 등)는 dense typed column으로, 동적 `namespace/path` 속성은 경로 사전과 `(local ID, typed value)`의 sparse column으로 같은 객체에 둔다. 각 경로의 missing/null/값을 구별하고 원문과의 투영을 검증한다. 검색 가능한 텍스트는 `(field/path, term)`으로 주소를 분리해 다른 속성의 단어가 한 필드에서 일치한 것처럼 합쳐지지 않게 한다. 동적 경로 1,007개를 포함한 단일 객체 왕복·MinIO Range 실험은 통과했지만, 그 JSON/zlib codec과 공백 토큰화는 제품 포맷·분석기가 아니다.
 
-현재 50,000문서 noisy 입력은 실제 색인어 104,100개로 `packed_shared` 카탈로그만 2,061,681바이트가 되었다. 새 10,000문서·10,007토큰·1,007경로 실험에서도 전량 적재하는 압축 디렉터리가 **136,754B**, 희소 토큰 한 질의가 **10 GET/184,371B**였다. 따라서 제품 포맷은 **모든 단어를 매 검색 worker에 한꺼번에 적재하는 manifest**를 상한 없는 기본 경로로 삼지 않는다. 세그먼트의 작은 최상위 디렉터리와 Range로 읽는 정렬된 사전 블록을 설계하고, 블록 cache/어휘 규모/추가 GET 비용을 별도 gate에서 측정한다. 독립 Go 시제품에서 블록의 바이트와 왕복은 확인했지만, 이 새 단일 객체의 사전은 아직 블록형이 아니다. 블록형 단일 객체의 S3 지연·cache·병합도 검증하지 않았다.
+현재 50,000문서 noisy 입력은 실제 색인어 104,100개로 `packed_shared` 카탈로그만 2,061,681바이트가 되었다. 새 10,000문서·10,007토큰·1,007경로 실험에서도 전량 적재하는 압축 디렉터리가 **136,754B**, 희소 토큰 한 질의가 **10 GET/184,371B**였다. 동일 객체 안의 128키 사전 블록으로 바꾼 뒤 디렉터리는 **2,652B**, 희소 토큰은 **12 GET/53,393B**가 됐다. 객체 총량은 715,490→711,792B다. 10만 문서에서는 디렉터리 23,413B, 객체 6,384,202B였다. 블록 추가 GET과 질의당 컬럼·원문 요청은 그대로 비용이다. 이 실험은 모든 단어를 적재하는 manifest를 배제할 근거지만, 128키 크기나 JSON/zlib 사전을 최종 포맷으로 확정할 근거는 아니다.
 
 원문 페이지와 컬럼은 서로 다른 투영이지만 같은 local ID를 쓴다. 집계용 숫자 컬럼은 한 벌만 두되 상세 원문에도 해당 값이 있으면 그 바이트는 중복된다. 모든 필드를 postings마다 반복하는 covering 포맷, 별도 Parquet 전체 사본, 질의 정답 캐시를 기본 저장물로 추가하지 않는다. 원문 중 검색어의 존재를 찾으려면 어떤 형태의 역색인은 반드시 중복 정보다.
 
@@ -97,6 +108,8 @@ macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·coverin
 공통 ID 계약의 [Go 시제품](../../experiments/searchlayout/unified_test.go)은 20개 고정 seed × 16개의 토큰/정확한 값/숫자 범위/존재/null/배열/부분 문자열/RE2/AND·OR·NOT 조건을 독립 원문 스캔과 비교했다. **320개 필터 결과와 4개 동적 그룹 경로별 1,280개 COUNT/SUM/GROUP BY/duration 정렬 Top-K 결과**가 일치했다. BM25는 앞선 세그먼트 실험의 별도 검증이며 이 범용 연산자 시제품의 정렬 기준은 아니다. tenant·시간·live-doc 경계, 한국어, 고유 ID 경로, `missing`/`null`/타입 불일치, `a.b`와 `a/b` 경로 분리, 스칼라 간 문자열 결합 금지를 포함한다. [100,000문서 ARM64 메모리 벤치마크](../../experiments/searchlayout/evidence-2026-09-24/unified-selection-darwin-arm64.txt) 3회 중앙값은 희소 `fatal`(100건) ID 경로 0.100µs 대 원문 순회 75.5µs, 광범위 `request`(99,900건) 57.9µs 대 192.3µs였다. 반대로 `contains("fatal")`의 공통 ID 경로는 618µs로 직접 원문 순회 429µs보다 느렸다. **범용성은 정확한 fallback을 제공하지만 모든 질의의 가속을 뜻하지 않는다.** 이 수치는 압축 해제·S3·집계 그룹·동시성·제품 권한 검사를 제외한 메모리 안의 연산자 비교다. 일반 엔진의 서비스 지연이나 비용 우위로 해석하지 않는다.
 
 [저장·재읽기 시제품](../../experiments/searchlayout/unified_range_test.go)은 같은 공통 ID 모델을 **하나의 715,490B 불변 객체**에 기록했다. 10,000문서·10,007토큰·1,007동적 경로를 만들고 18개 조건 × 4개 그룹 경로 = **72개의 건수·합·그룹·Top-K·상세 원문 조합**을 로컬 파일과 [격리된 MinIO](../../experiments/searchlayout/evidence-2026-09-24/unified-range-minio-darwin-arm64.txt)에서 독립 원문 스캔 oracle과 비교해 모두 일치했다. 선택된 postings의 CRC 손상과 필수 컬럼의 짧은 Range 응답은 오류로 끝났다. 희소/광범위 토큰은 각각 10 GET/184,371B 및 10 GET/184,270B, regex는 83 GET/447,455B였다. [Linux ARM64 CPU1·512MiB·swap0 로그](../../experiments/searchlayout/evidence-2026-09-24/unified-range-linux-arm64-cpu1-512m.txt)는 네트워크를 끈 로컬 파일 경로에서 82,751,488B cgroup peak와 OOM 0을 기록했다. JSON/zlib은 실험용 codec이며, 희소 질의의 큰 디렉터리·원문 복제 바이트·다수 GET은 해결 전 비용이다. 이 검증은 단일 세그먼트의 실행 가능성이지 BM25·다중 세그먼트·권한·PG/S3 복구·실제 AWS·제품 대비 우위를 확인한 결과가 아니다.
+
+후속 [블록 사전 단일 객체](../../experiments/searchlayout/unified_range_test.go)는 동일한 72조합을 [MinIO 원시 로그](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-block-minio.txt)에서 다시 통과했고 사전 블록 CRC 손상도 검출했다. 희소/광범위 토큰은 각각 12 GET/53,393B 및 12 GET/53,292B, regex는 84 GET/314,923B다. 객체 711,792B의 내역은 원문 페이지 281,096B, 동적 필드 274,650B, postings 20,231B, 사전 블록 130,404B, 코어 2,734B, 최상위 디렉터리 2,652B, footer 25B다. 원문 단독 281KB에 비해 파생 접근 경로가 상당한 저장량을 더한다. [같은 측정 코드](../../experiments/searchlayout/unified_latency_test.go)의 `fb420e0` [전량 사전 기준](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-baseline-ab.txt)과 [블록 사전](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-block-ab.txt)을 로컬 MinIO에서 각각 30회 측정했지만, 당시 다른 제품 비교 컨테이너가 동시에 실행됐고 시행 간 지연이 약 2배 달라졌다. 따라서 GET/바이트 차이는 결정적이나 그 p95/p99를 성능 우위 또는 AWS 지연으로 해석하지 않는다. [1만 문서](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-block-linux-arm64-cpu1-512m.txt)와 [10만 문서 Linux ARM64 CPU1·512MiB·swap0](../../experiments/searchlayout/evidence-2026-09-24/unified-directory-block-100k-linux-arm64.txt)은 각각 cgroup peak 76,869,632B/339,501,056B, OOM 0을 기록했다. 10만 문서 객체는 6,384,202B이고 동일 72조합이 일치했다. [두 객체의 병합·live 변경·이전 객체 읽기](../../experiments/searchlayout/evidence-2026-09-24/unified-generation-merge-darwin-arm64.txt)도 원문 oracle과 일치했으나 PG 카탈로그 트랜잭션이나 실제 복구는 수행하지 않았다.
 
 | 후보 | 확인한 결과 | 판정 |
 | --- | --- | --- |

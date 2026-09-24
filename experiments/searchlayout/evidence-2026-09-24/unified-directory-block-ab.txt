@@ -1,0 +1,8 @@
+=== RUN   TestUniversalRangeLatency
+    unified_latency_test.go:69: minio query=rare GET=12 bytes=53393 p50_us=42223 p95_us=47705 p99_us=51031 reps=30
+    unified_latency_test.go:69: minio query=broad GET=12 bytes=53292 p50_us=43554 p95_us=53933 p99_us=64566 reps=30
+    unified_latency_test.go:69: minio query=regex GET=84 bytes=314923 p50_us=266981 p95_us=317431 p99_us=330140 reps=30
+    unified_latency_test.go:71: objectBytes=711792
+--- PASS: TestUniversalRangeLatency (9.68s)
+PASS
+ok  	github.com/chawanghyeon/eventglass/experiments/searchlayout	9.870s

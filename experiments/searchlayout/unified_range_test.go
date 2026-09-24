@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"slices"
 	"sort"
+	"strconv"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,11 +23,18 @@ import (
 // ranges. JSON is used for the small probe's column/source codec; its byte size
 // is not a proposed production format.
 type universalDirectory struct {
-	Count   int             `json:"count"`
-	Core    part            `json:"core"`
-	Fields  map[string]part `json:"fields"`
-	Terms   map[string]part `json:"terms"`
-	Sources []part          `json:"sources"`
+	Count       int              `json:"count"`
+	Core        part             `json:"core"`
+	Fields      map[string]part  `json:"-"`
+	Terms       map[string]part  `json:"-"`
+	FieldBlocks []universalBlock `json:"field_blocks"`
+	TermBlocks  []universalBlock `json:"term_blocks"`
+	Sources     []part           `json:"sources"`
+}
+
+type universalBlock struct {
+	First string `json:"first"`
+	Data  part   `json:"data"`
 }
 
 type universalCore struct {
@@ -37,6 +45,7 @@ type universalCore struct {
 }
 
 const universalPageDocs = 128
+const universalDictionaryKeys = 128
 const universalFooterSize = 25
 
 func writeUniversalObject(path string, docs []universalDoc) (universalDirectory, int64, error) {
@@ -93,6 +102,29 @@ func writeUniversalObject(path string, docs []universalDoc) (universalDirectory,
 		}
 		dir.Sources = append(dir.Sources, p)
 	}
+	writeBlocks := func(keys []string, entries map[string]part) ([]universalBlock, error) {
+		var blocks []universalBlock
+		for start := 0; start < len(keys); start += universalDictionaryKeys {
+			batch := make(map[string]part)
+			for _, key := range keys[start:min(start+universalDictionaryKeys, len(keys))] {
+				batch[key] = entries[key]
+			}
+			p, err := writeJSON(batch)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, universalBlock{First: keys[start], Data: p})
+		}
+		return blocks, nil
+	}
+	dir.FieldBlocks, err = writeBlocks(paths, dir.Fields)
+	if err != nil {
+		return dir, 0, err
+	}
+	dir.TermBlocks, err = writeBlocks(terms, dir.Terms)
+	if err != nil {
+		return dir, 0, err
+	}
 	directoryPart, err := writeJSON(dir)
 	if err != nil {
 		return dir, 0, err
@@ -139,7 +171,7 @@ func readUniversalDirectory(ctx context.Context, src rangeSource, size int64) (u
 	if err := json.Unmarshal(raw, &dir); err != nil {
 		return dir, err
 	}
-	if dir.Count <= 0 || len(dir.Sources) != (dir.Count+universalPageDocs-1)/universalPageDocs {
+	if dir.Count <= 0 || len(dir.Sources) != (dir.Count+universalPageDocs-1)/universalPageDocs || len(dir.FieldBlocks) == 0 || len(dir.TermBlocks) == 0 {
 		return dir, errors.New("invalid universal directory")
 	}
 	check := func(p part) error {
@@ -151,14 +183,14 @@ func readUniversalDirectory(ctx context.Context, src rangeSource, size int64) (u
 	if err := check(dir.Core); err != nil {
 		return dir, err
 	}
-	for _, p := range dir.Fields {
-		if err := check(p); err != nil {
-			return dir, err
-		}
-	}
-	for _, p := range dir.Terms {
-		if err := check(p); err != nil {
-			return dir, err
+	for _, blocks := range [][]universalBlock{dir.FieldBlocks, dir.TermBlocks} {
+		for i, block := range blocks {
+			if block.First == "" || i > 0 && block.First <= blocks[i-1].First {
+				return dir, errors.New("invalid universal block order")
+			}
+			if err := check(block.Data); err != nil {
+				return dir, err
+			}
 		}
 	}
 	for _, p := range dir.Sources {
@@ -198,6 +230,10 @@ func universalFixture(n int) []universalDoc {
 	return docs
 }
 
+func universalBlockFor(blocks []universalBlock, key string) int {
+	return sort.Search(len(blocks), func(i int) bool { return blocks[i].First > key }) - 1
+}
+
 func runUniversalRange(ctx context.Context, src rangeSource, size int64, p universalPredicate, groupPath string) (universalAnswer, []universalDoc, error) {
 	dir, err := readUniversalDirectory(ctx, src, size)
 	if err != nil {
@@ -209,6 +245,26 @@ func runUniversalRange(ctx context.Context, src rangeSource, size int64, p unive
 			return err
 		}
 		return json.Unmarshal(raw, target)
+	}
+	blockCache := make(map[int64]map[string]part)
+	lookup := func(blocks []universalBlock, key string) (part, bool, error) {
+		index := universalBlockFor(blocks, key)
+		if index < 0 {
+			return part{}, false, nil
+		}
+		block := blocks[index].Data
+		entries, ok := blockCache[block.Offset]
+		if !ok {
+			if err := read(block, &entries); err != nil {
+				return part{}, false, err
+			}
+			blockCache[block.Offset] = entries
+		}
+		value, ok := entries[key]
+		if ok && (value.Offset < 0 || value.Size <= 0 || value.Offset > size-universalFooterSize-value.Size) {
+			return part{}, false, errors.New("dictionary entry outside immutable object")
+		}
+		return value, ok, nil
 	}
 	var core universalCore
 	if err := read(dir.Core, &core); err != nil {
@@ -238,7 +294,10 @@ func runUniversalRange(ctx context.Context, src rangeSource, size int64, p unive
 	}
 	walk(p)
 	for path := range neededFields {
-		part, ok := dir.Fields[path]
+		part, ok, err := lookup(dir.FieldBlocks, path)
+		if err != nil {
+			return universalAnswer{}, nil, err
+		}
 		if !ok {
 			continue
 		}
@@ -260,7 +319,10 @@ func runUniversalRange(ctx context.Context, src rangeSource, size int64, p unive
 		}
 	}
 	for term := range neededTerms {
-		part, ok := dir.Terms[term]
+		part, ok, err := lookup(dir.TermBlocks, term)
+		if err != nil {
+			return universalAnswer{}, nil, err
+		}
 		if !ok {
 			continue
 		}
@@ -362,7 +424,15 @@ func oracleUniversalRange(docs []universalDoc, p universalPredicate, groupPath s
 }
 
 func TestUniversalRangeRoundTrip(t *testing.T) {
-	docs := universalFixture(10000)
+	rows := 10000
+	if value := os.Getenv("EVENTGLASS_UNIFIED_ROWS"); value != "" {
+		var err error
+		rows, err = strconv.Atoi(value)
+		if err != nil || rows != 100000 {
+			t.Fatal("EVENTGLASS_UNIFIED_ROWS must be 100000 when set")
+		}
+	}
+	docs := universalFixture(rows)
 	path := filepath.Join(t.TempDir(), "universal.bin")
 	dir, size, err := writeUniversalObject(path, docs)
 	if err != nil {
@@ -404,6 +474,10 @@ func TestUniversalRangeRoundTrip(t *testing.T) {
 	if _, _, err := runUniversalRange(context.Background(), bad, size, universalPredicate{op: "term", text: "fatal"}, "tags/region"); err == nil {
 		t.Fatal("accepted corrupted posting")
 	}
+	badBlock := corruptUniversalSource{src: local, offset: dir.TermBlocks[universalBlockFor(dir.TermBlocks, "fatal")].Data.Offset}
+	if _, _, err := runUniversalRange(context.Background(), badBlock, size, universalPredicate{op: "term", text: "fatal"}, "tags/region"); err == nil {
+		t.Fatal("accepted corrupted dictionary block")
+	}
 	short := shortUniversalSource{src: local, offset: dir.Core.Offset}
 	if _, _, err := runUniversalRange(context.Background(), short, size, universalPredicate{op: "term", text: "fatal"}, "tags/region"); err == nil {
 		t.Fatal("accepted short column read")
@@ -412,7 +486,22 @@ func TestUniversalRangeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("local docs=%d objectBytes=%d directoryBytes=%d coreBytes=%d terms=%d fields=%d verified=%d", len(docs), size, binary.LittleEndian.Uint64(footer[12:20]), dir.Core.Size, len(dir.Terms), len(dir.Fields), len(cases)*4)
+	var fieldBytes, postingBytes, sourceBytes, dictionaryBytes int64
+	for _, p := range dir.Fields {
+		fieldBytes += p.Size
+	}
+	for _, p := range dir.Terms {
+		postingBytes += p.Size
+	}
+	for _, p := range dir.Sources {
+		sourceBytes += p.Size
+	}
+	for _, blocks := range [][]universalBlock{dir.FieldBlocks, dir.TermBlocks} {
+		for _, block := range blocks {
+			dictionaryBytes += block.Data.Size
+		}
+	}
+	t.Logf("local docs=%d objectBytes=%d directoryBytes=%d coreBytes=%d fieldBytes=%d postingBytes=%d sourceBytes=%d dictionaryBytes=%d terms=%d fields=%d verified=%d", len(docs), size, binary.LittleEndian.Uint64(footer[12:20]), dir.Core.Size, fieldBytes, postingBytes, sourceBytes, dictionaryBytes, len(dir.Terms), len(dir.Fields), len(cases)*4)
 	endpoint := os.Getenv("EVENTGLASS_UNIFIED_MINIO")
 	if endpoint == "" {
 		return
