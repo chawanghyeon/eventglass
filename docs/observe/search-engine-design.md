@@ -67,12 +67,27 @@ ACK를 증명하는 journal은 백업/PITR·재생 가능 기간 동안 세그�
 | --- | --- | --- |
 | 기본 포맷 | 백만 문서에서 `packed_shared` 10.20MB, `covering` 30.38MB, `row_only` 9.47MB | 원문 한 벌 + 공유 fast fields + postings를 기본으로 둔다. covering의 희소 속도는 저장량 약 3배와 교환된다. |
 | 희소 질의의 대가 | 같은 백만 문서에서 `fatal`은 covering 약 0.5ms/9.8KB, packed 약 1.5ms/2.84MB의 로컬 읽기 | 모든 term에 fast fields를 반복 저장해야 희소 질의의 원격 읽기를 그렇게 줄일 수 있다. S3 지연은 이 수치에 포함되지 않는다. |
-| 비트맵 혼합 후보 | 백만 문서 저장량 10.20→10.16MB(0.37% 감소), noisy 0.50%, wide 0.12%, clustered 1.85% 감소; 읽기량·속도 이득 불규칙 | 기본 포맷에 넣지 않는다. [Roaring 연구](https://arxiv.org/abs/1603.06549)의 일반적 장점이 이 TF+zlib·S3 배치에 그대로 적용되지는 않았다. |
+| 단순 비트맵 혼합 후보 | 백만 문서 저장량 10.20→10.16MB(0.37% 감소), noisy 0.50%, wide 0.12%, clustered 1.85% 감소; 읽기량·속도 이득 불규칙 | 기본 포맷에 넣지 않는다. 이 후보는 **dense bitset + TF**이며 Roaring이 아니므로 [Roaring](https://roaringbitmap.org/publications/)의 성능을 판정하지 않는다. |
 | 동일 packed 바이트의 word 복원 | Linux ARM64/1CPU에서 256문서 페이지 5회 중앙값: 좁은 값 5,720→2,127ns(**2.69배**), 넓은 값 12,228→2,131ns(**5.74배**); 할당 둘 다 1,536B/1회 | 이 구현 개선은 채택한다. |
 | 질의 전체, 10만 문서 | Linux ARM64/1CPU/512MiB, 이전→새 바이너리 각 2회: `timeout` packed 2.858/3.041→1.806/1.761ms(중앙값 **1.65배**), `request` 6.946/6.687→5.526/5.320ms(**1.26배**). 공유/covering 대조군은 대부분 근접했으나 일부 흔들림 | 이 fixture의 개선이다. p95/p99·동시 부하·AWS SLO는 미판정이다. |
 | 자원 상한 | 백만 문서와 4개 동시 질의, Linux ARM64/1CPU/512MiB/swap0 두 번: cgroup peak 337,743,872–347,451,392B(**322.1–331.4MiB**), OOM 0 | 이 합성 입력의 최소 동작 가능성만 확인했다. 제품 전체·최대 입력·PG/MinIO 포함 예산은 미판정이다. |
 
 macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·covering 대조군도 크게 느려졌다. [원시 시행](../../experiments/searchlayout/evidence-2026-09-24/)을 남기고 그 수치로 서비스 수준 개선을 주장하지 않는다. codec 벤치마크는 [원시 로그](../../experiments/searchlayout/evidence-2026-09-24/eventglass-packed-codec-arm64.txt), 자원은 [첫 번째](../../experiments/searchlayout/evidence-2026-09-24/eventglass-fastdecode-resource.txt)와 [최종 코드](../../experiments/searchlayout/evidence-2026-09-24/eventglass-final-resource.txt)의 cgroup 로그에서 확인할 수 있다.
+
+## 다른 계열의 연구와 추가 검증
+
+[파티션 Elias-Fano](https://pages.di.unipi.it/rossano/assets/pdf/papers/SIGIR14.pdf)는 증가 ID 목록의 압축·탐색, [Roaring](https://arxiv.org/abs/1603.06549)은 배열·비트맵·run 컨테이너의 집합 연산, [Bit-Sliced Index](https://cse.usf.edu/~tuy/Literature/Bitmap-SIGMOD97.pdf)와 [BitWeaving](https://15721.courses.cs.cmu.edu/spring2016/papers/li-sigmod2013.pdf)은 숫자 필터·집계의 비트 병렬 처리, [Block-Max WAND](https://citeseerx.ist.psu.edu/document?doi=91a353974741cdcac274f8dfeabde87430fbc05b&repid=rep1&type=pdf)는 안전한 Top-K 점수 생략을 다룬다. [PostgreSQL의 trigram 구현](https://doxygen.postgresql.org/trgm__regexp_8c_source.html)은 부분 문자열/정규식 후보를 얻은 뒤 원문으로 거짓 양성을 제거한다. 가장 직접적인 최신 사례인 [ClickHouse의 2026년 객체 저장소 text index](https://clickhouse.com/blog/clickhouse-full-text-search-object-storage)는 정렬 사전 블록+작은 메모리 희소 색인, 길이에 따른 inline/varint/Roaring postings, 순차 병합을 사용한다. 이는 우리 사전 분할 방향의 **구현 가능성 근거**이지 Eventglass 성능 측정값은 아니다.
+
+[추가 Go 실험](../../experiments/searchlayout/literature_test.go)의 [macOS ARM64 원시 로그](../../experiments/searchlayout/evidence-2026-09-24/literature-alternatives-darwin-arm64.txt)는 같은 생성 문서에서 별도 물리 후보를 왕복 검증했다. 아래 저장량은 **해당 부분만** 센다. 질의 전체·S3 GET·BM25·권한·병합 결과가 아니다.
+
+| 후보 | 확인한 결과 | 판정 |
+| --- | --- | --- |
+| 128개씩 고정 폭 delta ID + TF | 10만 문서 baseline에서 postings 저장 바이트 355,792→291,196(**18.2% 감소**), clustered 356,879→309,686(**13.2% 감소**); 5만 noisy에서는 518,137→637,766(**23.1% 증가**). `request` 99,000건 복원 438→442µs, `timeout` 990건 3.97→7.81µs. 모든 목록 왕복 일치 | 블록 압축은 실행 가능한 대안이나 이 단순 구현은 일관된 우위가 없다. **Partitioned Elias-Fano나 SIMD/PForDelta를 구현·검증한 결과로 해석하지 않는다.** 기본 codec 변경 보류. |
+| 16-bit duration 비트 슬라이스 SUM | 10만 baseline에서 `request` 99,000건의 ID 순회 38.3µs, 비트 슬라이스 15.7µs; `fatal` 10건은 3ns 대 17.0µs. 16개 plane 원시 200,064B 대 일반 uint16 200,000B. 같은 입력의 전체 zlib은 1,048B 대 2,744B지만 clustered는 18,326B 대 8,189B, wide는 200,092B 대 200,028B. 세 term의 합 모두 일치 | 넓은 SUM만 이득. 그룹별 집계·희소 검색까지 같은 구조로 압도하지 못하고 16 plane의 S3 접근 비용도 미측정. 기본 컬럼을 대체하지 않는다. |
+| 원문 byte 3-gram 후보 + 재검증 | 2만 noisy에서 gram postings 1,267,698B, 압축 원문 512,404B(서로 다른 저장 항목); `aabb` 후보 121건→정확 4건. `service`/`trace`는 후보 20,000건 전부. baseline postings 59,881B/원문 54,049B. 테스트 literal의 누락 0 | 임의 부분 문자열을 빠르게 만드는 기본 저장물로 넣지 않는다. 3바이트 미만·한국어 문자 경계·regex 일반형은 이 실험 범위 밖이다. |
+| Top-K 블록 생략 | 점수 100/1/1에서 마지막 두 문서는 Top-1에 절대 못 들지만 정확한 건수는 3, SUM은 31이고 Top-1만 세면 1/1 | Top-K 점수 계산만 생략 가능. 같은 질의의 정확한 전체 집계까지 생략하면 오답이다. |
+
+따라서 **공통 문서 ID를 공유하는 postings+컬럼+원문 한 세그먼트**라는 결론은 유지한다. 새로운 codec·BSI·3-gram을 저장 포맷에 추가할 근거는 아직 없다. Roaring과 파티션 Elias-Fano는 논문/실사용 구현을 확인했지만 이 TF 포함 세그먼트에서 독립 A/B를 수행하지 않았으므로 우열 미판정이다. ClickHouse식 정렬 사전 블록과 짧은 postings inline은 현재 104,100어휘 카탈로그 문제에 직접 맞는 다음 **실험 후보**다. 이것도 우리 데이터에서 S3 GET·메모리·저장량을 잰 뒤에만 포맷에 넣는다.
 
 ## 비용과 우월성의 기준
 
