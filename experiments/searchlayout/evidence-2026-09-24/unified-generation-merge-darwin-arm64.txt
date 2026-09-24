@@ -1,5 +1,0 @@
-=== RUN   TestUniversalGenerationMergeAndPinnedRead
-    unified_generations_test.go:92: split_segments=2 merged_segments=1 old_snapshot_kept=1 cases=16 groups=3
---- PASS: TestUniversalGenerationMergeAndPinnedRead (3.99s)
-PASS
-ok  	github.com/chawanghyeon/eventglass/experiments/searchlayout	4.130s

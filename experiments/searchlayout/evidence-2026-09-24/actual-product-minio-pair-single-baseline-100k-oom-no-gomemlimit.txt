@@ -1,8 +1,0 @@
-=== RUN   TestActualConverterSingleParquetParity
-536875008
-low 0
-high 0
-max 1194
-oom 1
-oom_kill 1
-oom_group_kill 0
