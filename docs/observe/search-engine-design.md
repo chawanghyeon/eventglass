@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | 단일 객체의 동적 필드·원문·정확한 집계 | 1만 문서 로컬/MinIO 72조합, 10만 문서 CPU1/512MiB 72조합 | 이 범위에서 통과 |
 | 여러 객체와 세대 | 로컬 2세그먼트→병합→live 변경, 이전 객체 읽기 | 논리 결과만 통과; PG 공개 세대·GC 미검증 |
-| 사전·S3 Range 비용 | 전량 사전과 블록 사전을 동일 fixture/MinIO로 A/B | 부분 구조만 측정; AWS 비용 우위 미검증 |
+| 사전·원격 Range 비용 | 전량/블록 사전을 MinIO로 A/B, 단일 Parquet과 세그먼트를 같은 HTTP Range 서버에서 30회씩 2번 A/B | 요청·바이트는 이 fixture에서 확인; AWS 비용 우위 미검증 |
 | BM25·분석기·구문·한국어 품질 | 고정 필드 BM25와 일부 한국어/RE2 실험만 별도 존재 | 통합 포맷 미검증 |
 | durable ACK·권한·fenced Publish·PG/S3 복구 | 현행 제품 계약은 존재, 새 포맷과 연결하지 않음 | 미검증 |
 | 동일 fixture의 pinned DuckDB/Parquet 직접 비교 | 1만/10만 문서 × 72조합 정확도 일치. 단일 Parquet 308,745/2,898,596B, 후보 세그먼트 711,792/6,384,202B. 로컬 regex p50 약 3.5배 차이 | 이 물리 포맷의 일관된 우위 반증; 제품 경로·원격 p95/p99 미검증 |
@@ -117,6 +117,8 @@ macOS 백만 문서 A/B의 두 번째 새 바이너리 시행은 공유·coverin
 [로컬 파일 warm 반복 30회](../../experiments/searchlayout/evidence-2026-09-24/unified-pinned-duckdb-parquet-local-timing.txt)에서는 희소 토큰 p50/p95/p99가 Parquet 14.9/17.2/17.9ms, 후보 10.7/11.9/15.2ms; 광범위 토큰은 15.6/18.3/19.0ms 대 11.1/12.2/13.8ms였다. 반면 regex는 15.2/16.8/16.8ms 대 50.6/54.7/54.8ms였다. 두 질의 경로 모두 같은 결과를 내지만, 이 포맷은 **저장량과 regex에서 동시에 열세**다. 30회 표본의 p99는 한 최댓값이고 원격 S3·서비스 부하·동시 실행·제품 권한/ACK는 빠져 있어 이 숫자를 제품 SLO로 쓰지 않는다. 현재 물리 포맷의 일관된 우위 주장은 기각하며, 다음 후보는 이 반례를 동일 비교로 통과해야 한다.
 
 같은 컬럼과 원문 JSON을 **단일 Parquet 객체**에 넣는 더 단순한 대안도 [1만](../../experiments/searchlayout/evidence-2026-09-24/unified-single-parquet-10k-linux-arm64.txt)·[10만 문서 분리 시험](../../experiments/searchlayout/evidence-2026-09-24/unified-single-parquet-100k-linux-arm64.txt)의 동일 72조합에서 독립 oracle과 일치했다. 크기는 308,745/2,898,596B로 위 두 역할 Parquet보다 5.9/4.6% 작고, 현재 세그먼트의 43.4/45.4%였다. [동일 1만 문서 세 방식 번갈아 30회](../../experiments/searchlayout/evidence-2026-09-24/unified-three-format-local-timing.txt)에서 단일 Parquet과 세그먼트의 p50은 희소 토큰 14.2/10.3ms, 광범위 토큰 15.3/10.8ms, regex 14.5/50.2ms였다. 세그먼트는 토큰 검색이 빠르지만 단일 Parquet은 저장량과 regex에서 낫다. [세 포맷을 한 512MiB 프로세스에 적재한 10만 문서 시험](../../experiments/searchlayout/evidence-2026-09-24/unified-single-parquet-combined-100k-oom.txt)은 OOM으로 실패했고, 단일 Parquet만 분리한 시험은 peak 523,108,352B, OOM 0으로 통과했다. 둘 다 제품 worker 메모리로 옮겨 해석할 수 없고, 분리 시험에도 약 13MiB 여유밖에 없었다. 단일 Parquet도 원문과 검색용 JSON의 중복을 포함하며 현행 제품 번들과 같지 않다. 토큰/BM25 품질, 원격 S3 GET, 권한과 내구 ACK를 아직 검증하지 않아 이 대안을 새 제품으로 승인하지 않는다.
+
+이후 [같은 HTTP Range 서버 첫 실행](../../experiments/searchlayout/evidence-2026-09-24/unified-http-range-three-queries-run1.txt)과 [독립 재실행](../../experiments/searchlayout/evidence-2026-09-24/unified-http-range-three-queries-run2.txt)에서 1만 문서의 희소/광범위 토큰·regex 정답을 원문 oracle과 다시 대조하고, 각각 번갈아 30회씩 요청을 셌다. 단일 Parquet은 세 질의 모두 **8 Range GET+2 HEAD, 2,469,960B/질의**였다. 실제 헤더는 작은 308,745B 객체 전체 범위를 8번 요청했다. 세그먼트는 토큰마다 **12 GET, 약 53KB**, regex는 **84 GET, 314,923B**였다. 같은 리전의 무료 전송만 고려하면 세그먼트의 바이트 절감이 요청료 절감은 아니다. 두 실행의 p50은 단일 Parquet/세그먼트가 희소 토큰 약 31/13ms, regex 약 24/58ms였으나 이는 loopback HTTP, 워커 1개, 합성 입력의 진단값이다. 실제 S3·제품 gateway·캐시·동시성·HTTP/TLS·월간 요청 분포가 빠졌으므로 AWS p95/p99와 총비용으로 확대하지 않는다.
 
 | 후보 | 확인한 결과 | 판정 |
 | --- | --- | --- |
