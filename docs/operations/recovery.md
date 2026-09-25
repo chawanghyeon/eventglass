@@ -55,7 +55,8 @@ including two independent PGDATA restores, a WAL-only row, a referenced object,
 a newer unreferenced object, signed live import, and a deleted-object failure.
 For an actual AWS rehearsal, use a pre-created non-production scratch bucket and
 short-lived credentials for a dedicated test role; the script checks the
-expected account and bucket owner, uses a fresh
+expected account and checks bucket ownership with a prefix-scoped object-list
+request, so the role does not need bucket-wide listing. It uses a fresh
 `eventglass-release-check-<random>/` prefix for both live objects and pgBackRest,
 and deletes only that prefix on exit. The role needs `s3:ListBucket` constrained
 to that prefix pattern and `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject`

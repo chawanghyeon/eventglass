@@ -1,0 +1,70 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+
+image_tag=
+output_dir=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --image-tag)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "--image-tag requires a value" >&2; exit 2; }
+      image_tag=$2
+      shift 2
+      ;;
+    --output-dir)
+      [ "$#" -ge 2 ] && [ -n "$2" ] || { echo "--output-dir requires a value" >&2; exit 2; }
+      output_dir=$2
+      shift 2
+      ;;
+    *) echo "unsupported release option: $1" >&2; exit 2 ;;
+  esac
+done
+
+if [ -z "$image_tag" ]; then
+  revision=$(git rev-parse --short HEAD)
+  image_tag="eventglass-go:release-$revision-$$"
+fi
+if [ -z "$output_dir" ]; then
+  output_dir=$(mktemp -d "${TMPDIR:-/tmp}/eventglass-release.XXXXXX")
+else
+  mkdir -p "$output_dir"
+  [ -d "$output_dir" ] && [ ! -L "$output_dir" ] || { echo "release output must be a real directory" >&2; exit 1; }
+  existing=$(find "$output_dir" -mindepth 1 -maxdepth 1 -print -quit)
+  [ -z "$existing" ] || { echo "release output directory must be empty: $output_dir" >&2; exit 1; }
+fi
+
+if docker image inspect "$image_tag" >/dev/null 2>&1; then
+  echo "refusing to overwrite existing local image: $image_tag" >&2
+  exit 1
+fi
+
+./scripts/build-image --load --tag "$image_tag"
+platform=$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image_tag")
+user=$(docker image inspect --format '{{.Config.User}}' "$image_tag")
+entrypoint=$(docker image inspect --format '{{json .Config.Entrypoint}}' "$image_tag")
+test "$platform" = linux/arm64 || { echo "release image must be linux/arm64, got $platform" >&2; exit 1; }
+test "$user" = 65532:65532 || { echo "release image must run as 65532:65532, got $user" >&2; exit 1; }
+test "$entrypoint" = '["/usr/local/bin/eventglass-go"]' || { echo "unexpected release image entrypoint: $entrypoint" >&2; exit 1; }
+
+docker run --rm --platform linux/arm64 --read-only \
+  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=16m \
+  "$image_tag" version > "$output_dir/image-version.txt"
+docker save --output "$output_dir/eventglass-linux-arm64.tar" "$image_tag"
+sha256sum "$output_dir/eventglass-linux-arm64.tar" > "$output_dir/eventglass-linux-arm64.tar.sha256"
+
+image_id=$(docker image inspect --format '{{.Id}}' "$image_tag")
+revision=$(git rev-parse HEAD)
+if [ -n "$(git status --porcelain=v1)" ]; then dirty=true; else dirty=false; fi
+{
+  printf 'tag=%s\n' "$image_tag"
+  printf 'image_id=%s\n' "$image_id"
+  printf 'platform=%s\n' "$platform"
+  printf 'user=%s\n' "$user"
+  printf 'entrypoint=%s\n' "$entrypoint"
+  printf 'source_revision=%s\n' "$revision"
+  printf 'source_dirty=%s\n' "$dirty"
+} > "$output_dir/image-manifest.txt"
+
+printf 'ARM64 image smoke check passed; evidence: %s\n' "$output_dir"

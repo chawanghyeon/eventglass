@@ -48,18 +48,18 @@ case "$backend" in
     export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null
     actual_account=$(aws sts get-caller-identity --query Account --output text --region "$region")
     test "$actual_account" = "$EVENTGLASS_AWS_ACCOUNT_ID" || { echo "AWS identity account mismatch" >&2; exit 1; }
-    aws s3api head-bucket --bucket "$bucket" --expected-bucket-owner "$EVENTGLASS_AWS_ACCOUNT_ID" --region "$region"
     run_prefix="eventglass-release-check-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
-    existing=$(aws s3api list-objects-v2 --bucket "$bucket" --prefix "$run_prefix/" --max-keys 1 --query KeyCount --output text --region "$region")
+    existing=$(aws s3api list-objects-v2 --bucket "$bucket" --prefix "$run_prefix/" --max-keys 1 \
+      --expected-bucket-owner "$EVENTGLASS_AWS_ACCOUNT_ID" --query KeyCount --output text --region "$region")
     test "$existing" = 0 || { echo "generated AWS recovery prefix is not empty" >&2; exit 1; }
     owns_aws_prefix=1
-    export PGBACKREST_REPO1_S3_KEY=$AWS_ACCESS_KEY_ID
-    export PGBACKREST_REPO1_S3_KEY_SECRET=$AWS_SECRET_ACCESS_KEY
-    export PGBACKREST_REPO1_S3_TOKEN=$AWS_SESSION_TOKEN
-    export PGBACKREST_REPO1_S3_BUCKET=$bucket
+    export PGBACKREST_REPO1_S3_KEY="$AWS_ACCESS_KEY_ID"
+    export PGBACKREST_REPO1_S3_KEY_SECRET="$AWS_SECRET_ACCESS_KEY"
+    export PGBACKREST_REPO1_S3_TOKEN="$AWS_SESSION_TOKEN"
+    export PGBACKREST_REPO1_S3_BUCKET="$bucket"
     export PGBACKREST_REPO1_PATH="/$run_prefix/backup"
     export PGBACKREST_REPO1_S3_ENDPOINT="s3.$region.amazonaws.com"
-    export PGBACKREST_REPO1_S3_REGION=$region
+    export PGBACKREST_REPO1_S3_REGION="$region"
     export PGBACKREST_REPO1_S3_URI_STYLE=host
     export PGBACKREST_REPO1_STORAGE_HOST="s3.$region.amazonaws.com"
     export PGBACKREST_REPO1_STORAGE_PORT=443

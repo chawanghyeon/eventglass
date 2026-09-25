@@ -443,6 +443,20 @@ cgroup/network/settings/seeds/SHA recorded by harness. Numeric targets in DESIGN
 must pass or release stays blocked. Schema rollback requires demonstrated reader
 compatibility or coordinated restore; never run Down blindly on live data.
 
+`./scripts/check release` builds a uniquely tagged local ARM64 image, verifies
+its non-root entrypoint and read-only version smoke test, and writes a checksummed
+image archive plus source/image identity manifest. The manual
+`.github/workflows/release-evidence.yml` runs only from `main`; it adds image
+ARM64 browser E2E, SBOM, high/critical vulnerability and Go license checks,
+local and AWS base/WAL+S3 recovery rehearsals, and Sigstore-signed provenance/SBOM
+attestations.
+AWS uses OIDC into a role restricted to this repository's `main` ref and a
+pre-created non-production scratch bucket. It removes only its random test
+prefix. Artifacts are retained on the workflow run; images are not pushed and
+production is never deployed. A workflow definition is not evidence of a
+passing release: external AWS identity, rollback compatibility, and a proven
+self-host S3-compatible provider remain required before G08 can close.
+
 Open assumptions are **experiments**, not implementation choices: native peak
 RSS/128MiB output sizing, cgroup OOM survival, throughput/cost, provider multipart/
 Range semantics, PITR object protection and rolling-version reader compatibility.

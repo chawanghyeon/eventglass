@@ -1,0 +1,139 @@
+name: ARM64 release evidence
+on:
+  workflow_dispatch:
+    inputs:
+      aws_role_arn:
+        description: OIDC role restricted to this repository's main branch and the scratch bucket
+        required: true
+        type: string
+      aws_account_id:
+        description: Expected 12-digit AWS account ID
+        required: true
+        type: string
+      aws_region:
+        description: Standard AWS region containing the scratch bucket
+        required: true
+        type: string
+      scratch_bucket:
+        description: Pre-created non-production bucket used only under a random test prefix
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-evidence-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  evidence:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      EVENTGLASS_RELEASE_DIR: ${{ github.workspace }}/.tools/eventglass-release-${{ github.run_id }}
+      EVENTGLASS_RELEASE_TAG: eventglass-go:release-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Install pinned Go
+        run: ./scripts/bootstrap
+      - name: Go unit and layout contracts
+        run: ./scripts/check unit
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version-file: web/package.json
+      - name: Install locked web test dependencies
+        run: |
+          npm install --global npm@11.19.0 --ignore-scripts
+          npm ci --prefix web --ignore-scripts
+      - name: Install locked Playwright Chromium
+        run: npm exec --prefix web -- playwright install --with-deps chromium
+      - name: ARM64 browser end-to-end check
+        run: ./scripts/check-browser
+      - name: Local coordinated restore rehearsal
+        run: ./scripts/check recovery
+      - name: Build and inspect ARM64 image
+        run: >-
+          ./scripts/check release
+          --image-tag "$EVENTGLASS_RELEASE_TAG"
+          --output-dir "$EVENTGLASS_RELEASE_DIR"
+      - name: Generate SPDX image SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610
+        with:
+          image: ${{ env.EVENTGLASS_RELEASE_TAG }}
+          output-file: ${{ env.EVENTGLASS_RELEASE_DIR }}/image.spdx.json
+          format: spdx-json
+          syft-version: v1.42.3
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Scan image and dependencies for high or critical vulnerabilities
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: ${{ env.EVENTGLASS_RELEASE_TAG }}
+          version: v0.74.0
+          vuln-type: os,library
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          format: json
+          output: ${{ env.EVENTGLASS_RELEASE_DIR }}/trivy.json
+          exit-code: '1'
+      - name: Generate Go dependency license notices
+        env:
+          GOPATH: ${{ runner.temp }}/go
+        run: |
+          mkdir -p "$EVENTGLASS_RELEASE_DIR"
+          export PATH="$GITHUB_WORKSPACE/.tools/go1.27.1/bin:$PATH"
+          go version
+          go install github.com/google/go-licenses/v2@v2.0.1
+          "$GOPATH/bin/go-licenses" report ./... > "$EVENTGLASS_RELEASE_DIR/go-licenses.csv"
+          "$GOPATH/bin/go-licenses" save ./... --save_path="$EVENTGLASS_RELEASE_DIR/third-party-licenses"
+      - name: Configure short-lived AWS credentials
+        id: aws_credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd
+        with:
+          role-to-assume: ${{ inputs.aws_role_arn }}
+          aws-region: ${{ inputs.aws_region }}
+          role-session-name: eventglass-release-${{ github.run_id }}
+      - name: Verify AWS identity and run isolated provider restore
+        env:
+          EVENTGLASS_RECOVERY_BACKEND: aws
+          EVENTGLASS_AWS_RESTORE_BUCKET: ${{ inputs.scratch_bucket }}
+          EVENTGLASS_AWS_ACCOUNT_ID: ${{ inputs.aws_account_id }}
+        run: ./scripts/check recovery
+      - name: Clear AWS credentials from following steps
+        if: always() && steps.aws_credentials.outcome == 'success'
+        run: |
+          {
+          echo 'AWS_ACCESS_KEY_ID='
+          echo 'AWS_SECRET_ACCESS_KEY='
+          echo 'AWS_SESSION_TOKEN='
+          } >> "$GITHUB_ENV"
+      - name: Attest image archive provenance
+        id: image_provenance
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
+        with:
+          subject-path: ${{ env.EVENTGLASS_RELEASE_DIR }}/eventglass-linux-arm64.tar
+      - name: Attest image SBOM
+        id: image_sbom_attestation
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d
+        with:
+          subject-path: ${{ env.EVENTGLASS_RELEASE_DIR }}/eventglass-linux-arm64.tar
+          sbom-path: ${{ env.EVENTGLASS_RELEASE_DIR }}/image.spdx.json
+      - name: Retain signed attestation bundles
+        env:
+          IMAGE_PROVENANCE_BUNDLE: ${{ steps.image_provenance.outputs.bundle-path }}
+          IMAGE_SBOM_BUNDLE: ${{ steps.image_sbom_attestation.outputs.bundle-path }}
+        run: |
+          cp "$IMAGE_PROVENANCE_BUNDLE" "$EVENTGLASS_RELEASE_DIR/image-provenance.bundle.json"
+          cp "$IMAGE_SBOM_BUNDLE" "$EVENTGLASS_RELEASE_DIR/image-sbom-attestation.bundle.json"
+      - name: Upload release evidence without publishing an image
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: eventglass-arm64-release-evidence-${{ github.run_id }}
+          path: ${{ env.EVENTGLASS_RELEASE_DIR }}/
+          if-no-files-found: warn
+          retention-days: 30

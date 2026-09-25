@@ -13,6 +13,7 @@ The active product is the root Go module. Use Go 1.27.1 exactly and run commands
 ./scripts/check contracts
 ./scripts/check integration
 ./scripts/check recovery
+./scripts/check release
 ./scripts/check resource
 ./scripts/check maintenance-resource
 ./scripts/check scale
@@ -26,6 +27,18 @@ The active product is the root Go module. Use Go 1.27.1 exactly and run commands
 ```
 
 Commands for later implementation gates intentionally fail until their gate is implemented. `./scripts/check codegen` regenerates the Go and TypeScript wire contracts in a temporary tree and requires byte-identical output; install its exact tool lock with `npm ci --prefix tools/codegen --ignore-scripts` when changing `api/openapi.yaml`, then run `./scripts/generate-api`. `./scripts/check sdk` replays committed captures and runs the pinned SDK applications against a localhost Go handler; run `tools/sdk-fixtures/bootstrap.sh` once to install its locked tools. Docker is required for the PostgreSQL/S3 integration environment and Linux ARM64 image checks. Tests must use temporary databases, buckets, prefixes, directories, and localhost receivers. Linux AMD64 is not a currently verified or supported release target.
+
+`./scripts/check release` builds a uniquely tagged local ARM64 image, checks its
+non-root entrypoint and read-only version command, then exports an image archive,
+checksum, and source/image manifest to a new evidence directory. It never pushes
+or deploys. The manual, main-only
+[`ARM64 release evidence workflow`](.github/workflows/release-evidence.yml)
+adds browser E2E, SPDX generation, Trivy and Go license checks, AWS scratch-prefix
+recovery, and signed provenance/SBOM attestations. It requires an OIDC role restricted to
+this repository's `main` ref and the dedicated non-production scratch bucket;
+it does not publish an image or change production systems. Its evidence is not
+complete until that workflow actually passes, rollback is rehearsed, and a
+self-host S3-compatible backend is verified.
 
 Image checks use `scripts/build-image` to build the current root Dockerfile,
 Go sources and UI. If BuildKit prunes an expensive native intermediate stage,
