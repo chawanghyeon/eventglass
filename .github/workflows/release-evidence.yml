@@ -54,6 +54,8 @@ jobs:
         run: ./scripts/check-browser
       - name: Local coordinated restore rehearsal
         run: ./scripts/check recovery
+      - name: Self-hosted Garage S3 and coordinated recovery contract
+        run: ./scripts/check garage
       - name: Build and inspect ARM64 image
         run: >-
           ./scripts/check release

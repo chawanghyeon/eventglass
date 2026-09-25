@@ -22,6 +22,10 @@ class GoLayoutTests(unittest.TestCase):
             "tests/integration/g00_test.go",
             "scripts/check",
             "deploy/compose.yaml",
+            "deploy/garage/compose.yaml",
+            "deploy/garage/Caddyfile",
+            "deploy/garage/garage.toml",
+            "scripts/check-garage",
             "deploy/versions.lock",
         ):
             self.assertTrue((ROOT / relative).is_file(), relative)
@@ -55,6 +59,27 @@ class GoLayoutTests(unittest.TestCase):
         self.assertEqual(version_lock["go"], module_version)
         self.assertEqual(tool_versions["GO_VERSION"], module_version)
         self.assertIn(f"VERSION={module_version}", (ROOT / "scripts/bootstrap").read_text())
+
+    def test_garage_contract_fixture_is_pinned_and_isolated(self):
+        lock = dict(
+            line.split("=", 1)
+            for line in (ROOT / "deploy/versions.lock").read_text().splitlines()
+            if line and not line.startswith("#")
+        )
+        compose = (ROOT / "deploy/garage/compose.yaml").read_text()
+        runner = (ROOT / "scripts/check-garage").read_text()
+        check = (ROOT / "scripts/check").read_text()
+        self.assertIn(f"image: {lock['garage_image']}", compose)
+        self.assertIn(f"image: {lock['caddy_image']}", compose)
+        self.assertIn("platform: linux/arm64", compose)
+        self.assertIn('"127.0.0.1::3900"', compose)
+        self.assertIn("/var/lib/garage:rw,nosuid,nodev,size=256m,mode=1777", compose)
+        self.assertIn("TestS3PutRangeListMultipartAbortAndPermissions", runner)
+        self.assertIn("TestDurableWorkflowVerifiedUploadDuplicateAndUnsupportedOnly", runner)
+        self.assertIn("down --volumes --remove-orphans", runner)
+        self.assertIn("garage-backup-proxy", compose)
+        self.assertIn("tls internal", (ROOT / "deploy/garage/Caddyfile").read_text())
+        self.assertIn("garage) check_go_version", check)
 
     def test_native_contract_linking_is_serial_to_bound_scratch(self):
         dockerfile = (ROOT / "Dockerfile").read_text()

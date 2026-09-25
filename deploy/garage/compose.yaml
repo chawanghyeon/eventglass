@@ -1,0 +1,24 @@
+services:
+  garage:
+    image: dxflrs/garage:v2.4.1@sha256:9c96caa2612d3411acc5b0e6701fb238dbfba33e533a6d7d3d811a4b12d0d020
+    platform: linux/arm64
+    environment:
+      RUST_LOG: garage=warn
+    ports:
+      - "127.0.0.1::3900"
+    volumes:
+      - ${EVENTGLASS_ROOT:-.}/deploy/garage/garage.toml:/etc/garage.toml:ro
+    tmpfs:
+      - /var/lib/garage:rw,nosuid,nodev,size=256m,mode=1777
+
+  garage-backup-proxy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    platform: linux/arm64
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
+    volumes:
+      - ${EVENTGLASS_ROOT:-.}/deploy/garage/Caddyfile:/etc/caddy/Caddyfile:ro
+    tmpfs:
+      - /data:rw,nosuid,nodev,size=64m,mode=1777
+      - /config:rw,nosuid,nodev,size=16m,mode=1777
+    depends_on:
+      - garage

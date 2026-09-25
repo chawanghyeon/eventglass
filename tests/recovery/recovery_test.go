@@ -44,7 +44,13 @@ func TestActivatedRestoreReadsVerifiedOldGenerationWithoutAdoptingNewerObject(t 
 	if adopted != 0 {
 		t.Fatalf("newer unreferenced object was adopted: %d", adopted)
 	}
-	store, err := storage.NewS3Store(ctx, storage.S3Config{Endpoint: os.Getenv("EVENTGLASS_S3_ENDPOINT"), Region: "us-east-1", Bucket: "eventglass-g00", Prefix: "recovery-test", PathStyle: true})
+	region := os.Getenv("EVENTGLASS_S3_REGION")
+	bucket := os.Getenv("EVENTGLASS_S3_BUCKET")
+	prefix := os.Getenv("EVENTGLASS_S3_PREFIX")
+	if region == "" || bucket == "" || prefix == "" {
+		t.Fatal("recovery S3 region, bucket, and prefix are required")
+	}
+	store, err := storage.NewS3Store(ctx, storage.S3Config{Endpoint: os.Getenv("EVENTGLASS_S3_ENDPOINT"), Region: region, Bucket: bucket, Prefix: prefix, PathStyle: true})
 	if err != nil {
 		t.Fatal(err)
 	}

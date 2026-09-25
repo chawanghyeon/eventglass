@@ -13,6 +13,7 @@ The active product is the root Go module. Use Go 1.27.1 exactly and run commands
 ./scripts/check contracts
 ./scripts/check integration
 ./scripts/check recovery
+./scripts/check garage
 ./scripts/check release
 ./scripts/check resource
 ./scripts/check maintenance-resource
@@ -39,6 +40,12 @@ this repository's `main` ref and the dedicated non-production scratch bucket;
 it does not publish an image or change production systems. Its evidence is not
 complete until that workflow actually passes, rollback is rehearsed, and a
 self-host S3-compatible backend is verified.
+
+`./scripts/check garage` boots a pinned ARM64 Garage single-node fixture and
+runs the real S3 Range/list/multipart/auth and durable-ingest integration tests,
+then the PostgreSQL base/WAL+S3 restore and missing-object fail-closed rehearsal
+against a unique disposable Garage bucket. A test-only Caddy proxy supplies TLS
+for pgBackRest. Each Compose project and its data are removed on exit.
 
 Image checks use `scripts/build-image` to build the current root Dockerfile,
 Go sources and UI. If BuildKit prunes an expensive native intermediate stage,

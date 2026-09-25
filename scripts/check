@@ -244,6 +244,7 @@ case "${1:-}" in
   capacity) docker_required capacity; EVENTGLASS_COMPARISON_MODE=capacity ./scripts/check-comparison ;;
   native-oracle) docker_required native-oracle; ./scripts/check-native-oracle ;;
   recovery) docker_required recovery; ./scripts/check-recovery ;;
+  garage) check_go_version; docker_required garage; ./scripts/check-garage && EVENTGLASS_RECOVERY_BACKEND=garage ./scripts/check-recovery ;;
   release) docker_required release; shift; ./scripts/check-release "$@" ;;
-  *) echo "usage: ./scripts/check {unit|codegen|architecture|focused PACKAGE|journal-bench|perf|contracts|integration|sdk|crash|web|recovery|resource|maintenance-resource|scale|comparison|capacity|native-oracle|release}" >&2; exit 2 ;;
+  *) echo "usage: ./scripts/check {unit|codegen|architecture|focused PACKAGE|journal-bench|perf|contracts|integration|sdk|crash|web|recovery|garage|resource|maintenance-resource|scale|comparison|capacity|native-oracle|release}" >&2; exit 2 ;;
 esac

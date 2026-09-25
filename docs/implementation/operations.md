@@ -436,8 +436,9 @@ connection equations must agree across rendered manifests. Compose is local
 demonstration, not host-HA/autoscaling guarantee. Provisioning cloud resources
 requires separate user authorization; commit manifests only.
 
-Release matrix requires real AWS S3 and one proven self-host backend (Garage
-candidate, MinIO local fixture is not production endorsement), cold/warm cache,
+Release matrix requires real AWS S3 and one proven self-host backend (Garage's
+single-node S3 and coordinated-recovery contract is now verified; it is not a
+production HA/security endorsement), cold/warm cache,
 1/2/4 workers and whole-installation costs. Exact dataset/engine/images/host/
 cgroup/network/settings/seeds/SHA recorded by harness. Numeric targets in DESIGN
 must pass or release stays blocked. Schema rollback requires demonstrated reader
@@ -448,14 +449,15 @@ its non-root entrypoint and read-only version smoke test, and writes a checksumm
 image archive plus source/image identity manifest. The manual
 `.github/workflows/release-evidence.yml` runs only from `main`; it adds image
 ARM64 browser E2E, SBOM, high/critical vulnerability and Go license checks,
-local and AWS base/WAL+S3 recovery rehearsals, and Sigstore-signed provenance/SBOM
+Garage S3 API/durable-ingest and coordinated-recovery contract, local MinIO and
+AWS base/WAL+S3 recovery rehearsals, and Sigstore-signed provenance/SBOM
 attestations.
 AWS uses OIDC into a role restricted to this repository's `main` ref and a
 pre-created non-production scratch bucket. It removes only its random test
 prefix. Artifacts are retained on the workflow run; images are not pushed and
 production is never deployed. A workflow definition is not evidence of a
-passing release: external AWS identity, rollback compatibility, and a proven
-self-host S3-compatible provider remain required before G08 can close.
+passing release: external AWS identity/restore, rollback compatibility, and
+the workflow's scan/attestation evidence remain required before G08 can close.
 
 Open assumptions are **experiments**, not implementation choices: native peak
 RSS/128MiB output sizing, cgroup OOM survival, throughput/cost, provider multipart/

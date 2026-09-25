@@ -200,3 +200,34 @@ func TestS3PutRangeListMultipartAbortAndPermissions(t *testing.T) {
 		t.Fatal("invalid S3 credentials unexpectedly read the owned prefix")
 	}
 }
+
+func TestS3RecoveryFixtureObject(t *testing.T) {
+	environment := requiredEnvironment(t,
+		"EVENTGLASS_S3_ENDPOINT", "EVENTGLASS_S3_BUCKET", "EVENTGLASS_S3_PREFIX",
+		"EVENTGLASS_RECOVERY_OBJECT_ACTION", "EVENTGLASS_RECOVERY_OBJECT_KEY",
+		"EVENTGLASS_RECOVERY_OBJECT_BODY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := storage.NewS3Store(ctx, storage.S3Config{
+		Endpoint: environment["EVENTGLASS_S3_ENDPOINT"], Region: "us-east-1",
+		Bucket: environment["EVENTGLASS_S3_BUCKET"], Prefix: environment["EVENTGLASS_S3_PREFIX"],
+		AccessKeyID: environment["AWS_ACCESS_KEY_ID"], SecretAccessKey: environment["AWS_SECRET_ACCESS_KEY"], PathStyle: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := environment["EVENTGLASS_RECOVERY_OBJECT_KEY"]
+	switch environment["EVENTGLASS_RECOVERY_OBJECT_ACTION"] {
+	case "put":
+		if _, err := store.Put(ctx, key, []byte(environment["EVENTGLASS_RECOVERY_OBJECT_BODY"])); err != nil {
+			t.Fatalf("put recovery fixture object: %v", err)
+		}
+	case "delete":
+		if err := store.Delete(ctx, []string{key}); err != nil {
+			t.Fatalf("delete recovery fixture object: %v", err)
+		}
+	default:
+		t.Fatal("recovery fixture action must be put or delete")
+	}
+}

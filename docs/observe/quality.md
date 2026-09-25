@@ -3758,6 +3758,24 @@ passed with no new findings. The documented SDK support matrix above is the
 scope verified by the passing live gate; no additional SDK or version
 compatibility is claimed. No production deploy or external alert was sent.
 
+### R4 Garage S3 and coordinated recovery contract
+
+On2026-09-26, `./scripts/check garage` exercised pinned ARM64 Garage2.4.1 with
+the real application S3 Range/list/multipart/abort/delete/auth tests and durable
+ingest publication. It also ran the Garage mode of `scripts/check-recovery`:
+pgBackRest2.59.1 created a PostgreSQL17.11 base backup and WAL, restored two
+isolated PGDATA volumes through an internal TLS proxy, and reached LSN`0/502CF28`
+(backup1s, both restores2s in this small fixture).
+Recovery activation preserved the prior referenced
+18B S3 object, did not adopt the newer unreferenced object, and passed
+`TestActivatedRestoreReadsVerifiedOldGenerationWithoutAdoptingNewerObject`.
+Deleting the referenced object returned `NoSuchKey` and kept the installation
+`verification_required:true`. Both Compose projects used unique disposable
+buckets/volumes and were removed on exit. This proves the tested single-node
+S3/recovery path only; it is not Garage multi-node durability, production HA or
+security evidence, AWS evidence, or release approval. AWS OIDC/restore,
+rollback rehearsal and the workflow's scans/attestations remain open.
+
 ### Latest corrected current-source R3 official 1/2/4-worker matrix
 
 On2026-09-25, `EVENTGLASS_COMPARISON_WORKERS='1 2 4' ./scripts/check-comparison`

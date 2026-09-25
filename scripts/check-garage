@@ -1,0 +1,77 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+case "$(uname -m)" in
+  arm64|aarch64) ;;
+  *) echo "Garage verification supports ARM64 only" >&2; exit 1 ;;
+esac
+
+project="eventglass-garage-$$"
+bucket="eg-garage-$$"
+key_name="eventglass-test"
+compose="deploy/garage/compose.yaml"
+base_compose="deploy/compose.yaml"
+dc() {
+  EVENTGLASS_ROOT="$ROOT" docker compose --project-directory "$ROOT" -p "$project" -f "$base_compose" -f "$compose" "$@"
+}
+existing=$(docker ps -aq --filter "label=com.docker.compose.project=$project")
+[ -z "$existing" ] || { echo "refusing existing Garage test project: $project" >&2; exit 1; }
+cleanup() {
+  result=$?
+  if [ "$result" -ne 0 ]; then dc logs garage >&2 || true; fi
+  dc down --volumes --remove-orphans >/dev/null 2>&1 || true
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+dc up -d --wait --wait-timeout 60 postgres garage
+node_id=
+for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+  status=$(dc exec -T garage /garage status 2>/dev/null || true)
+  node_id=$(printf '%s\n' "$status" | awk 'length($1) >= 16 && $1 ~ /^[[:xdigit:]]+$/ { print $1; exit }')
+  [ -n "$node_id" ] && break
+  sleep 1
+done
+if [ -z "$node_id" ]; then
+  dc logs garage >&2 || true
+  echo "Garage did not report a node ID" >&2
+  exit 1
+fi
+
+dc exec -T garage /garage layout assign -z dc1 -c 1G "$node_id"
+dc exec -T garage /garage layout apply --version 1
+dc exec -T garage /garage bucket create "$bucket"
+key_output=$(dc exec -T garage /garage key create "$key_name")
+access_key=$(printf '%s\n' "$key_output" | awk '$1 == "Key" && $2 == "ID:" { print $NF; exit }')
+secret_key=$(printf '%s\n' "$key_output" | awk '$1 == "Secret" && $2 == "key:" { print $NF; exit }')
+if [ -z "$access_key" ] || [ -z "$secret_key" ]; then
+  echo "Garage did not return an access key pair" >&2
+  exit 1
+fi
+dc exec -T garage /garage bucket allow --read --write --owner "$bucket" --key "$key_name"
+key_info=$(dc exec -T garage /garage key info "$key_name")
+reported_key=$(printf '%s\n' "$key_info" | awk '$1 == "Key" && $2 == "ID:" { print $NF; exit }')
+test "$reported_key" = "$access_key" || { echo "Garage key ID changed after creation" >&2; exit 1; }
+sleep 2
+
+postgres_address=$(dc port postgres 5432 | tail -n 1)
+s3_address=$(dc port garage 3900 | tail -n 1)
+postgres_port=${postgres_address##*:}
+s3_port=${s3_address##*:}
+case "$postgres_port" in ''|*[!0-9]*) echo "invalid PostgreSQL test port mapping" >&2; exit 1 ;; esac
+case "$s3_port" in ''|*[!0-9]*) echo "invalid Garage test port mapping" >&2; exit 1 ;; esac
+
+database_url="postgres://eventglass:local-test-only@127.0.0.1:$postgres_port/eventglass?sslmode=disable" # pragma: allowlist secret -- disposable Garage contract fixture only
+EVENTGLASS_INTEGRATION_REQUIRED=1 \
+EVENTGLASS_DATABASE_URL="$database_url" \
+EVENTGLASS_S3_ENDPOINT="http://127.0.0.1:$s3_port" \
+EVENTGLASS_S3_BUCKET="$bucket" \
+AWS_ACCESS_KEY_ID="$access_key" \
+AWS_SECRET_ACCESS_KEY="$secret_key" \
+go test -count=1 -v -run '^(TestS3PutRangeListMultipartAbortAndPermissions|TestDurableWorkflowVerifiedUploadDuplicateAndUnsupportedOnly)$' ./tests/integration
+
+printf 'Garage ARM64 S3 contract passed: Range, list, multipart, abort, delete, auth rejection, and durable ingest publication\n'
