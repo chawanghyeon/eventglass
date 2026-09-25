@@ -52,7 +52,7 @@ func TestCapacityFixtureHasFixedIndependentWork(t *testing.T) {
 	if logs != 1600 || errors != 80 {
 		t.Fatalf("capacity logical input logs=%d errors=%d", logs, errors)
 	}
-	if a, b := capacityDefinition(cycles), capacityDefinition(cycles); a != b || len(a) != 64 || a == capacityDefinition(cycles+4) {
+	if a, b := capacityDefinition(t, cycles), capacityDefinition(t, cycles); a != b || len(a) != 64 || a == capacityDefinition(t, cycles+4) {
 		t.Fatal("capacity definition is not deterministic and size-bound")
 	}
 }

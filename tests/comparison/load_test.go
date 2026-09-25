@@ -43,6 +43,7 @@ type comparisonReport struct {
 	PostLoad                                        *postLoadEvidence          `json:",omitempty"`
 	Operations                                      map[string]comparisonOperation
 	Revision, Architecture, FixtureDefinitionSHA256 string
+	InputEpochUTC                                   time.Time
 	SubmittedInput                                  submittedInput
 	PublishedCounts                                 map[string]int64
 	PublishedOracleFailure                          string
@@ -147,6 +148,7 @@ func TestSustainedComparison(t *testing.T) {
 	if err != nil || (workers != 1 && workers != 2 && workers != 4) {
 		t.Fatal("EVENTGLASS_COMPARISON_WORKERS must be 1, 2, or 4")
 	}
+	inputEpoch := comparisonInputEpoch(t)
 	warmup := comparisonDuration(t, "EVENTGLASS_COMPARISON_WARMUP", 5*time.Minute)
 	load := comparisonDuration(t, "EVENTGLASS_COMPARISON_LOAD", 30*time.Minute)
 	drain := comparisonDuration(t, "EVENTGLASS_COMPARISON_DRAIN", 10*time.Minute)
@@ -167,7 +169,7 @@ func TestSustainedComparison(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sample comparison database start: %v", err)
 	}
-	report := comparisonReport{Revision: os.Getenv("EVENTGLASS_COMPARISON_REVISION"), Architecture: "linux/arm64", Workers: workers,
+	report := comparisonReport{Revision: os.Getenv("EVENTGLASS_COMPARISON_REVISION"), Architecture: "linux/arm64", Workers: workers, InputEpochUTC: inputEpoch,
 		WarmupSeconds: int64(warmup.Seconds()), LoadSeconds: int64(load.Seconds()), StartedAt: databaseStart, Targets: make(map[string]bool), QueryFailureCodes: make(map[string]int), QueryJobStates: make(map[string]int)}
 	report.FixtureDefinitionSHA256 = fixedFixtureSummaries[10_000_000].SHA256
 	input := newInputEvidence()
@@ -192,14 +194,14 @@ func TestSustainedComparison(t *testing.T) {
 	}()
 
 	sequence := int64(0)
-	if err := runIngestPhase(client, baseURL, state, warmup, false, &sequence, &ackLatencies, &report, input); err != nil {
+	if err := runIngestPhase(client, baseURL, state, warmup, inputEpoch, false, &sequence, &ackLatencies, &report, input); err != nil {
 		t.Fatal(err)
 	}
 	backlogContext, stopBacklog := context.WithCancel(context.Background())
 	backlogResult := make(chan backlogMonitorResult, 1)
 	go monitorBacklog(backlogContext, pool, backlogResult)
 	loadStarted := time.Now()
-	if err := runIngestPhase(client, baseURL, state, load, true, &sequence, &ackLatencies, &report, input); err != nil {
+	if err := runIngestPhase(client, baseURL, state, load, inputEpoch, true, &sequence, &ackLatencies, &report, input); err != nil {
 		stopBacklog()
 		<-backlogResult
 		t.Fatal(err)
@@ -323,8 +325,19 @@ func setWorkloadTargets(report *comparisonReport, expectedAccepted int64) {
 	cycles := expectedAccepted / (logsPerSecond + errorsPerSecond)
 	report.Targets["published_query_count"] = report.PublishedOracleFailure == "" &&
 		report.PublishedCounts["log"] == cycles*logsPerSecond && report.PublishedCounts["error"] == cycles*errorsPerSecond && cycles > 0
-	report.Targets["submitted_input_provenance"] = report.SubmittedInput.Envelopes >= cycles*(1+errorsPerSecond)+cycles/60 &&
-		report.SubmittedInput.Bytes > 0 && len(report.SubmittedInput.SHA256) == 64
+	minimumWorkload := cycles*(1+errorsPerSecond) + cycles/60
+	report.Targets["submitted_input_provenance"] = report.SubmittedInput.Envelopes >= minimumWorkload &&
+		report.SubmittedInput.WorkloadEnvelopes >= minimumWorkload && report.SubmittedInput.Bytes > 0 && report.SubmittedInput.WorkloadBytes > 0 &&
+		report.SubmittedInput.Complete && len(report.SubmittedInput.SHA256) == 64 && len(report.SubmittedInput.WorkloadSHA256) == 64
+}
+
+func comparisonInputEpoch(t *testing.T) time.Time {
+	t.Helper()
+	seconds, err := strconv.ParseInt(os.Getenv("EVENTGLASS_COMPARISON_INPUT_EPOCH"), 10, 64)
+	if err != nil || seconds <= 0 {
+		t.Fatal("EVENTGLASS_COMPARISON_INPUT_EPOCH must be a positive Unix timestamp")
+	}
+	return time.Unix(seconds, 0).UTC()
 }
 
 func maintenanceTimeAccounted(operations map[string]comparisonOperation) bool {
@@ -346,14 +359,14 @@ func maintenanceTimeAccounted(operations map[string]comparisonOperation) bool {
 	return spent <= spare.WorkMS/4
 }
 
-func runIngestPhase(client *http.Client, baseURL string, state comparisonState, duration time.Duration, measured bool, sequence *int64, latencies *[]time.Duration, report *comparisonReport, input *inputEvidence) error {
+func runIngestPhase(client *http.Client, baseURL string, state comparisonState, duration time.Duration, inputEpoch time.Time, measured bool, sequence *int64, latencies *[]time.Duration, report *comparisonReport, input *inputEvidence) error {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	cycles := int(duration / time.Second)
 	for range cycles {
 		<-ticker.C
 		(*sequence)++
-		bodies, duplicateBody := comparisonEnvelopes(state, *sequence, time.Now().UTC())
+		bodies, duplicateBody := comparisonEnvelopes(state, *sequence, inputEpoch.Add(time.Duration(*sequence)*time.Second))
 		type answer struct {
 			status   int
 			response string
@@ -362,6 +375,9 @@ func runIngestPhase(client *http.Client, baseURL string, state comparisonState, 
 		}
 		answers := make(chan answer, len(bodies))
 		for _, body := range bodies {
+			if err := input.recordWorkload(body, state.PublicKey); err != nil {
+				return err
+			}
 			go func(payload []byte) {
 				started := time.Now()
 				status, response, err := postEnvelopeWithAdmissionRetry(client, baseURL, state, payload, input)
@@ -388,6 +404,9 @@ func runIngestPhase(client *http.Client, baseURL string, state comparisonState, 
 			report.LogicalErrors += errorsPerSecond
 		}
 		if *sequence%60 == 0 {
+			if err := input.recordWorkload(duplicateBody, state.PublicKey); err != nil {
+				return err
+			}
 			status, response, err := postEnvelope(client, baseURL, state, duplicateBody, input)
 			if err != nil || status != http.StatusOK {
 				return fmt.Errorf("duplicate sequence %d status=%d body=%s err=%v", *sequence, status, response, err)
@@ -438,7 +457,9 @@ func postEnvelope(client *http.Client, baseURL string, state comparisonState, bo
 	request, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("%s/api/%d/envelope/", baseURL, state.ProjectID), bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/x-sentry-envelope")
 	request.Header.Set("X-Sentry-Auth", "Sentry sentry_version=7, sentry_key="+state.PublicKey)
-	input.record(body)
+	if err := input.recordAttempt(body); err != nil {
+		return 0, "", err
+	}
 	response, err := client.Do(request)
 	if err != nil {
 		return 0, "", err

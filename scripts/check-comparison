@@ -107,6 +107,14 @@ else
   drain=10m
   test_timeout=1h
 fi
+input_epoch=""
+if [ "$mode" = sustained ]; then
+  input_epoch=${EVENTGLASS_COMPARISON_INPUT_EPOCH:-$(date -u +%s)}
+  case "$input_epoch" in
+    ''|*[!0-9]*) echo 'EVENTGLASS_COMPARISON_INPUT_EPOCH must be a positive Unix timestamp' >&2; exit 2 ;;
+  esac
+  if [ "$input_epoch" -eq 0 ]; then echo 'EVENTGLASS_COMPARISON_INPUT_EPOCH must be a positive Unix timestamp' >&2; exit 2; fi
+fi
 
 comparison_binary="$run_dir/capacity.test"
 if [ "$mode" = sustained ]; then
@@ -294,6 +302,7 @@ for workers in $profiles; do
     -e EVENTGLASS_COMPARISON_DRAIN="$drain" \
     -e EVENTGLASS_COMPARISON_QUICK="${EVENTGLASS_COMPARISON_QUICK:-}" \
     -e EVENTGLASS_COMPARISON_REVISION="$revision" \
+    -e EVENTGLASS_COMPARISON_INPUT_EPOCH="$input_epoch" \
     -e EVENTGLASS_COMPARISON_METRICS="$metrics" \
     -e EVENTGLASS_COMPARISON_RESTART_METRICS=/comparison/restarted-worker.metrics \
     --entrypoint /comparison.test "$build_image" \

@@ -205,9 +205,14 @@ all retention/compaction/GC attempt time (not only successful work), actual
 compaction progress and zero cancellation-budget overruns. The aggregate check
 supplements the rolling admission/cancellation tests; it does not assert a hard
 CPU ratio for every retrospective sliding window.
-Reports distinguish the fixed fixture-definition checksum from a streaming
-checksum of actual envelope bodies submitted to HTTP (including retries and
-duplicates, length-framed in submission order, not TCP arrival/ACK order).
+Reports distinguish the fixed fixture-definition checksum, the planned
+logical-workload checksum, and the actual HTTP-attempt checksum. The logical
+hash records each scheduled envelope once (including intentional duplicates),
+normalizes only the generated installation key, and excludes admission
+retries. The attempt hash includes retries and uses a sorted, length-framed
+digest so concurrent submission order does not change it. A comparison matrix
+shares one input epoch; separate invocations must set the same
+`EVENTGLASS_COMPARISON_INPUT_EPOCH` to compare logical workloads.
 After drain, the public aggregate API must return the complete generated log
 and error counts across the whole run; receipts alone cannot satisfy this target.
 The post-drain last15min regex field is explicitly not cold-cache evidence.

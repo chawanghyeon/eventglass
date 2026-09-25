@@ -52,17 +52,20 @@ func capacityCycles(t *testing.T) int {
 	return value
 }
 
-func capacityDefinition(cycles int) string {
+func capacityDefinition(t *testing.T, cycles int) string {
+	t.Helper()
 	input := newInputEvidence()
 	for sequence := 1; sequence <= cycles; sequence++ {
 		project := (sequence - 1) % 4
 		state := comparisonState{TenantID: 1, ProjectID: int64(project + 1), PublicKey: "capacity-definition-v1"}
 		bodies, _ := comparisonEnvelopes(state, int64(sequence), time.Unix(1_789_977_600, 0).UTC())
 		for _, body := range bodies {
-			input.record(body)
+			if err := input.recordWorkload(body, state.PublicKey); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
-	return input.snapshot().SHA256
+	return input.snapshot().WorkloadSHA256
 }
 
 func TestPrepareCapacityWorkload(t *testing.T) {
@@ -94,7 +97,7 @@ func TestPrepareCapacityWorkload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer pool.Close()
-	report := capacityReport{Kind: "fixed-work-publication-v1", Cycles: cycles, FixtureSHA256: capacityDefinition(cycles),
+	report := capacityReport{Kind: "fixed-work-publication-v1", Cycles: cycles, FixtureSHA256: capacityDefinition(t, cycles),
 		comparisonReport: comparisonReport{Revision: os.Getenv("EVENTGLASS_COMPARISON_REVISION"), Architecture: "linux/arm64", StartedAt: time.Now().UTC(), Targets: make(map[string]bool)}}
 	report.Workers, err = strconv.Atoi(os.Getenv("EVENTGLASS_COMPARISON_WORKERS"))
 	if err != nil || report.Workers != 1 && report.Workers != 2 && report.Workers != 4 {
@@ -114,6 +117,9 @@ func TestPrepareCapacityWorkload(t *testing.T) {
 		principal := state.Projects[(sequence-1)%4]
 		bodies, _ := comparisonEnvelopes(principal, int64(sequence), time.Unix(1_789_977_600, 0).UTC())
 		for _, body := range bodies {
+			if err := input.recordWorkload(body, principal.PublicKey); err != nil {
+				t.Fatal(err)
+			}
 			status, _, err := postEnvelopeWithAdmissionRetry(client, env[0], principal, body, input)
 			if err != nil || status != http.StatusOK {
 				t.Fatalf("capacity preload sequence=%d status=%d err=%v", sequence, status, err)

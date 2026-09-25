@@ -3,9 +3,8 @@
 package comparison
 
 import (
+	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -26,20 +25,23 @@ func TestWarmupACKsDoNotEnterMeasuredLatencySamples(t *testing.T) {
 			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Header: make(http.Header)}, nil
 		})}
 		state := comparisonState{ProjectID: 1, PublicKey: "local-fixture"}
+		inputEpoch := time.Unix(1_789_977_600, 0).UTC()
 		var sequence int64
 		var latencies []time.Duration
 		var report comparisonReport
 		input := newInputEvidence()
-		if err := runIngestPhase(client, "http://127.0.0.1", state, 2*time.Second, false, &sequence, &latencies, &report, input); err != nil {
+		if err := runIngestPhase(client, "http://127.0.0.1", state, 2*time.Second, inputEpoch, false, &sequence, &latencies, &report, input); err != nil {
 			t.Fatal(err)
 		}
-		if len(latencies) != 0 || report.LogicalLogs != 0 || report.LogicalErrors != 0 || input.snapshot().Envelopes != 12 {
+		if len(latencies) != 0 || report.LogicalLogs != 0 || report.LogicalErrors != 0 ||
+			input.snapshot().Envelopes != 12 || input.snapshot().WorkloadEnvelopes != 12 {
 			t.Fatalf("warmup entered measured population or lost provenance: latencies=%d report=%+v input=%+v", len(latencies), report, input.snapshot())
 		}
-		if err := runIngestPhase(client, "http://127.0.0.1", state, time.Second, true, &sequence, &latencies, &report, input); err != nil {
+		if err := runIngestPhase(client, "http://127.0.0.1", state, time.Second, inputEpoch, true, &sequence, &latencies, &report, input); err != nil {
 			t.Fatal(err)
 		}
-		if len(latencies) != 6 || report.LogicalLogs != 100 || report.LogicalErrors != 5 || sequence != 3 || input.snapshot().Envelopes != 18 {
+		if len(latencies) != 6 || report.LogicalLogs != 100 || report.LogicalErrors != 5 || sequence != 3 ||
+			input.snapshot().Envelopes != 18 || input.snapshot().WorkloadEnvelopes != 18 {
 			t.Fatalf("incorrect measured population: latencies=%d report=%+v sequence=%d input=%+v", len(latencies), report, sequence, input.snapshot())
 		}
 	})
@@ -197,12 +199,28 @@ func (transport comparisonTransport) RoundTrip(request *http.Request) (*http.Res
 
 func TestSubmittedInputFramingAndActualRetries(t *testing.T) {
 	a, b := newInputEvidence(), newInputEvidence()
-	a.record([]byte("a"))
-	a.record([]byte("bc"))
-	b.record([]byte("ab"))
-	b.record([]byte("c"))
+	_ = a.recordAttempt([]byte("a"))
+	_ = a.recordAttempt([]byte("bc"))
+	_ = b.recordAttempt([]byte("ab"))
+	_ = b.recordAttempt([]byte("c"))
 	if a.snapshot().SHA256 == b.snapshot().SHA256 {
 		t.Fatal("input framing lost envelope boundaries")
+	}
+	ordered, reversed := newInputEvidence(), newInputEvidence()
+	for _, body := range [][]byte{[]byte("a"), []byte("bc"), []byte("a")} {
+		_ = ordered.recordAttempt(body)
+	}
+	for _, body := range [][]byte{[]byte("a"), []byte("a"), []byte("bc")} {
+		_ = reversed.recordAttempt(body)
+	}
+	if ordered.snapshot().SHA256 != reversed.snapshot().SHA256 {
+		t.Fatal("input set hash changed with concurrent submission order")
+	}
+	missingRetry := newInputEvidence()
+	_ = missingRetry.recordAttempt([]byte("a"))
+	_ = missingRetry.recordAttempt([]byte("bc"))
+	if missingRetry.snapshot().SHA256 == ordered.snapshot().SHA256 {
+		t.Fatal("input set hash did not retain duplicate attempts")
 	}
 	var attempts atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -214,15 +232,66 @@ func TestSubmittedInputFramingAndActualRetries(t *testing.T) {
 	}))
 	defer server.Close()
 	input := newInputEvidence()
+	if err := input.recordWorkload([]byte("abc"), ""); err != nil {
+		t.Fatal(err)
+	}
 	status, _, err := postEnvelopeWithAdmissionRetry(server.Client(), server.URL, comparisonState{ProjectID: 1}, []byte("abc"), input)
 	if err != nil || status != http.StatusOK {
 		t.Fatalf("status=%d err=%v", status, err)
 	}
-	framed := "eventglass-submitted-envelope-v1\x00" + "\x00\x00\x00\x00\x00\x00\x00\x03abc" + "\x00\x00\x00\x00\x00\x00\x00\x03abc"
-	digest := sha256.Sum256([]byte(framed))
+	expected := newInputEvidence()
+	_ = expected.recordAttempt([]byte("abc"))
+	_ = expected.recordAttempt([]byte("abc"))
+	_ = expected.recordWorkload([]byte("abc"), "")
 	got := input.snapshot()
-	if got.Envelopes != 2 || got.Bytes != 6 || got.SHA256 != hex.EncodeToString(digest[:]) {
+	if got.Envelopes != 2 || got.Bytes != 6 || got.WorkloadEnvelopes != 1 || got.WorkloadBytes != 3 || !got.Complete ||
+		got.SHA256 != expected.snapshot().SHA256 || got.WorkloadSHA256 != expected.snapshot().WorkloadSHA256 {
 		t.Fatalf("actual retry provenance=%+v", got)
+	}
+}
+
+func TestComparisonEnvelopesRepeatForFixedEpoch(t *testing.T) {
+	state := comparisonState{PublicKey: "fixed-public-key", ProjectID: 7}
+	epoch := time.Unix(1_789_977_600, 0).UTC()
+	first, firstDuplicate := comparisonEnvelopes(state, 42, epoch)
+	second, secondDuplicate := comparisonEnvelopes(state, 42, epoch)
+	if len(first) != len(second) || !bytes.Equal(firstDuplicate, secondDuplicate) {
+		t.Fatal("fixed input epoch changed the comparison workload")
+	}
+	for index := range first {
+		if !bytes.Equal(first[index], second[index]) {
+			t.Fatalf("fixed input epoch changed envelope %d", index)
+		}
+	}
+}
+
+func TestSubmittedWorkloadHashIgnoresOnlyInstallationKey(t *testing.T) {
+	firstState := comparisonState{PublicKey: strings.Repeat("a", 64), ProjectID: 7}
+	secondState := comparisonState{PublicKey: strings.Repeat("b", 64), ProjectID: 7}
+	epoch := time.Unix(1_789_977_600, 0).UTC()
+	firstBodies, _ := comparisonEnvelopes(firstState, 42, epoch)
+	secondBodies, _ := comparisonEnvelopes(secondState, 42, epoch)
+	first, second := newInputEvidence(), newInputEvidence()
+	for index := range firstBodies {
+		if err := first.recordAttempt(firstBodies[index]); err != nil {
+			t.Fatal(err)
+		}
+		if err := second.recordAttempt(secondBodies[index]); err != nil {
+			t.Fatal(err)
+		}
+		if err := first.recordWorkload(firstBodies[index], firstState.PublicKey); err != nil {
+			t.Fatal(err)
+		}
+		if err := second.recordWorkload(secondBodies[index], secondState.PublicKey); err != nil {
+			t.Fatal(err)
+		}
+	}
+	firstInput, secondInput := first.snapshot(), second.snapshot()
+	if firstInput.SHA256 == secondInput.SHA256 {
+		t.Fatal("actual request provenance omitted the generated installation key")
+	}
+	if firstInput.WorkloadSHA256 != secondInput.WorkloadSHA256 {
+		t.Fatal("equivalent workload differed after normalizing only the installation key")
 	}
 }
 
@@ -297,7 +366,7 @@ func TestFailedIngestCycleJoinsEveryRequest(t *testing.T) {
 	go func() {
 		var sequence int64
 		var latencies []time.Duration
-		result <- runIngestPhase(server.Client(), server.URL, comparisonState{ProjectID: 1}, time.Second, true, &sequence, &latencies, &comparisonReport{}, newInputEvidence())
+		result <- runIngestPhase(server.Client(), server.URL, comparisonState{ProjectID: 1}, time.Second, time.Unix(1_789_977_600, 0).UTC(), true, &sequence, &latencies, &comparisonReport{}, newInputEvidence())
 	}()
 	select {
 	case <-allStarted:

@@ -3804,3 +3804,17 @@ and approximately1.284MB/1,582 allocations. The32-file case also regressed from
 26.3–28.9ms to29.54–31.93ms. Correctness tests passed, but the measured SQL
 shape was slower, so the candidate was reverted. This isolated native benchmark
 is not a full-service SLO or causal R3 result.
+
+#### R3 input provenance separates planned work from retries
+
+The comparison runner now sets one UTC input epoch per worker matrix (or accepts
+`EVENTGLASS_COMPARISON_INPUT_EPOCH` for separate paired invocations). Reports
+retain the sorted hash/count/bytes of actual HTTP attempts, including 429
+retries, and separately hash/count/measure the planned envelopes once, including
+intentional duplicate requests but excluding transport retries. The planned hash
+normalizes only the installation-generated DSN key. Its fixed-memory limit
+covers both digest sets. Go1.27.1 ARM64 comparison and report contract tests pass;
+the workspace first denied httptest loopback binds, and the same tests passed
+with local-only networking permission. No service profile was run for this
+harness correction. Existing official reports have not been rewritten and R3
+remains incomplete.

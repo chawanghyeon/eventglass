@@ -11,51 +11,150 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
+	"testing"
 	"time"
 )
 
-// This hashes actual request bodies offered to the HTTP client, including
-// admission retries and deliberate duplicates, in locked submission order.
-// It is not TCP arrival order or an ACK/published-data checksum. Only the hash
-// and counters are retained, never DSN keys or the complete workload in memory.
+// Keep planned logical envelopes separate from actual HTTP attempts. Retries
+// affect attempt provenance, not whether two installations ran the same input.
+// Only digests and counters are retained, never full bodies or DSN keys.
 type submittedInput struct {
-	Framing          string
-	SHA256           string
-	Envelopes, Bytes int64
+	Framing, SHA256, WorkloadFraming, WorkloadSHA256   string
+	Envelopes, Bytes, WorkloadEnvelopes, WorkloadBytes int64
+	Complete                                           bool
+}
+
+const maxSubmittedInputEnvelopes = 100_000
+
+type submittedEnvelopeDigest struct {
+	length uint64
+	digest [sha256.Size]byte
 }
 
 type inputEvidence struct {
-	mu               sync.Mutex
-	digest           hash.Hash
-	envelopes, bytes int64
+	mu                                                 sync.Mutex
+	attempts, workload                                 []submittedEnvelopeDigest
+	envelopes, bytes, workloadEnvelopes, workloadBytes int64
 }
 
 func newInputEvidence() *inputEvidence {
-	digest := sha256.New()
-	_, _ = digest.Write([]byte("eventglass-submitted-envelope-v1\x00"))
-	return &inputEvidence{digest: digest}
+	return &inputEvidence{}
 }
 
-func (input *inputEvidence) record(body []byte) {
+func (input *inputEvidence) recordAttempt(body []byte) error {
 	input.mu.Lock()
 	defer input.mu.Unlock()
-	var length [8]byte
-	binary.BigEndian.PutUint64(length[:], uint64(len(body)))
-	_, _ = input.digest.Write(length[:])
-	_, _ = input.digest.Write(body)
+	if len(input.attempts)+len(input.workload) >= maxSubmittedInputEnvelopes {
+		return errors.New("comparison submitted-input evidence limit exceeded")
+	}
+	input.attempts = append(input.attempts, submittedEnvelopeDigest{length: uint64(len(body)), digest: sha256.Sum256(body)})
 	input.envelopes++
 	input.bytes += int64(len(body))
+	return nil
+}
+
+func (input *inputEvidence) recordWorkload(body []byte, publicKey string) error {
+	digest, err := comparisonWorkloadDigest(body, publicKey)
+	if err != nil {
+		return err
+	}
+	length := len(body)
+	if publicKey != "" {
+		length += len("comparison-generated-key") - len(publicKey)
+	}
+	input.mu.Lock()
+	defer input.mu.Unlock()
+	if len(input.attempts)+len(input.workload) >= maxSubmittedInputEnvelopes {
+		return errors.New("comparison submitted-input evidence limit exceeded")
+	}
+	input.workload = append(input.workload, submittedEnvelopeDigest{length: uint64(length), digest: digest})
+	input.workloadEnvelopes++
+	input.workloadBytes += int64(length)
+	return nil
+}
+
+func comparisonWorkloadDigest(body []byte, publicKey string) ([sha256.Size]byte, error) {
+	if publicKey == "" {
+		return sha256.Sum256(body), nil
+	}
+	headerEnd := bytes.IndexByte(body, '\n')
+	if headerEnd < 0 {
+		return [sha256.Size]byte{}, errors.New("comparison envelope has no DSN header")
+	}
+	key := []byte(publicKey)
+	keyAt := bytes.Index(body[:headerEnd], key)
+	if keyAt < 0 {
+		return [sha256.Size]byte{}, errors.New("comparison envelope DSN key is absent")
+	}
+	digest := sha256.New()
+	_, _ = digest.Write(body[:keyAt])
+	_, _ = digest.Write([]byte("comparison-generated-key"))
+	_, _ = digest.Write(body[keyAt+len(key):])
+	var sum [sha256.Size]byte
+	copy(sum[:], digest.Sum(nil))
+	return sum, nil
 }
 
 func (input *inputEvidence) snapshot() submittedInput {
 	input.mu.Lock()
-	defer input.mu.Unlock()
-	return submittedInput{Framing: "eventglass-submitted-envelope-v1:BE64-length+body", SHA256: hex.EncodeToString(input.digest.Sum(nil)), Envelopes: input.envelopes, Bytes: input.bytes}
+	attempts := append([]submittedEnvelopeDigest(nil), input.attempts...)
+	workload := append([]submittedEnvelopeDigest(nil), input.workload...)
+	envelopes, totalBytes := input.envelopes, input.bytes
+	workloadEnvelopes, workloadBytes := input.workloadEnvelopes, input.workloadBytes
+	input.mu.Unlock()
+	sort.Slice(attempts, func(i, j int) bool {
+		if attempts[i].length != attempts[j].length {
+			return attempts[i].length < attempts[j].length
+		}
+		return bytes.Compare(attempts[i].digest[:], attempts[j].digest[:]) < 0
+	})
+	sort.Slice(workload, func(i, j int) bool {
+		if workload[i].length != workload[j].length {
+			return workload[i].length < workload[j].length
+		}
+		return bytes.Compare(workload[i].digest[:], workload[j].digest[:]) < 0
+	})
+	digest := hashEnvelopeSet("eventglass-submitted-envelope-set-v2\x00", attempts)
+	workloadDigest := hashEnvelopeSet("eventglass-comparison-logical-workload-set-v1\x00", workload)
+	return submittedInput{
+		Framing: "eventglass-submitted-envelope-set-v2:sorted-BE64-length+SHA256(body)",
+		SHA256:  hex.EncodeToString(digest), WorkloadFraming: "eventglass-comparison-logical-workload-set-v1:DSN-key-normalized+sorted-BE64-length+SHA256(body)",
+		WorkloadSHA256: hex.EncodeToString(workloadDigest), Envelopes: envelopes, Bytes: totalBytes,
+		WorkloadEnvelopes: workloadEnvelopes, WorkloadBytes: workloadBytes,
+		Complete: int64(len(attempts)) == envelopes && int64(len(workload)) == workloadEnvelopes,
+	}
+}
+
+func hashEnvelopeSet(domain string, entries []submittedEnvelopeDigest) []byte {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte(domain))
+	var length [8]byte
+	for _, entry := range entries {
+		binary.BigEndian.PutUint64(length[:], entry.length)
+		_, _ = hash.Write(length[:])
+		_, _ = hash.Write(entry.digest[:])
+	}
+	return hash.Sum(nil)
+}
+
+func TestSubmittedInputEvidenceHasAFixedMemoryCeiling(t *testing.T) {
+	input := newInputEvidence()
+	if err := input.recordWorkload([]byte("planned"), ""); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < maxSubmittedInputEnvelopes-1; index++ {
+		if err := input.recordAttempt([]byte("bounded")); err != nil {
+			t.Fatalf("record envelope %d: %v", index, err)
+		}
+	}
+	if err := input.recordWorkload([]byte("overflow"), ""); err == nil {
+		t.Fatal("submitted-input evidence accepted a planned envelope past its combined cap")
+	}
 }
 
 // Count the entire received-time workload through the public query API and

@@ -17,8 +17,14 @@ func capacityFixture(workers int, elapsed float64) map[string]any {
 		"FixtureSHA256":      strings.Repeat("a", 64),
 		"PublishedByProject": []any{map[string]any{"log": float64(3200), "error": float64(160)}, map[string]any{"log": float64(3200), "error": float64(160)}, map[string]any{"log": float64(3200), "error": float64(160)}, map[string]any{"log": float64(3200), "error": float64(160)}},
 		"Progress":           []any{map[string]any{"ElapsedMS": float64(0), "Published": float64(0), "Backlog": float64(768)}, map[string]any{"ElapsedMS": elapsed, "Published": float64(13440), "Backlog": float64(0)}},
-		"SubmittedInput":     map[string]any{"Envelopes": float64(768), "Bytes": float64(100000), "SHA256": strings.Repeat("b", 64)},
-		"Targets":            map[string]any{"resource_evidence_complete": true, "no_cgroup_oom": true, "go_units_within_512mib": true, "capacity_evidence_complete": true},
+		"SubmittedInput": map[string]any{
+			"Framing":         "eventglass-submitted-envelope-set-v2:sorted-BE64-length+SHA256(body)",
+			"WorkloadFraming": "eventglass-comparison-logical-workload-set-v1:DSN-key-normalized+sorted-BE64-length+SHA256(body)",
+			"Complete":        true, "Envelopes": float64(768), "Bytes": float64(100000),
+			"SHA256": strings.Repeat("b", 64), "WorkloadSHA256": strings.Repeat("c", 64),
+			"WorkloadEnvelopes": float64(768), "WorkloadBytes": float64(100000),
+		},
+		"Targets": map[string]any{"resource_evidence_complete": true, "no_cgroup_oom": true, "go_units_within_512mib": true, "capacity_evidence_complete": true},
 	}
 }
 
@@ -27,18 +33,21 @@ func TestCapacityEvidenceRejectsPartialOrDifferentWork(t *testing.T) {
 		t.Fatal("valid complete fixed-work fixture rejected")
 	}
 	for name, mutate := range map[string]func(map[string]any){
-		"unpublished":         func(r map[string]any) { r["PublishedRecords"] = float64(13439) },
-		"batched differently": func(r map[string]any) { r["PreloadedJobs"] = float64(767) },
-		"no timer":            func(r map[string]any) { r["DrainElapsedMS"] = float64(0) },
-		"invented rate":       func(r map[string]any) { r["RecordsPerSecond"] = float64(999) },
-		"missing project":     func(r map[string]any) { r["PublishedByProject"] = r["PublishedByProject"].([]any)[:3] },
-		"wrong project count": func(r map[string]any) { r["PublishedByProject"].([]any)[0].(map[string]any)["error"] = float64(159) },
-		"already progressing": func(r map[string]any) { r["Progress"].([]any)[0].(map[string]any)["Published"] = float64(1) },
-		"undrained":           func(r map[string]any) { r["Progress"].([]any)[1].(map[string]any)["Backlog"] = float64(1) },
-		"no input hash":       func(r map[string]any) { r["SubmittedInput"].(map[string]any)["SHA256"] = "" },
-		"nonhex definition":   func(r map[string]any) { r["FixtureSHA256"] = strings.Repeat("z", 64) },
-		"invalid workers":     func(r map[string]any) { r["Workers"] = float64(3) },
-		"conflicting input":   func(r map[string]any) { r["Conflicts"] = float64(1) },
+		"unpublished":              func(r map[string]any) { r["PublishedRecords"] = float64(13439) },
+		"batched differently":      func(r map[string]any) { r["PreloadedJobs"] = float64(767) },
+		"no timer":                 func(r map[string]any) { r["DrainElapsedMS"] = float64(0) },
+		"invented rate":            func(r map[string]any) { r["RecordsPerSecond"] = float64(999) },
+		"missing project":          func(r map[string]any) { r["PublishedByProject"] = r["PublishedByProject"].([]any)[:3] },
+		"wrong project count":      func(r map[string]any) { r["PublishedByProject"].([]any)[0].(map[string]any)["error"] = float64(159) },
+		"already progressing":      func(r map[string]any) { r["Progress"].([]any)[0].(map[string]any)["Published"] = float64(1) },
+		"undrained":                func(r map[string]any) { r["Progress"].([]any)[1].(map[string]any)["Backlog"] = float64(1) },
+		"no input hash":            func(r map[string]any) { r["SubmittedInput"].(map[string]any)["SHA256"] = "" },
+		"incomplete input set":     func(r map[string]any) { r["SubmittedInput"].(map[string]any)["Complete"] = false },
+		"no workload hash":         func(r map[string]any) { r["SubmittedInput"].(map[string]any)["WorkloadSHA256"] = "" },
+		"incomplete logical input": func(r map[string]any) { r["SubmittedInput"].(map[string]any)["WorkloadEnvelopes"] = float64(767) },
+		"nonhex definition":        func(r map[string]any) { r["FixtureSHA256"] = strings.Repeat("z", 64) },
+		"invalid workers":          func(r map[string]any) { r["Workers"] = float64(3) },
+		"conflicting input":        func(r map[string]any) { r["Conflicts"] = float64(1) },
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := capacityFixture(1, 10000)

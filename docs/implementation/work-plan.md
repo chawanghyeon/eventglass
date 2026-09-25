@@ -14,7 +14,13 @@ and paired catalog verification restored. The latest corrected current-source
 backlog and post-load idle-backlog gates;2/4 workers missed only histogram p95.
 ACK/visibility, Go-unit limits and zero-OOM checks passed. The independent
 native oracle passed, but its10M cgroup peak was4KiB above its512MiB limit.
-These are failed G07 results, not a release claim. The current-source fixed-
+These are failed G07 results, not a release claim. The comparison runner now
+records a fixed input epoch and separate hashes for the planned logical
+envelopes (each intentional duplicate once, installation key normalized) and
+actual HTTP attempts (including retries). This lets future paired profiles
+identify equal inputs; it does not retrofit the historical reports or close
+G07. Focused Go1.27.1 ARM64 contract tests pass; no new sustained profile was
+run. The current-source fixed-
 work capacity on1cf3538 passed three isolated128-cycle runs per worker count at
 median124.9/230.5/401.2 records/s (speedup1/1.846/3.212; efficiency1/0.923/
 0.803); this is publication-capacity evidence, not a replacement for R3 mixed-

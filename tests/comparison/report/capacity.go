@@ -87,7 +87,12 @@ func validCapacity(report map[string]any) bool {
 		previousTime, previousRows = elapsed, rows
 	}
 	input, ok := report["SubmittedInput"].(map[string]any)
-	if !ok || number(input, "Envelopes") < cycles*6 || number(input, "Bytes") <= 0 {
+	if !ok || input["Complete"] != true || input["Framing"] != "eventglass-submitted-envelope-set-v2:sorted-BE64-length+SHA256(body)" ||
+		input["WorkloadFraming"] != "eventglass-comparison-logical-workload-set-v1:DSN-key-normalized+sorted-BE64-length+SHA256(body)" ||
+		number(input, "Envelopes") < cycles*6 || number(input, "Bytes") <= 0 {
+		return false
+	}
+	if number(input, "WorkloadEnvelopes") < cycles*6 || number(input, "WorkloadBytes") <= 0 {
 		return false
 	}
 	sha, ok := input["SHA256"].(string)
@@ -95,6 +100,14 @@ func validCapacity(report map[string]any) bool {
 		return false
 	}
 	_, err := hex.DecodeString(sha)
+	if err != nil {
+		return false
+	}
+	workloadSHA, ok := input["WorkloadSHA256"].(string)
+	if !ok || len(workloadSHA) != 64 {
+		return false
+	}
+	_, err = hex.DecodeString(workloadSHA)
 	return err == nil
 }
 
