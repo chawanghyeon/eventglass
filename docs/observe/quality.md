@@ -3766,6 +3766,18 @@ started, but intentionally interrupted while the engine package produced no
 output for several minutes; it is not a passing result or a substitute for the
 browser E2E.
 
+On2026-09-26, current `68c1a24` source was rebuilt as
+`eventglass-go:native-contract-68c1a24` for Linux ARM64 with Go1.27.1 and the
+recipe-verified pinned DuckDB2.0 cache. A focused native contract selection
+passed in0.549s: `TestReadParquetThroughCapabilityGatewayUsesRanges`,
+`TestConvertBulkAppendPairedSchemaIdentityAndBounds`,
+`TestConvertCancellationRemovesPartialOutputsAndSpill`,
+`TestHistogramUsesOneNativeInputScan`,
+`TestAttributeDoubleGroupsAndHistogramProjection`, and
+`TestCompactionPreservesExactPairedIdentityAndBounds`. This confirms those six
+contracts on the current source; the full `./scripts/check contracts` gate
+remains incomplete and is not inferred from this selection.
+
 The workflow-pinned Syft v1.42.3 ARM64 binary produced SPDX JSON containing147
 packages from the63MiB app image archive. Trivy v0.74.0 scanned that same
 archive with `os,library`, `HIGH,CRITICAL`, and unfixed findings included. The
