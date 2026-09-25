@@ -1,0 +1,10 @@
+services:
+  postgres:
+    environment:
+      PGBACKREST_REPO1_S3_TOKEN: ${PGBACKREST_REPO1_S3_TOKEN:?short-lived AWS session token is required}
+  restored-postgres:
+    environment:
+      PGBACKREST_REPO1_S3_TOKEN: ${PGBACKREST_REPO1_S3_TOKEN:?short-lived AWS session token is required}
+  missing-postgres:
+    environment:
+      PGBACKREST_REPO1_S3_TOKEN: ${PGBACKREST_REPO1_S3_TOKEN:?short-lived AWS session token is required}

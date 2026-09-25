@@ -60,7 +60,12 @@ Playwright Chromium installation.
 `./scripts/check recovery` builds the pinned pgBackRest source, performs an
 actual PostgreSQL base+WAL restore into isolated volumes, verifies restored S3
 references, imports a signed rehearsal report, and exercises the missing-object
-fail-closed path. It uses only disposable Colima/Docker resources.
+fail-closed path. By default it uses only disposable Colima/Docker resources.
+For real AWS-provider validation, the `EVENTGLASS_RECOVERY_BACKEND=aws` mode
+requires the pre-created scratch bucket, expected owner account, region, and
+short-lived session credentials described in
+[`docs/operations/recovery.md`](docs/operations/recovery.md); it writes and
+cleans only its generated test prefix.
 
 `./scripts/check integration` also runs the pinned-native maintenance path:
 real durable ingest, paired S3 publication, compaction, mixed-retention rewrite

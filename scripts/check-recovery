@@ -3,51 +3,165 @@ set -eu
 
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
+backend=${EVENTGLASS_RECOVERY_BACKEND:-local}
+bucket=
+run_prefix=
+region=
+owns_aws_prefix=0
+case "$backend" in
+  local) ;;
+  aws)
+    : "${EVENTGLASS_AWS_RESTORE_BUCKET:?set a pre-created, isolated scratch bucket}"
+    : "${EVENTGLASS_AWS_ACCOUNT_ID:?set the expected AWS account ID}"
+    : "${AWS_REGION:?set AWS_REGION}"
+    : "${AWS_ACCESS_KEY_ID:?use short-lived AWS credentials}"
+    : "${AWS_SECRET_ACCESS_KEY:?use short-lived AWS credentials}"
+    : "${AWS_SESSION_TOKEN:?long-lived AWS credentials are not accepted}"
+    command -v aws >/dev/null 2>&1 || { echo "aws CLI is required for AWS recovery" >&2; exit 1; }
+    if [ -n "${AWS_ENDPOINT_URL:-}${AWS_ENDPOINT_URL_S3:-}${AWS_ENDPOINT_URL_STS:-}${EVENTGLASS_S3_ENDPOINT:-}${AWS_PROFILE:-}${AWS_CONFIG_FILE:-}${AWS_SHARED_CREDENTIALS_FILE:-}" ]; then
+      echo "AWS endpoint/profile/config overrides must be unset for AWS recovery" >&2
+      exit 1
+    fi
+    case "$EVENTGLASS_AWS_RESTORE_BUCKET" in
+      *[!a-z0-9.-]*|'') echo "invalid scratch bucket name" >&2; exit 1 ;;
+    esac
+    if [ "${#EVENTGLASS_AWS_RESTORE_BUCKET}" -lt 3 ] || [ "${#EVENTGLASS_AWS_RESTORE_BUCKET}" -gt 63 ]; then
+      echo "invalid scratch bucket name length" >&2
+      exit 1
+    fi
+    case "$EVENTGLASS_AWS_RESTORE_BUCKET" in
+      [a-z0-9]*[a-z0-9]) ;;
+      *) echo "scratch bucket must start and end with a lowercase letter or digit" >&2; exit 1 ;;
+    esac
+    case "$EVENTGLASS_AWS_RESTORE_BUCKET" in
+      *..*) echo "scratch bucket cannot contain adjacent dots" >&2; exit 1 ;;
+    esac
+    case "$EVENTGLASS_AWS_ACCOUNT_ID" in
+      *[!0-9]*|'') echo "invalid expected AWS account ID" >&2; exit 1 ;;
+    esac
+    [ "${#EVENTGLASS_AWS_ACCOUNT_ID}" = 12 ] || { echo "AWS account ID must be 12 digits" >&2; exit 1; }
+    case "$AWS_REGION" in
+      *[!a-z0-9-]*|cn-*) echo "AWS recovery supports standard AWS regions only" >&2; exit 1 ;;
+    esac
+    bucket=$EVENTGLASS_AWS_RESTORE_BUCKET
+    region=$AWS_REGION
+    export AWS_CONFIG_FILE=/dev/null AWS_SHARED_CREDENTIALS_FILE=/dev/null
+    actual_account=$(aws sts get-caller-identity --query Account --output text --region "$region")
+    test "$actual_account" = "$EVENTGLASS_AWS_ACCOUNT_ID" || { echo "AWS identity account mismatch" >&2; exit 1; }
+    aws s3api head-bucket --bucket "$bucket" --expected-bucket-owner "$EVENTGLASS_AWS_ACCOUNT_ID" --region "$region"
+    run_prefix="eventglass-release-check-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+    existing=$(aws s3api list-objects-v2 --bucket "$bucket" --prefix "$run_prefix/" --max-keys 1 --query KeyCount --output text --region "$region")
+    test "$existing" = 0 || { echo "generated AWS recovery prefix is not empty" >&2; exit 1; }
+    owns_aws_prefix=1
+    export PGBACKREST_REPO1_S3_KEY=$AWS_ACCESS_KEY_ID
+    export PGBACKREST_REPO1_S3_KEY_SECRET=$AWS_SECRET_ACCESS_KEY
+    export PGBACKREST_REPO1_S3_TOKEN=$AWS_SESSION_TOKEN
+    export PGBACKREST_REPO1_S3_BUCKET=$bucket
+    export PGBACKREST_REPO1_PATH="/$run_prefix/backup"
+    export PGBACKREST_REPO1_S3_ENDPOINT="s3.$region.amazonaws.com"
+    export PGBACKREST_REPO1_S3_REGION=$region
+    export PGBACKREST_REPO1_S3_URI_STYLE=host
+    export PGBACKREST_REPO1_STORAGE_HOST="s3.$region.amazonaws.com"
+    export PGBACKREST_REPO1_STORAGE_PORT=443
+    export PGBACKREST_REPO1_STORAGE_VERIFY_TLS=y
+    unset EVENTGLASS_S3_ENDPOINT
+    ;;
+  *) echo "EVENTGLASS_RECOVERY_BACKEND must be local or aws" >&2; exit 2 ;;
+esac
 project="eventglass-recovery-$$"
 artifacts=$(mktemp -d "$ROOT/.tools/eventglass-recovery.XXXXXX")
 dd if=/dev/urandom of="$artifacts/attestation.key" bs=32 count=1 2>/dev/null
 chmod 600 "$artifacts/attestation.key"
 compose="deploy/recovery/compose.yaml"
+aws_compose="deploy/recovery/compose.aws.yaml"
 network="${project}_default"
 cert_volume="${project}_minio-certs"
-cleanup() {
-  docker compose -p "$project" -f "$compose" --profile restore down --volumes --remove-orphans >/dev/null 2>&1 || true
-  rm -rf "$artifacts"
+dc() {
+  if [ "$backend" = aws ]; then
+    docker compose -p "$project" -f "$compose" -f "$aws_compose" "$@"
+  else
+    docker compose -p "$project" -f "$compose" "$@"
+  fi
 }
-trap cleanup EXIT INT TERM
+cleanup() {
+  status=$?
+  dc --profile restore down --volumes --remove-orphans >/dev/null 2>&1 || true
+  if [ "$owns_aws_prefix" = 1 ] && ! aws s3 rm "s3://$bucket/$run_prefix/" --recursive --region "$region" --only-show-errors; then
+    echo "failed to remove owned AWS recovery prefix s3://$bucket/$run_prefix/" >&2
+    status=1
+  fi
+  rm -rf "$artifacts"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-docker compose -p "$project" -f "$compose" up -d --build --wait postgres minio
-docker compose -p "$project" -f "$compose" run --rm minio-init
+if [ "$backend" = local ]; then
+  dc up -d --build --wait postgres minio
+  dc run --rm minio-init
+else
+  dc up -d --build --wait postgres
+fi
 ./scripts/build-image --target build --load --tag eventglass-go:recovery-build
 
 run_eventglass() {
   database_host=$1
   shift
   database_url="postgres://postgres:local-test-only@${database_host}:5432/eventglass?sslmode=disable" # pragma: allowlist secret -- disposable fixture
-  docker run --rm --platform linux/arm64 --network "$network" \
-    -e EVENTGLASS_DATABASE_URL="$database_url" \
-    -e EVENTGLASS_S3_ENDPOINT=https://minio:9000 \
-    -e EVENTGLASS_S3_REGION=us-east-1 \
-    -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
-    -e EVENTGLASS_S3_PREFIX=recovery-test \
-    -e AWS_ACCESS_KEY_ID=eventglass-local \
-    -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
-    -e AWS_CA_BUNDLE=/certs/public.crt \
-    -v "$cert_volume:/certs:ro" -v "$artifacts:/reports" \
-    eventglass-go:recovery-build /out/eventglass-go "$@"
+  if [ "$backend" = aws ]; then
+    docker run --rm --platform linux/arm64 --network "$network" \
+      -e EVENTGLASS_DATABASE_URL="$database_url" \
+      -e EVENTGLASS_S3_REGION="$region" -e EVENTGLASS_S3_BUCKET="$bucket" \
+      -e EVENTGLASS_S3_PREFIX="$run_prefix/live" \
+      -e AWS_REGION="$region" -e AWS_CONFIG_FILE=/dev/null -e AWS_SHARED_CREDENTIALS_FILE=/dev/null \
+      -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+      -v "$artifacts:/reports" eventglass-go:recovery-build /out/eventglass-go "$@"
+  else
+    docker run --rm --platform linux/arm64 --network "$network" \
+      -e EVENTGLASS_DATABASE_URL="$database_url" \
+      -e EVENTGLASS_S3_ENDPOINT=https://minio:9000 \
+      -e EVENTGLASS_S3_REGION=us-east-1 \
+      -e EVENTGLASS_S3_BUCKET=eventglass-g00 \
+      -e EVENTGLASS_S3_PREFIX=recovery-test \
+      -e AWS_ACCESS_KEY_ID=eventglass-local \
+      -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+      -e AWS_CA_BUNDLE=/certs/public.crt \
+      -v "$cert_volume:/certs:ro" -v "$artifacts:/reports" \
+      eventglass-go:recovery-build /out/eventglass-go "$@"
+  fi
+}
+
+put_object() {
+  object_name=$1
+  object_body=$2
+  if [ "$backend" = aws ]; then
+    printf %s "$object_body" | aws s3 cp - "s3://$bucket/$run_prefix/live/$object_name" --region "$region" --only-show-errors
+  else
+    printf %s "$object_body" | dc run --rm -T --entrypoint /bin/sh minio-init -c \
+      "mc --insecure alias set local https://minio:9000 eventglass-local eventglass-local-secret >/dev/null && mc --insecure pipe local/eventglass-g00/recovery-test/$object_name" >/dev/null
+  fi
+}
+
+remove_referenced_object() {
+  if [ "$backend" = aws ]; then
+    aws s3api delete-object --bucket "$bucket" --key "$run_prefix/live/referenced.bin" --region "$region" >/dev/null
+  else
+    dc run --rm -T --entrypoint /bin/sh minio-init -c \
+      "mc --insecure alias set local https://minio:9000 eventglass-local eventglass-local-secret >/dev/null && mc --insecure rm --force local/eventglass-g00/recovery-test/referenced.bin" >/dev/null
+  fi
 }
 
 run_eventglass postgres migrate
 object_sha=$(printf %s restored-reference | sha256sum | awk '{print $1}')
-docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -v ON_ERROR_STOP=1 \
+dc exec -T postgres psql -U postgres -d eventglass -v ON_ERROR_STOP=1 \
   -c "INSERT INTO installations(singleton,installation_id,storage_generation,schema_version,storage_identity) VALUES(true,'00000000-0000-4000-8000-00000000a001',1,1,'recovery-fixture')" \
   -c "INSERT INTO tenants(tenant_id,name) VALUES(7001,'Recovery tenant')" \
   -c "INSERT INTO users(user_id,email_normalized,password_phc,is_installation_admin) VALUES(7001,'recovery@example.invalid','placeholder-password-hash-for-recovery-test',true)" \
   -c "INSERT INTO memberships(tenant_id,user_id,role) VALUES(7001,7001,'admin')" \
   -c "INSERT INTO sessions(token_hash,user_id,csrf_hash,credential_revision,storage_generation,expires_at) VALUES(decode(repeat('11',32),'hex'),7001,decode(repeat('22',32),'hex'),1,1,clock_timestamp()+interval '1 day')" \
   -c "INSERT INTO object_intents(intent_id,installation_id,tenant_id,storage_generation,object_key,kind,state,owner,fence,expires_at,expected_bytes,expected_sha256,uploaded_bytes,uploaded_sha256) VALUES('00000000-0000-4000-8000-00000000b001','00000000-0000-4000-8000-00000000a001',7001,1,'referenced.bin','journal','referenced','recovery-seed',1,clock_timestamp()+interval '30 days',18,'$object_sha',18,'$object_sha')"
-printf %s restored-reference | docker compose -p "$project" -f "$compose" run --rm -T --entrypoint /bin/sh minio-init -c \
-  "mc --insecure alias set local https://minio:9000 eventglass-local eventglass-local-secret >/dev/null && mc --insecure pipe local/eventglass-g00/recovery-test/referenced.bin" >/dev/null
+put_object referenced.bin restored-reference
 
 backup_id=00000000-0000-4000-8000-00000000c001
 verification_id=00000000-0000-4000-8000-00000000d001
@@ -57,39 +171,38 @@ run_eventglass postgres backup register --backup-id "$backup_id" --external-tool
   --earliest-recoverable 2026-01-01T00:00:00Z --latest-recoverable 2099-01-01T00:00:00Z \
   --protected-until 2099-01-01T00:00:00Z
 
-docker compose -p "$project" -f "$compose" exec -T --user postgres postgres pgbackrest --stanza=eventglass stanza-create
-docker compose -p "$project" -f "$compose" exec -T postgres touch /var/lib/postgresql/data/.pgbackrest-ready
-docker compose -p "$project" -f "$compose" exec -T --user postgres postgres pgbackrest --stanza=eventglass check
+dc exec -T --user postgres postgres pgbackrest --stanza=eventglass stanza-create
+dc exec -T postgres touch /var/lib/postgresql/data/.pgbackrest-ready
+dc exec -T --user postgres postgres pgbackrest --stanza=eventglass check
 backup_started=$(date +%s)
-docker compose -p "$project" -f "$compose" exec -T --user postgres postgres pgbackrest --stanza=eventglass --type=full backup
+dc exec -T --user postgres postgres pgbackrest --stanza=eventglass --type=full backup
 backup_seconds=$(($(date +%s)-backup_started))
 
-docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -v ON_ERROR_STOP=1 \
+dc exec -T postgres psql -U postgres -d eventglass -v ON_ERROR_STOP=1 \
   -c "CREATE TABLE recovery_wal_probe(id integer primary key,value text not null)" \
   -c "INSERT INTO recovery_wal_probe VALUES(1,'wal-restored')"
-target_lsn=$(docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -At -c "SELECT pg_current_wal_lsn()" | tr -d '\r')
-docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -At -c "SELECT pg_switch_wal()" >/dev/null
-docker compose -p "$project" -f "$compose" exec -T --user postgres postgres pgbackrest --stanza=eventglass check
-printf %s newer-not-authorized | docker compose -p "$project" -f "$compose" run --rm -T --entrypoint /bin/sh minio-init -c \
-  "mc --insecure alias set local https://minio:9000 eventglass-local eventglass-local-secret >/dev/null && mc --insecure pipe local/eventglass-g00/recovery-test/newer-unreferenced.bin" >/dev/null
+target_lsn=$(dc exec -T postgres psql -U postgres -d eventglass -At -c "SELECT pg_current_wal_lsn()" | tr -d '\r')
+dc exec -T postgres psql -U postgres -d eventglass -At -c "SELECT pg_switch_wal()" >/dev/null
+dc exec -T --user postgres postgres pgbackrest --stanza=eventglass check
+put_object newer-unreferenced.bin newer-not-authorized
 
-docker compose -p "$project" -f "$compose" stop postgres
-docker compose -p "$project" -f "$compose" --profile restore up -d restored-postgres missing-postgres
+dc stop postgres
+dc --profile restore up -d restored-postgres missing-postgres
 restore_started=$(date +%s)
 for service in restored-postgres missing-postgres; do
-  docker compose -p "$project" -f "$compose" exec -T --user postgres "$service" \
+  dc exec -T --user postgres "$service" \
     pgbackrest --stanza=eventglass --type=lsn --target="$target_lsn" --target-action=promote restore
-  docker compose -p "$project" -f "$compose" exec -T --detach --user postgres "$service" \
+  dc exec -T --detach --user postgres "$service" \
     postgres -D /var/lib/postgresql/data -c listen_addresses='*'
 done
 for service in restored-postgres missing-postgres; do
   ready=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    if docker compose -p "$project" -f "$compose" exec -T "$service" pg_isready -U postgres -d eventglass >/dev/null 2>&1; then ready=1; break; fi
+    if dc exec -T "$service" pg_isready -U postgres -d eventglass >/dev/null 2>&1; then ready=1; break; fi
     sleep 1
   done
   test "$ready" = 1
-  test "$(docker compose -p "$project" -f "$compose" exec -T "$service" psql -U postgres -d eventglass -At -c "SELECT value FROM recovery_wal_probe WHERE id=1" | tr -d '\r')" = wal-restored
+  test "$(dc exec -T "$service" psql -U postgres -d eventglass -At -c "SELECT value FROM recovery_wal_probe WHERE id=1" | tr -d '\r')" = wal-restored
 done
 restore_seconds=$(($(date +%s)-restore_started))
 
@@ -99,31 +212,40 @@ run_eventglass restored-postgres restore verify --backup-id "$backup_id" --expec
 run_eventglass restored-postgres restore activate --expected-generation 1 --report /reports/recovery.json \
   --attestation-key-file /reports/attestation.key
 restored_database_url="postgres://postgres:local-test-only@restored-postgres:5432/eventglass?sslmode=disable" # pragma: allowlist secret -- disposable fixture
-docker run --rm --platform linux/arm64 --network "$network" \
-  -e EVENTGLASS_RECOVERY_REQUIRED=1 \
-  -e EVENTGLASS_DATABASE_URL="$restored_database_url" \
-  -e EVENTGLASS_S3_ENDPOINT=https://minio:9000 \
-  -e AWS_ACCESS_KEY_ID=eventglass-local -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
-  -e AWS_CA_BUNDLE=/certs/public.crt -v "$cert_volume:/certs:ro" -w /src \
-  eventglass-go:recovery-build go test -tags=recovery -count=1 -v ./tests/recovery
+if [ "$backend" = aws ]; then
+  docker run --rm --platform linux/arm64 --network "$network" \
+    -e EVENTGLASS_RECOVERY_REQUIRED=1 -e EVENTGLASS_DATABASE_URL="$restored_database_url" \
+    -e EVENTGLASS_S3_REGION="$region" -e EVENTGLASS_S3_BUCKET="$bucket" \
+    -e EVENTGLASS_S3_PREFIX="$run_prefix/live" \
+    -e AWS_REGION="$region" -e AWS_CONFIG_FILE=/dev/null -e AWS_SHARED_CREDENTIALS_FILE=/dev/null \
+    -e AWS_ACCESS_KEY_ID -e AWS_SECRET_ACCESS_KEY -e AWS_SESSION_TOKEN \
+    -w /src eventglass-go:recovery-build go test -tags=recovery -count=1 -v ./tests/recovery
+else
+  docker run --rm --platform linux/arm64 --network "$network" \
+    -e EVENTGLASS_RECOVERY_REQUIRED=1 \
+    -e EVENTGLASS_DATABASE_URL="$restored_database_url" \
+    -e EVENTGLASS_S3_ENDPOINT=https://minio:9000 \
+    -e AWS_ACCESS_KEY_ID=eventglass-local -e AWS_SECRET_ACCESS_KEY=eventglass-local-secret \
+    -e AWS_CA_BUNDLE=/certs/public.crt -v "$cert_volume:/certs:ro" -w /src \
+    eventglass-go:recovery-build go test -tags=recovery -count=1 -v ./tests/recovery
+fi
 
-docker compose -p "$project" -f "$compose" up -d --wait postgres
+dc up -d --wait postgres
 run_eventglass postgres backup verify --expected-generation 1 --report /reports/recovery.json \
   --attestation-key-file /reports/attestation.key
-live_state=$(docker compose -p "$project" -f "$compose" exec -T postgres psql -U postgres -d eventglass -At \
+live_state=$(dc exec -T postgres psql -U postgres -d eventglass -At \
   -c "SELECT recovery_state||':'||storage_generation::text||':'||(gc_verified_until>clock_timestamp())::text FROM installations WHERE singleton" | tr -d '\r')
 test "$live_state" = ready:1:true
 
-docker compose -p "$project" -f "$compose" run --rm -T --entrypoint /bin/sh minio-init -c \
-  "mc --insecure alias set local https://minio:9000 eventglass-local eventglass-local-secret >/dev/null && mc --insecure rm --force local/eventglass-g00/recovery-test/referenced.bin" >/dev/null
+remove_referenced_object
 if run_eventglass missing-postgres restore verify --backup-id "$backup_id" --expected-generation 1 \
   --verification-id 00000000-0000-4000-8000-00000000d002 --recovery-lsn "$target_lsn" --report /reports/missing.json \
   --attestation-key-file /reports/attestation.key; then
   echo "missing referenced object unexpectedly verified" >&2
   exit 1
 fi
-state=$(docker compose -p "$project" -f "$compose" exec -T missing-postgres psql -U postgres -d eventglass -At \
+state=$(dc exec -T missing-postgres psql -U postgres -d eventglass -At \
   -c "SELECT recovery_state||':'||alerts_paused::text FROM installations WHERE singleton" | tr -d '\r')
 test "$state" = verification_required:true
 
-echo "recovery evidence: pgbackrest=2.59.1 backup_seconds=$backup_seconds restore_two_clusters_seconds=$restore_seconds target_lsn=$target_lsn referenced_objects=1 referenced_bytes=18 missing_object=fail_closed"
+echo "recovery evidence: backend=$backend pgbackrest=2.59.1 backup_seconds=$backup_seconds restore_two_clusters_seconds=$restore_seconds target_lsn=$target_lsn referenced_objects=1 referenced_bytes=18 missing_object=fail_closed"

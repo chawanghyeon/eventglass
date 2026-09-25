@@ -3722,6 +3722,19 @@ cleanup. This passes the local self-host restore portion only; it is not AWS
 identity/restore evidence, a production attestation, authorization for physical
 GC, or a release. G08 remains incomplete.
 
+On2026-09-26, `scripts/check-recovery` gained an opt-in AWS provider path using
+a pre-created scratch bucket, expected account/owner checks, required
+short-lived session credentials, a random run prefix shared by live objects and
+pgBackRest, and cleanup scoped to that exact prefix. AWS endpoint overrides,
+profiles and non-session credentials fail before any S3 write. A fresh local
+ARM64 rerun passed with the AWS-only Compose override removed from MinIO mode:
+pgBackRest backup1s, both restores2s, WAL target`0/502CF28`, new-object
+non-adoption, and missing-reference fail-closed. The first attempt exposed an
+empty-token variable reaching local pgBackRest; that was fixed by isolating the
+token in an AWS-only Compose override. The AWS branch itself is not verified:
+this host has neither the AWS CLI nor an AWS identity. This code path does not
+close G08 or authorize physical GC.
+
 The same source also passed `./scripts/check-browser`: a fresh Linux ARM64 final
 image completed the Playwright Chromium SDK-to-UI scenario (1/1,3.1s) against
 disposable PostgreSQL/MinIO. The local BuildKit output identified image/index

@@ -53,6 +53,32 @@ or a hand-written attestation.
 `./scripts/check recovery` executes this sequence on disposable ARM64 containers,
 including two independent PGDATA restores, a WAL-only row, a referenced object,
 a newer unreferenced object, signed live import, and a deleted-object failure.
+For an actual AWS rehearsal, use a pre-created non-production scratch bucket and
+short-lived credentials for a dedicated test role; the script checks the
+expected account and bucket owner, uses a fresh
+`eventglass-release-check-<random>/` prefix for both live objects and pgBackRest,
+and deletes only that prefix on exit. The role needs `s3:ListBucket` constrained
+to that prefix pattern and `s3:GetObject`, `s3:PutObject`, and `s3:DeleteObject`
+on objects below it. The bucket must not contain production data. Endpoint and
+profile overrides, long-lived credentials, and AWS China regions are rejected.
+
+Supply values through a secure environment/credential manager, never inline on
+the command line:
+
+```sh
+export EVENTGLASS_RECOVERY_BACKEND=aws
+export EVENTGLASS_AWS_RESTORE_BUCKET='replace-with-dedicated-scratch-bucket'
+export EVENTGLASS_AWS_ACCOUNT_ID='replace-with-expected-account-id'
+export AWS_REGION='replace-with-standard-aws-region'
+# Inject AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_SESSION_TOKEN from
+# the configured short-lived credential manager; do not paste credentials here.
+./scripts/check recovery
+```
+
+The AWS branch still restores into disposable local Colima PostgreSQL volumes;
+it does not connect to a live database, create a bucket, send alerts, or deploy.
+If cleanup fails, the check exits nonzero and prints the exact owned prefix that
+requires manual cleanup.
 
 ## Disaster activation
 
