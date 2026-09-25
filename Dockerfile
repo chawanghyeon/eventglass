@@ -52,9 +52,9 @@ RUN npm install --global npm@11.19.0 --ignore-scripts && npm ci --ignore-scripts
 COPY web/ ./
 RUN npm run build
 
-FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates libcurl4 libssl3 libstdc++6 \
+    && apt-get install -y --no-install-recommends ca-certificates libcurl4t64 libssl3t64 libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 65532 --home-dir /nonexistent --shell /usr/sbin/nologin eventglass
 COPY --from=build /out/eventglass-go /usr/local/bin/eventglass-go

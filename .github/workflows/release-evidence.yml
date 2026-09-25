@@ -90,8 +90,8 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/.tools/go1.27.1/bin:$PATH"
           go version
           go install github.com/google/go-licenses/v2@v2.0.1
-          "$GOPATH/bin/go-licenses" report ./... > "$EVENTGLASS_RELEASE_DIR/go-licenses.csv"
-          "$GOPATH/bin/go-licenses" save ./... --save_path="$EVENTGLASS_RELEASE_DIR/third-party-licenses"
+          "$GOPATH/bin/go-licenses" report --ignore github.com/chawanghyeon/eventglass ./cmd/eventglass-go > "$EVENTGLASS_RELEASE_DIR/go-licenses.csv"
+          "$GOPATH/bin/go-licenses" save --ignore github.com/chawanghyeon/eventglass ./cmd/eventglass-go --save_path="$EVENTGLASS_RELEASE_DIR/third-party-licenses"
       - name: Configure short-lived AWS credentials
         id: aws_credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd

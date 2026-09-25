@@ -3747,16 +3747,48 @@ localhost Go/API/Go-ingest/SDK suites (0.119/1.129/11.778/10.785s). Its first
 attempt failed only because the sandbox denied local TCP bind; the rerun with
 local networking permission passed and contacted no external service.
 
-Release assurance is still incomplete. This host has no `aws`, `syft`, `trivy`,
-`cosign`, or `go-licenses` executable and no AWS identity environment variables;
-no actual AWS restore, signed release provenance, image/dependency scan,
-license report, or deployment rollback rehearsal was performed. The changed-
-file `detect-secrets` hook passed. Its first run only requested a baseline line
-refresh for the existing `deploy/test_layout.py` high-entropy test fixture,
-already marked `is_secret:false`; the stored line moved132→137, and the rerun
-passed with no new findings. The documented SDK support matrix above is the
-scope verified by the passing live gate; no additional SDK or version
-compatibility is claimed. No production deploy or external alert was sent.
+### R4 local ARM64 release and supply-chain checks
+
+On2026-09-26, the pinned Go dependencies `pgx` v5.9.0 and `x/crypto` v0.55.0
+replaced scanner-flagged releases. The runtime base moved from the stale pinned
+Bookworm image to official `debian:trixie-slim` index
+`sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a`,
+with matching `libcurl4t64`/`libssl3t64`. Go unit/vet/layout checks passed,
+`./scripts/check release` passed its ARM64 non-root/read-only version smoke and
+63MiB archive checksum (`fd5182e7796b6b43a4d5c7a4f05bf4e6d8e5643d4d5875a8101096c2ce6b1a3c`),
+and `./scripts/check-browser` passed1/1 on this runtime with disposable
+PostgreSQL/MinIO. This first image was built from the dirty working tree at
+`00a3dc0` (image ID`sha256:4a0e305886200a3df05d9b09d34cc3cf589793ec0a9c8aeb310ae7c2c86cc6f0`);
+it was not pushed or deployed. The exact DuckDB2.0 native contract build was
+started, but intentionally interrupted while the engine package produced no
+output for several minutes; it is not a passing result or a substitute for the
+browser E2E.
+
+The workflow-pinned Syft v1.42.3 ARM64 binary produced SPDX JSON containing147
+packages from the63MiB app image archive. Trivy v0.74.0 scanned that same
+archive with `os,library`, `HIGH,CRITICAL`, and unfixed findings included. The
+scan failed its threshold with0 critical and47 high Debian13 package findings;
+Trivy reported no fixed version for those remaining high findings. This is an
+explicit release blocker, not a clean scan. The prior pinned Bookworm candidate
+had6 critical and71 high findings in the same local procedure; the dependency
+and base updates removed all critical and the Go-module findings without
+weakening the threshold. Reports remain in the ignored local
+`.tools/r4-release-scan/` directory.
+
+The workflow-pinned go-licenses v2.0.1 successfully reported and saved49
+third-party license entries for `./cmd/eventglass-go`, excluding only this
+repository's own module. Using `./...` instead fails because the tool treats
+Go1.27 standard-library packages as license-less and includes Eventglass's
+own package with no root LICENSE; the workflow now scans the shipped binary's
+dependency graph. This does not choose a license for Eventglass itself.
+
+The main-only GitHub workflow itself has not run. This host still has no AWS CLI
+or AWS identity, so actual AWS restore remains unverified. Signed provenance/
+SBOM attestations and a real prior-release rollback rehearsal also remain open.
+The changed-file `detect-secrets` hook passed with no new findings. The
+documented SDK support matrix above is the scope verified by the passing live
+gate; no additional SDK or version compatibility is claimed. No production
+deploy or external alert was sent.
 
 ### R4 Garage S3 and coordinated recovery contract
 
