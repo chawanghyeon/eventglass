@@ -3776,6 +3776,15 @@ S3/recovery path only; it is not Garage multi-node durability, production HA or
 security evidence, AWS evidence, or release approval. AWS OIDC/restore,
 rollback rehearsal and the workflow's scans/attestations remain open.
 
+The same clean `f03b800` source passed `./scripts/check release` on Colima
+ARM64. The local image is `linux/arm64`, runs as`65532:65532`, uses the expected
+entrypoint, and passed the read-only version smoke (`0.0.0-g06`). The60MiB
+saved image archive checksum verified as
+`63bd07a2c4163e831c2da3c0ff275baeead67b783cf20711a535e16ae82d6987`;
+image ID is`sha256:b640dffb380f86b497983dcada0f849cf69a991320c291857f86bf7c1202c8cc`.
+The image was not pushed or deployed; the GitHub workflow, scans, attestations,
+AWS restore, and rollback evidence remain unrun.
+
 ### Latest corrected current-source R3 official 1/2/4-worker matrix
 
 On2026-09-25, `EVENTGLASS_COMPARISON_WORKERS='1 2 4' ./scripts/check-comparison`
