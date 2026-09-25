@@ -365,7 +365,7 @@
     {
       "id": "sustained-performance",
       "packet": "R3",
-      "description": "Current-source ARM64 official 5m/30m/10m profiles at1/2/4 workers completed on 6c96edf3-dirty with full analytics/payload HEAD verification and corrected S3 cost accounting. Rows/histogram p95 are1351/4458ms,528/1070ms,423/615ms; the1-worker run also misses visibility/backlog/drain. All pass Go-unit512MiB and zero-OOM checks, but G07 remains incomplete. Historical profiles that skipped payload HEAD verification stay excluded; current reports, S3 traffic, resources and run-specific cost projections are in quality.md. Fixed-work capacity, native oracle, bounded resources, fairness and maintenance evidence do not substitute for passing mixed-load SLOs."
+      "description": "Latest current-source ARM64 official 5m/30m/10m profiles at1/2/4 workers completed on a3a0bca-dirty with full analytics/payload HEAD verification and corrected combined-work backlog accounting. Each accepted220,500 records with zero query failures/conflicts; rows/histogram p95 were603/1361ms,294/513ms,289/569ms. The1-worker run also misses combined-backlog and post-load idle-backlog gates;2/4 workers miss only histogram p95. ACK/visibility and Go-unit limits pass with zero OOM. The independent10M native oracle passed but peaked4KiB above its512MiB cgroup limit. G07 remains incomplete; different submitted-envelope hashes make cross-worker deltas non-causal. Reports, S3/WAL traffic, measured resources and run-specific costs are in quality.md. Fixed-work capacity, native oracle, bounded resources, fairness and maintenance evidence do not substitute for passing mixed-load SLOs."
     },
     {
       "id": "release",

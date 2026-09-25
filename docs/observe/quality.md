@@ -3744,3 +3744,63 @@ already marked `is_secret:false`; the stored line moved132→137, and the rerun
 passed with no new findings. The documented SDK support matrix above is the
 scope verified by the passing live gate; no additional SDK or version
 compatibility is claimed. No production deploy or external alert was sent.
+
+### Latest corrected current-source R3 official 1/2/4-worker matrix
+
+On2026-09-25, `EVENTGLASS_COMPARISON_WORKERS='1 2 4' ./scripts/check-comparison`
+rebuilt the ARM64 application from the dirty `a3a0bca` worktree, reused the
+recipe-verified local DuckDB2.0 dependency, and ran each5m-warmup/30m-load/
+10m-drain profile in a fresh isolated PostgreSQL/MinIO installation. All three
+passed the independent10k/100k/1M/10M native oracle, accepted220,500 records,
+and had zero query failures or conflicts. The submitted-envelope SHA differs
+for each fresh profile, so worker-count comparisons are not causal scaling
+measurements. Reports:
+`.tools/comparison-report-1.EyBU9L/report.json`,
+`.tools/comparison-report-2.URYCwK/report.json`, and
+`.tools/comparison-report-4.Rxqn3p/report.json`.
+
+The profiled dirty source includes the page-first catalog CTE in
+`internal/control/catalog.go`: all tenant/snapshot/generation/cut/kind/time/
+retention/cursor/project filters and file ordering/limit run before analytics
+and payload block-manifest aggregation, which is scoped to the at-most256-row
+page. The existing paired metadata checks and downstream full object HEAD
+verification remain. Focused control tests and the PostgreSQL/MinIO integration
+gate passed for this path. These official profiles are not a matched A/B against
+the clean source, so no latency gain is attributed to the CTE.
+
+| Workers | Rows / histogram p95 | Histogram server / overhead p95 | ACK / visibility p95 | Combined load-backlog slope/min; max; final; drain | Failed gates | Post-load idle backlog | Whole-installation peak / max Go-unit peak / OOM kills | Projected monthly cost |
+|---:|---:|---:|---:|---:|---|---:|---:|---:|
+|1|603 /1,361ms|928 /455ms|370 /1,111ms|+8.186;693;0;49.524s|rows, histogram, backlog, post-load|393|1,908,156,659B /161,734,656B /0|$857.11|
+|2|294 /513ms|352 /183ms|382 /704ms|−0.003704;8;0;1.004s|histogram|0|1,988,540,495B /189,644,800B /0|$588.41|
+|4|289 /569ms|393 /198ms|379 /685ms|+0.009581;14;0;1.009s|histogram|0|2,208,772,911B /170,156,032B /0|$644.55|
+
+The1-worker profile missed the<500ms rows/histogram p95 targets and retained393
+items during the60s idle/post-load check despite reaching final backlog0 after
+the documented drain. The2/4-worker runs met the other workload gates but
+missed histogram p95 by13/69ms. All Go units stayed within512MiB and all three
+profiles recorded zero cgroup OOM events/kills. The10M native oracle's cgroup
+peak was536,875,008B against536,870,912B,4,096B over the limit; it had zero OOM
+events/kills and passed the exact output oracle, but is not evidence of staying
+under the limit.
+
+| Workers | S3 PUT / HEAD / GET / Range requests | S3 PUT / GET / Range bytes | PG WAL bytes |
+|---:|---:|---:|---:|
+|1|39,104 /855,153 /100,417 /13,465|235,352,559 /599,958,808 /131,003,713|699,134,056|
+|2|40,814 /239,008 /105,386 /14,902|279,684,468 /696,164,464 /186,246,721|659,329,928|
+|4|40,756 /233,448 /105,291 /19,683|281,611,106 /699,121,333 /280,384,550|693,465,888|
+
+The dated us-east-1 fixture cost projections are run-specific estimates, not
+bills or comparative claims. The1-worker post-load check measured cold/warm
+1,279/923ms and failed its idle-backlog criterion;2/4-worker cold/warm timings
+were489/474ms and713/752ms. No profile passes G07, so R3 remains incomplete.
+
+#### Rejected histogram empty-bucket join candidate
+
+A same-fixture pinned ARM64/DuckDB2.0 CPU1/512MiB benchmark tested replacing the
+bounded `NOT EXISTS` empty-bucket fill with a `LEFT JOIN`. At256 input files,
+five3-iteration samples measured67.77–72.13ms and1,284,701B/1,582 allocations
+per operation, versus the preceding same-fixture5-sample baseline of61.7–65.4ms
+and approximately1.284MB/1,582 allocations. The32-file case also regressed from
+26.3–28.9ms to29.54–31.93ms. Correctness tests passed, but the measured SQL
+shape was slower, so the candidate was reverted. This isolated native benchmark
+is not a full-service SLO or causal R3 result.

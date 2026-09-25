@@ -15,13 +15,16 @@ payload, and reducer child reads. M4 passed an actual pgBackRest base+WAL restor
 into two independent PGDATA volumes, full referenced-object reads, signed report
 import and missing-object failure. R1's CPU1/512MiB/swap0 containment gate also
 passes. R2's autoscale control, fair claims and bounded Kubernetes/KEDA baseline
-also pass. Current-source official5m/30m/10m R3 profiles at1/2/4 workers
-completed on `6c96edf3` with full analytics/payload HEAD verification. The
-1-worker profile misses query, visibility and backlog/drain gates;2 workers
-miss rows and histogram p95;4 workers pass rows but miss histogram p95 at
-615ms. Go-unit limits, OOM checks, exact accepted counts and the independent
-native oracle pass. R3 remains incomplete; reports and run-specific S3,
-resource and cost evidence are in quality.md. Independent fixed-work capacity passes on current source
+also pass. The latest current-source official5m/30m/10m R3 profiles at1/2/4
+workers completed on `a3a0bca-dirty` with full analytics/payload HEAD
+verification and corrected combined-work backlog accounting. Each accepted
+220,500 records with zero query failures/conflicts. Rows/histogram p95 were
+603/1,361ms,294/513ms and289/569ms; the1-worker run also misses combined
+backlog and post-load idle-backlog gates, while2/4 workers miss only histogram
+p95. ACK/visibility, Go-unit limits and zero-OOM checks pass. The independent
+native oracle passed, but its10M cgroup peak was4KiB above the configured limit.
+R3 remains incomplete; reports and run-specific S3, resource and cost evidence
+are in quality.md. Independent fixed-work capacity passes on current source
 1cf3538: three fresh128-cycle installations per1/2/4-worker profile measured
 median124.9/230.5/401.2 records/s, with speedup1/1.846/3.212 and efficiency
 1/0.923/0.803. This is bounded publication-capacity evidence, not sustained

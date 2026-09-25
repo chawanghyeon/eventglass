@@ -102,25 +102,19 @@ func catalogPageRows(ctx context.Context, tx pgx.Tx, command CatalogCommand, ret
 	if command.AfterFileID != "" {
 		after = command.AfterFileID
 	}
-	statement := `SELECT f.file_id::text,b.bundle_id::text,oi.object_key,f.bytes,f.full_sha256,f.row_count,
-		f.min_event_time_us,f.max_event_time_us,f.min_received_time_us,f.max_received_time_us,
-		f.min_batch_seq,f.max_batch_seq,b.lane_id,b.kind,
-		COALESCE(array_agg(fb.sha256 ORDER BY fb.block_index) FILTER (WHERE fb.file_id IS NOT NULL),ARRAY[]::text[]),
-		COALESCE(min(fb.block_index),-1),COALESCE(max(fb.block_index),-1),count(fb.file_id),
-		pf.file_id::text,poi.object_key,pf.bytes,pf.full_sha256,
-		COALESCE((SELECT array_agg(pfb.sha256 ORDER BY pfb.block_index) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),ARRAY[]::text[]),
-		COALESCE((SELECT min(pfb.block_index) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),-1),
-		COALESCE((SELECT max(pfb.block_index) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),-1),
-		(SELECT count(*) FROM file_blocks pfb WHERE pfb.file_id=pf.file_id),
-		NOT EXISTS (SELECT 1 FROM bundle_projects bp WHERE bp.tenant_id=b.tenant_id AND bp.bundle_id=b.bundle_id
-			AND NOT EXISTS (SELECT 1 FROM snapshot_projects sp WHERE sp.tenant_id=bp.tenant_id AND sp.project_id=bp.project_id AND sp.snapshot_id=$2))
+	statement := `WITH page AS MATERIALIZED (
+		SELECT f.file_id,b.bundle_id,oi.object_key,f.bytes,f.full_sha256,f.row_count,
+			f.min_event_time_us,f.max_event_time_us,f.min_received_time_us,f.max_received_time_us,
+			f.min_batch_seq,f.max_batch_seq,b.lane_id,b.kind,pf.file_id AS payload_file_id,
+			poi.object_key AS payload_object_key,pf.bytes AS payload_bytes,pf.full_sha256 AS payload_sha256,
+			NOT EXISTS (SELECT 1 FROM bundle_projects bp WHERE bp.tenant_id=b.tenant_id AND bp.bundle_id=b.bundle_id
+				AND NOT EXISTS (SELECT 1 FROM snapshot_projects sp WHERE sp.tenant_id=bp.tenant_id AND sp.project_id=bp.project_id AND sp.snapshot_id=$2)) AS all_projects_selected
 		FROM snapshot_lanes sl
 		JOIN bundles b ON b.tenant_id=sl.tenant_id AND b.lane_id=sl.lane_id
 		JOIN files f ON f.tenant_id=b.tenant_id AND f.bundle_id=b.bundle_id AND f.role='analytics'
 		JOIN object_intents oi ON oi.tenant_id=f.tenant_id AND oi.intent_id=f.intent_id AND oi.state='referenced'
 		JOIN files pf ON pf.tenant_id=b.tenant_id AND pf.bundle_id=b.bundle_id AND pf.role='payload'
 		JOIN object_intents poi ON poi.tenant_id=pf.tenant_id AND poi.intent_id=pf.intent_id AND poi.state='referenced'
-		LEFT JOIN file_blocks fb ON fb.file_id=f.file_id
 		WHERE sl.tenant_id=$1 AND sl.snapshot_id=$2
 		AND b.valid_from_generation<=sl.catalog_generation AND (b.valid_to_generation IS NULL OR sl.catalog_generation<b.valid_to_generation)
 		AND b.input_seq_max<=sl.cut_seq AND b.kind=ANY($3::text[])
@@ -130,8 +124,28 @@ func catalogPageRows(ctx context.Context, tx pgx.Tx, command CatalogCommand, ret
 		AND EXISTS (SELECT 1 FROM bundle_projects bp JOIN snapshot_projects sp
 			ON sp.tenant_id=bp.tenant_id AND sp.project_id=bp.project_id AND sp.snapshot_id=$2
 			WHERE bp.tenant_id=b.tenant_id AND bp.bundle_id=b.bundle_id)
-		GROUP BY f.file_id,b.bundle_id,oi.object_key,b.lane_id,b.kind,pf.file_id,poi.object_key
-		ORDER BY f.file_id LIMIT $8`
+		ORDER BY f.file_id LIMIT $8
+	)
+	SELECT p.file_id::text,p.bundle_id::text,p.object_key,p.bytes,p.full_sha256,p.row_count,
+		p.min_event_time_us,p.max_event_time_us,p.min_received_time_us,p.max_received_time_us,
+		p.min_batch_seq,p.max_batch_seq,p.lane_id,p.kind,
+		COALESCE(analytics_blocks.sha256,ARRAY[]::text[]),COALESCE(analytics_blocks.first_block,-1),
+		COALESCE(analytics_blocks.last_block,-1),COALESCE(analytics_blocks.block_count,0),
+		p.payload_file_id::text,p.payload_object_key,p.payload_bytes,p.payload_sha256,
+		COALESCE(payload_blocks.sha256,ARRAY[]::text[]),COALESCE(payload_blocks.first_block,-1),
+		COALESCE(payload_blocks.last_block,-1),COALESCE(payload_blocks.block_count,0),p.all_projects_selected
+	FROM page p
+	LEFT JOIN LATERAL (
+		SELECT array_agg(fb.sha256::text ORDER BY fb.block_index) AS sha256,
+			min(fb.block_index) AS first_block,max(fb.block_index) AS last_block,count(*) AS block_count
+		FROM file_blocks fb WHERE fb.file_id=p.file_id
+	) analytics_blocks ON true
+	LEFT JOIN LATERAL (
+		SELECT array_agg(pfb.sha256::text ORDER BY pfb.block_index) AS sha256,
+			min(pfb.block_index) AS first_block,max(pfb.block_index) AS last_block,count(*) AS block_count
+		FROM file_blocks pfb WHERE pfb.file_id=p.payload_file_id
+	) payload_blocks ON true
+	ORDER BY p.file_id`
 	rows, err := tx.Query(ctx, statement, command.TenantID, command.SnapshotID, kindValues, command.StartUS, command.EndUS, retentionFloorUS, after, command.Limit, command.MinimumBatchSeq[:])
 	if err != nil {
 		return nil, err
