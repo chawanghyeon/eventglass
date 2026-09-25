@@ -3804,6 +3804,30 @@ documented SDK support matrix above is the scope verified by the passing live
 gate; no additional SDK or version compatibility is claimed. No production
 deploy or external alert was sent.
 
+On2026-09-26, the Go build and final runtime APT indexes were pinned to the
+official Debian snapshot date`20260926` in `deploy/versions.lock`. The dated
+snapshot was fetched for Bookworm and Trixie on ARM64 and selected the same
+package versions as the prior rolling-mirror build. `Check-Valid-Until=false`
+is used only for the historical snapshot freshness field; APT signature
+verification remains enabled. The DuckDB2.0 static bundle SHA-256
+`84ad753acc1390e13ce56e728d75d379bebeedec7f3df58ce071c1b373e4c79f` is now
+locked and checked before linking. The native build recipe was unchanged, so
+the recipe-verified local bundle cache was reused.
+
+A clean Colima build from source revision`9c509068a200fad8883508eaa0ca6aba44d475ca`
+passed `./scripts/check release` on2026-09-26. Its image is
+`sha256:cdabe801130038828e3b4031a4f53b151a68b2582ba03aa8af23d09dff3f5213`,
+`linux/arm64`, user`65532:65532`, with `source_dirty=false`; the saved image
+archive SHA-256 is
+`8c3d028507fc8f2430b3efd10f0dbc7c6160a139da2b564e3fb864190b6f328d`. The
+same commit passed `./scripts/check-browser` (Playwright1/1,5.9s) against
+disposable PostgreSQL/MinIO. Syft1.42.3 generated an SPDX SBOM with147 packages
+from that exact archive. Trivy0.74.0 scanned the same archive with vulnerability
+scanners `os,library`, severities `HIGH,CRITICAL`, and unfixed findings enabled;
+it exited1 with0 critical and47 high Debian13 package findings. This improves
+input reproducibility but does not clear the security gate. The archive was not
+pushed or deployed; AWS restore, signed attestations and rollback remain open.
+
 ### R4 Garage S3 and coordinated recovery contract
 
 On2026-09-26, `./scripts/check garage` exercised pinned ARM64 Garage2.4.1 with

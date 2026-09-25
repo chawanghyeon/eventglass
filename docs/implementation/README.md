@@ -87,8 +87,10 @@ HEAD regression and are excluded from current-source SLO evidence. The subsequen
 full-verification1/2/4-worker official rerun includes current cost accounting,
 but misses query SLOs at every worker count and the1-worker backlog/drain gates.
 R3 remains the first incomplete packet. R4 remains open for AWS restore,
-rollback, and release evidence; the single-node Garage S3/recovery contract now
-passes locally.
+rollback, and release evidence; the clean `9c50906` ARM64 image now pins its
+Debian package snapshot and verifies the DuckDB 2.0 bundle hash, but its exact
+image scan still reports47 HIGH findings. The single-node Garage S3/recovery
+contract passes locally.
 Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises
