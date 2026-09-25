@@ -3755,11 +3755,13 @@ Bookworm image to official `debian:trixie-slim` index
 `sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a`,
 with matching `libcurl4t64`/`libssl3t64`. Go unit/vet/layout checks passed,
 `./scripts/check release` passed its ARM64 non-root/read-only version smoke and
-63MiB archive checksum (`fd5182e7796b6b43a4d5c7a4f05bf4e6d8e5643d4d5875a8101096c2ce6b1a3c`),
-and `./scripts/check-browser` passed1/1 on this runtime with disposable
-PostgreSQL/MinIO. This first image was built from the dirty working tree at
-`00a3dc0` (image ID`sha256:4a0e305886200a3df05d9b09d34cc3cf589793ec0a9c8aeb310ae7c2c86cc6f0`);
-it was not pushed or deployed. The exact DuckDB2.0 native contract build was
+`./scripts/check-browser` passed1/1 on this runtime with disposable
+PostgreSQL/MinIO, and the clean pushed`d4c0392` release image was rebuilt and
+re-scanned locally. Its63MiB archive checksum is
+`c3ec428cb5134c40522346bc9a213edc59c22d0c86f6a7f35ce6474712419711`; image ID
+is`sha256:0bef92ebb9159b594a8012181128f4e99c97463feb5e6b7a163f7bfc914dd7a5`.
+It was not pushed to a registry or deployed. The exact DuckDB2.0 native
+contract build was
 started, but intentionally interrupted while the engine package produced no
 output for several minutes; it is not a passing result or a substitute for the
 browser E2E.
