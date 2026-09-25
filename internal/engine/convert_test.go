@@ -467,6 +467,51 @@ func TestConvertTenThousandRecordProjectionWithinNativeLimit(t *testing.T) {
 	}
 }
 
+func TestConversionRequestBoundsSelectedRecords(t *testing.T) {
+	request := ConversionRequest{
+		Version: ConversionProtocolVersion, StagePath: "/stage", OutputDirectory: "/output", SpillDirectory: "/spill",
+		TenantID: 1, LaneID: 0, BatchSeq: 1, BatchID: "batch", SelectedRecords: model.MaxCanonicalRecords,
+		NativeMemoryBytes: 64 << 20, NativeSpillBytes: 64 << 20,
+	}
+	if err := request.validate(); err != nil {
+		t.Fatalf("maximum legal conversion request rejected: %v", err)
+	}
+	request.SelectedRecords++
+	if err := request.validate(); err == nil {
+		t.Fatal("conversion accepted more records than the canonical batch limit")
+	}
+}
+
+func TestConvertHighPartitionCountUsesBoundedLookupIndex(t *testing.T) {
+	root := t.TempDir()
+	const partitionCount = 16
+	const dayUS = int64(24 * time.Hour / time.Microsecond)
+	baseUS := int64(1_700_000_000_000_000)
+	records := make([]StageRecord, partitionCount)
+	for index := range records {
+		records[index] = conversionRecord("a", model.KindLog, baseUS+int64(index)*dayUS, index)
+		records[index].Record.RecordID = fmt.Sprintf("%064x", index+1)
+	}
+	request := ConversionRequest{
+		Version: ConversionProtocolVersion, StagePath: writeConversionStage(t, root, records),
+		OutputDirectory: filepath.Join(root, "output"), SpillDirectory: filepath.Join(root, "spill"),
+		TenantID: 1, LaneID: 3, BatchSeq: 4, BatchID: records[0].BatchID,
+		SelectedRecords: len(records), NativeMemoryBytes: 64 << 20, NativeSpillBytes: 64 << 20,
+	}
+	seen := 0
+	summary, err := Convert(context.Background(), request, func(bundle ConvertedBundle) error {
+		wantDay := time.UnixMicro(baseUS + int64(seen)*dayUS).UTC().Format(time.DateOnly)
+		if bundle.EventDay != wantDay || bundle.RowCount != 1 {
+			t.Fatalf("partition=%d got=%s rows=%d want=%s/1", seen, bundle.EventDay, bundle.RowCount, wantDay)
+		}
+		seen++
+		return nil
+	})
+	if err != nil || seen != partitionCount || summary.BundleCount != partitionCount {
+		t.Fatalf("seen=%d summary=%+v err=%v", seen, summary, err)
+	}
+}
+
 func TestConvertCancellationRemovesPartialOutputsAndSpill(t *testing.T) {
 	root := t.TempDir()
 	records := make([]StageRecord, 3000)

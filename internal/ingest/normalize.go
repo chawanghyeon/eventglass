@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	MaxCanonicalRecords = 10_000
+	MaxCanonicalRecords = model.MaxCanonicalRecords
 	MaxCanonicalBytes   = 20 << 20
 	MaxRecordBytes      = 1 << 20
 	MaxTypedAttributes  = 1_000

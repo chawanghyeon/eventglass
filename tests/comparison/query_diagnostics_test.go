@@ -23,7 +23,7 @@ type queryMeasurementEvidence struct {
 	Kind                                string
 	StartedAt                           time.Time
 	TotalMS, PreJobMS, JobMS, PostJobMS int64
-	Objects, ScannedBytes               int64
+	Objects, ScannedBytes, CacheBytes   int64
 	ScanTasks, ReduceTasks, Attempts    int64
 	snapshotID                          string
 	total, server                       time.Duration

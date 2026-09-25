@@ -3,9 +3,10 @@ package model
 import "encoding/json"
 
 const (
-	SchemaVersion     = 1
-	NormalizerVersion = 1
-	ScrubVersion      = 1
+	SchemaVersion       = 1
+	NormalizerVersion   = 1
+	ScrubVersion        = 1
+	MaxCanonicalRecords = 10_000
 )
 
 type Kind string

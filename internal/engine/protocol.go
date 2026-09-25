@@ -86,7 +86,7 @@ func (request *ConversionRequest) applyDefaults() {
 }
 
 func (request ConversionRequest) validate() error {
-	if request.Version != ConversionProtocolVersion || request.TenantID <= 0 || request.LaneID < 0 || request.LaneID >= model.LaneCount || request.BatchSeq <= 0 || request.BatchID == "" || request.SelectedRecords < 0 || request.SelectedErrors < 0 || request.SelectedErrors > request.SelectedRecords {
+	if request.Version != ConversionProtocolVersion || request.TenantID <= 0 || request.LaneID < 0 || request.LaneID >= model.LaneCount || request.BatchSeq <= 0 || request.BatchID == "" || request.SelectedRecords < 0 || request.SelectedRecords > model.MaxCanonicalRecords || request.SelectedErrors < 0 || request.SelectedErrors > request.SelectedRecords {
 		return errors.New("invalid conversion request scope or counts")
 	}
 	if !filepath.IsAbs(request.StagePath) || !filepath.IsAbs(request.OutputDirectory) || !filepath.IsAbs(request.SpillDirectory) || request.OutputDirectory == request.SpillDirectory {

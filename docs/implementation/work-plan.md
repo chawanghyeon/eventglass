@@ -4,19 +4,51 @@ Start from the actual tree; G00/G01 are completed baselines, not instructions
 to rebuild native dependencies every packet. G02 packets I1–I5 are complete;
 G03 packets P1–P4, G04 packets Q1–Q5, G05 packets U1–U4 and A1–A2, M1–M4,
 and R1–R2 have implementations and scoped tests. R3 remains the first incomplete
-packet. Corrected official5m/30m/10m ARM64 profiles completed for1/2/4 workers
-on2026-09-23; rows/histogram p95 were565/1,353ms,336/612ms, and244/436ms.
-Thus1-worker rows+histogram and2-worker histogram fail the500ms targets;4 workers
-passes both. All three accepted220,500 records and finished with backlog,
-conflicts, and OOM at0. Histogram catalog fan-out co-varies with worker count
-(1,553 objects/7 scan tasks at1 worker versus311–312/2 at2/4); this is
-diagnostic correlation, not a causal claim. S3 LIST page counters and PUT-tier
-pricing are now implemented and unit/integration tested, so earlier official
-cost projections need a fresh measurement. Current-source fixed-work capacity
-on1cf3538 passed three isolated128-cycle runs per worker count at median
-124.9/230.5/401.2 records/s (speedup1/1.846/3.212; efficiency1/0.923/0.803).
-This is publication-capacity evidence, not a replacement for R3 mixed-load SLOs.
-See quality.md for retained metrics.
+packet. Historical5m/30m/10m ARM64 profiles from a dirty source that skipped
+payload HEAD verification for analytics queries remain excluded. The first-page
+pruning integration contract caught the bypass; that optimization was removed
+and paired catalog verification restored. Current-source5m/30m/10m profiles
+then completed at1/2/4 workers on `6c96edf3-dirty`; all accepted220,500 records,
+but the1-worker run missed query, visibility and backlog/drain gates,2 workers
+missed rows and histogram p95, and4 workers missed histogram p95. These current
+reports include corrected cost accounting and remain failed G07 evidence, not
+a release claim. The current-source fixed-
+work capacity on1cf3538 passed three isolated128-cycle runs per worker count at
+median124.9/230.5/401.2 records/s (speedup1/1.846/3.212; efficiency1/0.923/
+0.803); this is publication-capacity evidence, not a replacement for R3 mixed-
+load SLOs. See quality.md for complete historical metrics and the invalidation.
+An audit then found those official backlog samples omitted active maintenance
+tasks and their reserved inputs. Their reported slopes/max/final therefore
+under-count total durable work; corrected combined-work monitoring is now in
+the harness and requires fresh official profiles before the backlog gate can
+pass.
+The corrected current-source one-worker official rerun now measures
+rows/histogram p95=689/1,638ms and total backlog slope+16.652/min (load peak852,
+final0 after55.449s drain); both query gates and the load-backlog gate fail.
+Histogram p95 is based on179 samples and1,750 objects/7 scan tasks at p95;
+all179 samples used cached verified bytes. The full S3/WAL/resource/cost and
+compaction-reservation evidence is in quality.md. Do not close R3 on this
+one-worker result; pursue bounded scan/compaction efficiency without relaxing
+authorization, integrity, worker or memory ceilings.
+An official one-worker1024-file scan-cap experiment was rejected: it reduced
+histogram p95 scan tasks7→5 but rows/histogram p95 regressed to6,332/6,614ms,
+visibility p95 to841,445ms, and combined backlog slope to+623.420/min, ending
+with18,638 items after600,285ms drain. ACK, accepted count, resource/OOM and
+independent fixture oracle passed; query, visibility, maintenance progress,
+published count and drain/post-load gates failed. The production bound remains
+256. Fresh-install maintenance trajectories prevent a causal claim; the run is
+strong evidence not to adopt this candidate. Full measurements are in
+quality.md; R3 remains incomplete.
+An official catalog metadata-fanout16 experiment was not adopted; the
+production fanout remains8. Its one-worker report accepted220,500 records but
+missed query/visibility/backlog targets (overall query p95 7,904ms, visibility
+p95 849,387ms, backlog slope+637.215/min and18,770 outstanding after600,123ms),
+with three client/decode query failures. The run had zero cgroup OOM events.
+The two-worker run stopped before report serialization when the30-minute load
+schedule was8.46s late; the four-worker run stopped before report serialization
+on HTTP429 `admission_limited` at sequence425. These are failed/incomplete
+samples, not a causal attribution. Retained one-worker evidence and exact
+limits are in quality.md; R3 remains incomplete.
 M2 physical GC stays frozen whenever M4's signed coordinated backup attestation is absent or older than 24 hours.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status
@@ -109,8 +141,8 @@ No UI request may rely on the old fixture Config.PublicKey for management auth.
 |---|---|---|
 | R1 / M4 — complete | tests/resource Linux cgroup harness; scripts/check resource | CPU1/512MiB/swap0 profile verifies maximum input, two-minute 100 logs/s+5 errors/s logical mix through normalization and actual conversion/query children, no growing cycle backlog, cgroup OOM=0, bounded child OOM/cancel/join, exact permit drain and zero scratch residue. This is containment evidence, not R3's 30-minute end-to-end SLO. |
 | R2 / R1 — complete | app autoscale metrics/control; deploy/kubernetes/KEDA; scripts/check scale | Private fixed-label backlog metrics and storage availability, EWMA prior, two-sample scale-out, dependency freeze, 300s stable scale-in capped at25%, warm min1/max20 and PG64 total bound. Conversion/query claims prefer tenants without running work. Linux ARM64 1/2/4 control harness produced the same checksum; manifests enforce non-root/read-only/CPU1/512MiB/bounded scratch and KEDA timing. This is control evidence, not R3 throughput. |
-| R3 / R2 — executable, SLO/cost audit pending | tests/comparison independent oracle/load/cost report; scripts/check comparison | Corrected5m warmup/30m load/10m drain, SIGKILL/restart, cold/warm/idle, per-role ARM64 cgroup, and whole-installation PG/S3 reporting are implemented. Official1/2/4-worker profiles completed with220,500 accepted each, final backlog0, conflicts0, OOM0; rows/histogram p95=565/1,353ms,336/612ms,244/436ms. Thus1-worker rows/histogram and2-worker histogram exceed500ms; only4 workers meets both targets. Histogram object/scan-task fan-out co-varies with worker count; causality is not isolated. This report exposed missing S3 LIST-page accounting; the metric/pricing path now has unit and integration coverage, but official cost projections must be rerun. Current-source fixed-work capacity passes nine isolated128-cycle installations on1cf3538 at median124.9/230.5/401.2 records/s, speedup1/1.846/3.212 and efficiency1/0.923/0.803; this is not a substitute for the mixed-load SLO. **G07 remains incomplete.** |
-| R4 / R3 | deploy backend locks; scripts/check release; operator/upgrade guides; SBOM/notices | Authorized AWS + proven selfhost smoke/restore, ARM64 provenance, secret/license scans, schema/journal compatibility and rollback rehearsal, declared SDK matrix; **G08 complete; only then advertise release** |
+| R3 / R2 — implemented; current-source SLO gate fails | tests/comparison independent oracle/load/cost report; scripts/check comparison | Corrected5m warmup/30m load/10m drain, SIGKILL/restart, cold/warm/idle, per-role ARM64 cgroup, and whole-installation PG/S3 reporting are implemented. Current-source historical full-verification profiles at1/2/4 workers accepted220,500 records each, but the1-worker legacy backlog measurement omitted active maintenance tasks and reserved inputs. The corrected current-source1-worker official profile now measures rows/histogram p95=689/1,638ms and combined load-backlog slope+16.652/min (peak852, final0 after55.449s drain); the load-backlog and both query gates fail. It passed ACK/visibility, exact public counts, no conflicts, resource/OOM, and post-load gates. Its histogram p95 had179 samples,1,750 objects and7 scan tasks; all179 samples used cached verified bytes. Complete S3/WAL/cost/resource and compaction-queue evidence is in quality.md. Corrected2/4-worker official reruns and the efficiency fix remain required. Fixed-work capacity on1cf3538 passes nine isolated128-cycle installations at124.9/230.5/401.2 records/s, but is not a substitute for mixed-load SLOs. **G07 remains incomplete.** |
+| R4 / R3 — external release gate open | deploy backend locks; release verification; operator/upgrade guides; SBOM/notices | Fresh local `./scripts/check recovery` passes real disposable PostgreSQL base/WAL+S3 restore and missing-object fail-closed; fresh ARM64 browser E2E, the documented pinned live SDK matrix, and changed-file secret hook pass. Actual AWS identity/restore, signed release provenance, image/dependency security and license scans, and deployment rollback rehearsal remain unverified. **G08 remains incomplete; do not advertise a release.** |
 
 R3 remains the first incomplete packet. A further 20s/300s/90s ARM64
 one-worker diagnostic recorded 646 planned files at the end of its 32-file

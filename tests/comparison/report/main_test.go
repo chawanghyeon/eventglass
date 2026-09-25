@@ -119,9 +119,10 @@ func TestPostLoadEvidenceCannotBeOmittedOrShortenedForOfficialProfile(t *testing
 		"maintenance_spare": map[string]any{"Calls": float64(100), "WorkMS": float64(10000)},
 		"compaction":        map[string]any{"ElapsedMS": float64(2500)},
 	}}
-	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted"} {
+	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "idle_backlog_drained", "postload_maintenance_time_accounted"} {
 		targets[name] = true
 	}
+	report["PostLoad"].(map[string]any)["IdleBacklog"] = float64(0)
 	if !validPostLoad(report, targets) {
 		t.Fatal("complete quick evidence rejected")
 	}
@@ -163,12 +164,29 @@ func TestPostLoadRejectsUnaccountedMaintenanceDespiteLegacyTargets(t *testing.T)
 			}
 			report := map[string]any{"PostLoad": map[string]any{"Complete": true, "IdleSeconds": float64(60), "Operations": operations}}
 			targets := map[string]any{}
-			for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted"} {
+			for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "idle_backlog_drained", "postload_maintenance_time_accounted"} {
 				targets[name] = true
 			}
 			if validPostLoad(report, targets) {
 				t.Fatal("unaccounted post-load maintenance accepted")
 			}
 		})
+	}
+}
+
+func TestPostLoadRejectsBacklogEvenWhenIdleQueriesAreClean(t *testing.T) {
+	operations := map[string]any{
+		"maintenance_spare": map[string]any{"Calls": float64(100), "WorkMS": float64(10000)},
+		"compaction":        map[string]any{"ElapsedMS": float64(1000)},
+	}
+	report := map[string]any{
+		"PostLoad": map[string]any{"Complete": true, "IdleSeconds": float64(60), "IdleBacklog": float64(12), "Operations": operations},
+	}
+	targets := map[string]any{}
+	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "idle_backlog_drained", "postload_maintenance_time_accounted"} {
+		targets[name] = true
+	}
+	if validPostLoad(report, targets) {
+		t.Fatal("post-load backlog passed despite clean idle query work")
 	}
 }

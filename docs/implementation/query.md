@@ -165,11 +165,15 @@ compaction trajectories still differ, so the pair is not causal evidence; it
 shows no histogram improvement from doubling the cap, and both runs fail the
 500ms histogram target. The production bound remains256. The corrected official
 5m/30m/10m profiles have since run at1/2/4 workers: only the4-worker profile
-meets both query targets; R3 remains incomplete. Details are in
-[quality evidence](../observe/quality.md).
-the 64MiB byte, 1MiB per-task manifest, native256MiB and one-child bounds do
-not increase. The native query request cap and planner share this limit, and
-257 inputs fail closed. Metadata-heavy partitions are bisected deterministically
+meets both query targets; R3 remains incomplete. A newer corrected one-worker
+official profile measured1,750 files and7 scan tasks at histogram p95. An
+experimental1024-file cap was rejected after a full official one-worker run:
+query/visibility p95 and backlog regressed sharply despite fewer histogram
+scan tasks. Keep the256-file cap until a new candidate has matched official
+evidence; details are in [quality evidence](../observe/quality.md).
+The64MiB byte,1MiB per-task manifest, native192MiB and one-child bounds remain
+unchanged. The native query request cap and planner share this limit, and257
+inputs fail closed. Metadata-heavy partitions are bisected deterministically
 before sealing until each manifest fits1MiB; a single oversized file still fails.
 The4,096-scan and16MiB-total caps apply during construction, including these
 splits and reducers. This is not execution-time adaptive splitting: a sealed

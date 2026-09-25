@@ -44,7 +44,7 @@ else
 fi
 if [ "$mode" = sustained ] && [ "${EVENTGLASS_COMPARISON_QUICK:-}" != "1" ]; then
   # Mode A must exercise the actual engine, not only the selector checksums.
-  ./scripts/check-native-oracle
+  EVENTGLASS_NATIVE_ORACLE_IMAGE="$build_image" ./scripts/check-native-oracle
 fi
 run_dir=$(mktemp -d "$ROOT/.tools/eventglass-comparison.XXXXXX")
 active_project=""
@@ -99,7 +99,7 @@ elif [ "${EVENTGLASS_COMPARISON_QUICK:-}" = "1" ]; then
   warmup=${EVENTGLASS_COMPARISON_WARMUP:-20s}
   load=${EVENTGLASS_COMPARISON_LOAD:-60s}
   drain=${EVENTGLASS_COMPARISON_DRAIN:-30s}
-  test_timeout=10m
+  test_timeout=30m
 else
   profiles=${EVENTGLASS_COMPARISON_WORKERS:-"1 2 4"}
   warmup=5m
@@ -158,6 +158,7 @@ capture_cgroup() {
 }
 
 profile_index=0
+profile_failures=0
 for workers in $profiles; do
   case "$workers" in 1|2|4) ;; *) echo 'workers must be 1,2,4' >&2; exit 2 ;; esac
   profile_index=$((profile_index + 1))
@@ -381,7 +382,9 @@ for workers in $profiles; do
       echo "R3 failed evidence: $ROOT/.tools/comparison-workers-$workers-failed.json" >&2
     fi
     for container in $app_containers; do docker logs "$container" >&2 || true; done
-    exit "$status"
+    profile_failures=1
+    cleanup_profile
+    continue
   fi
   cp "$artifacts_dir/report.json" "$ROOT/.tools/comparison-workers-$workers.json"
   cp "$stats_file" "$ROOT/.tools/comparison-workers-$workers-stats.jsonl"
@@ -397,3 +400,4 @@ fi
 
 GOCACHE="$ROOT/.tools/go-build-cache" GOMODCACHE="$ROOT/.tools/go-mod-cache" \
   go test -count=1 -run '^TestFixedDatasetProfilesMatchIndependentOracle$' -v ./tests/comparison
+if [ "$profile_failures" -ne 0 ]; then exit 1; fi

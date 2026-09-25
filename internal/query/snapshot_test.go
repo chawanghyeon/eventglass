@@ -207,3 +207,27 @@ func TestVerifiedCatalogRejectsChangedMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifiedCatalogChecksAnalyticsAndPayload(t *testing.T) {
+	file := model.CatalogFile{
+		FileID: "00000000-0000-4000-8000-000000000001", ObjectKey: "analytics", Bytes: 4, SHA256: "expected",
+		PayloadFileID: "00000000-0000-4000-8000-000000000002", PayloadObjectKey: "payload", PayloadBytes: 8, PayloadSHA256: "expected-payload",
+	}
+	pager := catalogPagerFunc(func(context.Context, control.CatalogCommand) ([]model.CatalogFile, error) {
+		return []model.CatalogFile{file}, nil
+	})
+	var heads []string
+	reader := catalogReaderFunc(func(_ context.Context, key string) (storage.ObjectInfo, error) {
+		heads = append(heads, key)
+		if key == file.ObjectKey {
+			return storage.ObjectInfo{Key: key, Size: file.Bytes, SHA256: file.SHA256}, nil
+		}
+		return storage.ObjectInfo{Key: key, Size: file.PayloadBytes, SHA256: "changed"}, nil
+	})
+	if _, err := LoadVerifiedCatalog(context.Background(), pager, reader, control.CatalogCommand{}); !errors.Is(err, ErrCatalogObjectMissing) {
+		t.Fatalf("catalog accepted changed payload metadata: %v", err)
+	}
+	if len(heads) != 2 || heads[0] != file.ObjectKey || heads[1] != file.PayloadObjectKey {
+		t.Fatalf("detail verification HEADs=%v", heads)
+	}
+}

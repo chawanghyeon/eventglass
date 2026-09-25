@@ -67,7 +67,7 @@ type comparisonReport struct {
 	VisibilityP95MS                                 int64
 	PostDrainLast15MinRegexMS                       int64
 	PostDrainLast15MinRegexFailed                   bool
-	MaxConversionBacklog, FinalBacklog              int64
+	MaxOutstandingBacklog, FinalBacklog             int64
 	LoadBacklogSamples, LoadBacklogMax              int64
 	LoadBacklogSlopePerMinute                       float64
 	DrainMS                                         int64
@@ -80,6 +80,15 @@ type comparisonReport struct {
 	StartedAt, FinishedAt                           time.Time
 	Targets                                         map[string]bool
 }
+
+const comparisonBacklogSQL = `SELECT
+	(SELECT count(*) FROM jobs WHERE state IN ('queued','running'))+
+	(SELECT count(*) FROM ingest_batches WHERE state='accepted')+
+	(SELECT count(*) FROM query_jobs WHERE state IN ('planning','queued','running'))+
+	(SELECT count(*) FROM query_tasks WHERE state IN ('queued','running'))+
+	(SELECT count(*) FROM maintenance_tasks WHERE state IN ('queued','running','prepared'))+
+	(SELECT count(*) FROM maintenance_inputs i JOIN maintenance_tasks m USING(task_id)
+		WHERE m.state IN ('queued','running','prepared'))`
 
 type comparisonOperation struct {
 	Calls, Work, Failures uint64
@@ -223,7 +232,7 @@ func TestSustainedComparison(t *testing.T) {
 	}
 
 	drainStarted := time.Now()
-	report.MaxConversionBacklog, report.FinalBacklog = drainBacklog(t, pool, drain)
+	report.MaxOutstandingBacklog, report.FinalBacklog = drainBacklog(t, pool, drain)
 	report.DrainMS = time.Since(drainStarted).Milliseconds()
 	if err := pool.QueryRow(context.Background(), `SELECT COALESCE(sum(accepted_count),0),COALESCE(sum(duplicate_count),0),COALESCE(sum(conflict_count),0) FROM receipts WHERE tenant_id=$1`, state.TenantID).Scan(&report.Accepted, &report.Duplicates, &report.Conflicts); err != nil {
 		t.Fatal(err)
@@ -501,7 +510,7 @@ func runMixedQueries(ctx context.Context, pool *pgxpool.Pool, client *http.Clien
 			}
 			report.QueryMeasurements = append(report.QueryMeasurements, queryMeasurementEvidence{
 				Kind: kind, StartedAt: measurement.StartedAt, TotalMS: measurement.Total.Milliseconds(),
-				Objects: measurement.Objects, ScannedBytes: measurement.ScannedBytes,
+				Objects: measurement.Objects, ScannedBytes: measurement.ScannedBytes, CacheBytes: measurement.CacheBytes,
 				snapshotID: measurement.SnapshotID, total: measurement.Total, server: measurement.Server,
 			})
 			if len(*latencies) == 0 {
@@ -561,6 +570,7 @@ type searchMeasurement struct {
 	Visibility   time.Duration
 	Objects      int64
 	ScannedBytes int64
+	CacheBytes   int64
 }
 
 func (measurement searchMeasurement) Overhead() time.Duration {
@@ -631,6 +641,7 @@ func search(ctx context.Context, pool *pgxpool.Pool, client *http.Client, baseUR
 			ElapsedMS       string  `json:"elapsed_ms"`
 			Objects         string  `json:"objects"`
 			ScannedBytes    string  `json:"scanned_bytes"`
+			CacheBytes      string  `json:"cache_bytes"`
 		} `json:"stats"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
@@ -654,6 +665,10 @@ func search(ctx context.Context, pool *pgxpool.Pool, client *http.Client, baseUR
 	scannedBytes, err := strconv.ParseInt(wire.Stats.ScannedBytes, 10, 64)
 	if err != nil || scannedBytes < 0 {
 		return searchMeasurement{}, fmt.Errorf("invalid query scanned_bytes %q", wire.Stats.ScannedBytes)
+	}
+	cacheBytes, err := strconv.ParseInt(wire.Stats.CacheBytes, 10, 64)
+	if err != nil || cacheBytes < 0 {
+		return searchMeasurement{}, fmt.Errorf("invalid query cache_bytes %q", wire.Stats.CacheBytes)
 	}
 	visible := time.Duration(-1)
 	if wire.Stats.VisibilityLagMS != nil {
@@ -680,7 +695,7 @@ func search(ctx context.Context, pool *pgxpool.Pool, client *http.Client, baseUR
 		}
 		visible = lag
 	}
-	return searchMeasurement{SnapshotID: wire.SnapshotID, StartedAt: started.Add(clockOffset), Total: queryLatency, Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible, Objects: objects, ScannedBytes: scannedBytes}, nil
+	return searchMeasurement{SnapshotID: wire.SnapshotID, StartedAt: started.Add(clockOffset), Total: queryLatency, Server: time.Duration(serverMS) * time.Millisecond, Visibility: visible, Objects: objects, ScannedBytes: scannedBytes, CacheBytes: cacheBytes}, nil
 }
 
 func releaseComparisonSnapshot(ctx context.Context, client *http.Client, baseURL string, tenantID int64, snapshotID, csrf string) error {
@@ -712,11 +727,7 @@ func drainBacklog(t *testing.T, pool *pgxpool.Pool, limit time.Duration) (int64,
 	deadline := time.Now().Add(limit)
 	var maximum, current int64
 	for {
-		if err := pool.QueryRow(context.Background(), `SELECT
-			(SELECT count(*) FROM jobs WHERE state IN ('queued','running'))+
-			(SELECT count(*) FROM ingest_batches WHERE state='accepted')+
-			(SELECT count(*) FROM query_jobs WHERE state IN ('planning','queued','running'))+
-			(SELECT count(*) FROM query_tasks WHERE state IN ('queued','running'))`).Scan(&current); err != nil {
+		if err := pool.QueryRow(context.Background(), comparisonBacklogSQL).Scan(&current); err != nil {
 			t.Fatal(err)
 		}
 		maximum = max(maximum, current)
@@ -738,11 +749,7 @@ func monitorBacklog(ctx context.Context, pool *pgxpool.Pool, result chan<- backl
 	defer ticker.Stop()
 	for {
 		var current int64
-		err := pool.QueryRow(ctx, `SELECT
-			(SELECT count(*) FROM jobs WHERE state IN ('queued','running'))+
-			(SELECT count(*) FROM ingest_batches WHERE state='accepted')+
-			(SELECT count(*) FROM query_jobs WHERE state IN ('planning','queued','running'))+
-			(SELECT count(*) FROM query_tasks WHERE state IN ('queued','running'))`).Scan(&current)
+		err := pool.QueryRow(ctx, comparisonBacklogSQL).Scan(&current)
 		if err != nil {
 			if ctx.Err() != nil {
 				result <- measurement

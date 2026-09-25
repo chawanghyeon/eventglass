@@ -56,6 +56,11 @@ class GoLayoutTests(unittest.TestCase):
         self.assertEqual(tool_versions["GO_VERSION"], module_version)
         self.assertIn(f"VERSION={module_version}", (ROOT / "scripts/bootstrap").read_text())
 
+    def test_native_contract_linking_is_serial_to_bound_scratch(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        self.assertIn("RUN go test -p=1 -tags=duckdb_use_static_lib -count=1 ./...", dockerfile)
+        self.assertIn("RUN go vet -p=1 -tags=duckdb_use_static_lib ./...", dockerfile)
+
     def test_comparison_runner_outlives_the_official_profile(self):
         runner = (ROOT / "scripts/check-comparison").read_text()
         self.assertIn("warmup=5m", runner)

@@ -5,7 +5,7 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 case "$(uname -m)" in arm64|aarch64) ;; *) echo 'native oracle supports ARM64 only' >&2; exit 1 ;; esac
 artifacts=$(mktemp -d "$ROOT/.tools/native-oracle.XXXXXX")
-image=eventglass-go:native-oracle-build
+image=${EVENTGLASS_NATIVE_ORACLE_IMAGE:-eventglass-go:native-oracle-build}
 container=""
 volume=""
 cleanup() {
@@ -16,7 +16,18 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-./scripts/build-image --target build --load --tag "$image"
+case "$image" in
+  eventglass-go:native-oracle-build)
+    ./scripts/build-image --target build --load --tag "$image"
+    ;;
+  eventglass-go:comparison-build)
+    docker image inspect "$image" >/dev/null
+    ;;
+  *)
+    echo "unsupported native oracle image: $image" >&2
+    exit 2
+    ;;
+esac
 docker run --rm --platform linux/arm64 --network none -v "$artifacts:/artifacts" "$image" \
   go test -tags='duckdb_use_static_lib nativeoracle' -c -o /artifacts/native-oracle.test ./tests/comparison
 {

@@ -15,17 +15,21 @@ payload, and reducer child reads. M4 passed an actual pgBackRest base+WAL restor
 into two independent PGDATA volumes, full referenced-object reads, signed report
 import and missing-object failure. R1's CPU1/512MiB/swap0 containment gate also
 passes. R2's autoscale control, fair claims and bounded Kubernetes/KEDA baseline
-also pass. Corrected official5m/30m/10m R3 profiles have now completed at1/2/4
-workers: rows/histogram p95=565/1,353ms,336/612ms,244/436ms respectively; only
-4 workers meets both500ms query targets. The latest clean64d6038 budgeted short diagnostic still
-misses query and load-backlog targets, although that run has no cancellation
-budget overrun. Independent fixed-work capacity passes on current source
+also pass. Current-source official5m/30m/10m R3 profiles at1/2/4 workers
+completed on `6c96edf3` with full analytics/payload HEAD verification. The
+1-worker profile misses query, visibility and backlog/drain gates;2 workers
+miss rows and histogram p95;4 workers pass rows but miss histogram p95 at
+615ms. Go-unit limits, OOM checks, exact accepted counts and the independent
+native oracle pass. R3 remains incomplete; reports and run-specific S3,
+resource and cost evidence are in quality.md. Independent fixed-work capacity passes on current source
 1cf3538: three fresh128-cycle installations per1/2/4-worker profile measured
 median124.9/230.5/401.2 records/s, with speedup1/1.846/3.212 and efficiency
 1/0.923/0.803. This is bounded publication-capacity evidence, not sustained
 mixed-load SLO or steady-state maximum capacity.
-The official cost model still needs a fresh run after S3 LIST accounting was
-added. A subsequent
+The current-source official rerun includes S3 LIST accounting and records
+run-specific projected monthly costs of$1,142.59/$589.90/$644.28 at1/2/4
+workers. These are not directly comparable bills or a cost improvement claim.
+A subsequent
 conversion audit reproduced missing shared disk admission, all-partition file
 accumulation before upload and a symlink output-validation gap. Their bounded
 streaming correction now passes the actual10,000-day ACK/publication boundary
@@ -53,8 +57,9 @@ clean02c98f2 official one-worker run passed the full native oracle, exact220,500
 public records, maintenance accounting and OOM checks, but rows/histogram p95
 591/1,737ms failed. It exited1 before2/4 workers. Maximum queried files reached
 2,117 and planning/transport overhead grew; retained measurements distinguish
-this from the short diagnostic. The corrected official1/2/4 profiles are now
-recorded above;1/2-worker query SLOs still fail. The next maintenance-local four-read
+this from the short diagnostic. The latest official1/2/4 profiles are recorded
+above; query SLOs fail at every worker count, with the1-worker backlog/drain
+gates also failing. The next maintenance-local four-read
 bound preserves full SHA verification, ordered inputs and joined cancellation.
 Real S3 download microbenchmarks improve, with higher RSS; the same short service
 profile changes295/566→303/548ms and still fails histogram500ms. Native maximum-
@@ -73,12 +78,12 @@ completion. A separate query cursor/capacity filter passes exact results,
 cross-tenant denial and concurrent task caps. Actual1/2/4-process conversion and
 query queued-work fixtures now pass three repetitions, recording claim-count
 skew and requiring participation by every process; these are not continuous-load
-or elapsed-time fairness measurements. The latest clean04ec2c2 official profile
-passes rows404ms, exact220,500 public records, maintenance/resource/restart/cache
-checks and the full native oracle, but histogram874ms still fails500ms. That
-earlier profile stopped before2/4 workers; later corrected full profiles show
-only4 workers meeting both query targets. S3 LIST costs still need official
-remeasurement. R3 remains the first incomplete packet and R4 remains open.
+or elapsed-time fairness measurements. Earlier official R3 profiles are
+historical only: later1/2/4-worker candidate runs included the paired-payload
+HEAD regression and are excluded from current-source SLO evidence. The subsequent
+full-verification1/2/4-worker official rerun includes current cost accounting,
+but misses query SLOs at every worker count and the1-worker backlog/drain gates.
+R3 remains the first incomplete packet and R4 remains open.
 Physical GC remains
 fail-closed whenever the imported rehearsal horizon is missing or stale. Project, key, Issue, retained-occurrence and SDK-outcome
 screens now use implemented backend routes, and the ARM64 browser gate exercises

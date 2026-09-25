@@ -130,10 +130,14 @@ func validPostLoad(report, targets map[string]any) bool {
 	if !ok || phase["Complete"] != true || !validPostLoadMaintenance(report) {
 		return false
 	}
-	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted"} {
+	for _, name := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "idle_backlog_drained", "postload_maintenance_time_accounted"} {
 		if targets[name] != true {
 			return false
 		}
+	}
+	backlog, ok := phase["IdleBacklog"].(float64)
+	if !ok || backlog != 0 {
+		return false
 	}
 	minimumIdle := float64(10)
 	if report["WarmupSeconds"] == float64(300) && report["LoadSeconds"] == float64(1800) {

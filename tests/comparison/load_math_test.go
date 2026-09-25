@@ -97,6 +97,19 @@ func TestBacklogSlopePerMinute(t *testing.T) {
 	}
 }
 
+func TestComparisonBacklogCountsMaintenanceWork(t *testing.T) {
+	for _, table := range []string{"jobs", "ingest_batches", "query_jobs", "query_tasks", "maintenance_tasks", "maintenance_inputs"} {
+		if !strings.Contains(comparisonBacklogSQL, "FROM "+table) {
+			t.Errorf("backlog query omits %s", table)
+		}
+	}
+	for _, state := range []string{"queued", "running", "prepared"} {
+		if !strings.Contains(comparisonBacklogSQL, "'"+state+"'") {
+			t.Errorf("backlog query omits active %s work", state)
+		}
+	}
+}
+
 func TestAddS3MetricsAccumulatesRestartedWorker(t *testing.T) {
 	var report comparisonReport
 	first := []byte("eventglass_s3_requests_total{operation=\"put\"} 2\neventglass_s3_requests_total{operation=\"list\"} 7\neventglass_s3_transfer_bytes_total{direction=\"put\"} 30\n")

@@ -3319,6 +3319,318 @@ reports and the nine-sample matrix are under `.tools/capacity-report-*` and
 `.tools/capacity-matrix.6hCBeY`. These measurements do not change the failing
 1/2-worker query SLOs or close R3.
 
+### Rejected 64MiB compaction target
+
+A fresh ARM64 one-worker `20s/900s/90s` Colima profile tested the DESIGN.md
+32–64MiB compaction range by changing only `TargetCompactionBytes` from32 to
+64MiB. The 32MiB comparison was
+`.tools/comparison-report-1.wxEjUA/report.json`; the 64MiB candidate was
+`.tools/comparison-report-1.jKBYtI/report.json`. Both used Go1.27.1, the pinned
+DuckDB2.0 ARM64 image, CPU1/512MiB Go-unit limits, disposable PostgreSQL/MinIO,
+and accepted96,600 records with15 duplicate retries, zero conflicts, zero final
+backlog and zero cgroup OOM kills. Fresh actual submitted inputs differ:
+122,006,241B / SHA
+`e9effc6556b3d2f610e8c87769b8c5ec1554543ca9b1183dccc17eb060d7ddc8` versus
+124,093,974B / SHA
+`0d6c27dff5afcc0d137156119700eee37b9ac6c958859d71061de8b5b101d705`.
+
+| Measurement | 32MiB | 64MiB |
+|---|---:|---:|
+| Rows / histogram p95 |337 /558ms|345 /594ms|
+| Histogram server / HTTP overhead p95 |373 /204ms|404 /209ms|
+| Visibility p95 / backlog slope per minute |784ms /−0.0591|795ms /−0.0699|
+| Maximum query files / active catalog bundles |729 /674|782 /767|
+| Completed compaction tasks / input bundles |375 /5,333|352 /5,248|
+| Whole-installation sampled peak |1,280,437,123B|1,465,947,039B|
+| Worker cgroup peak / OOM kills |138,403,840B /0|134,602,752B /0|
+| Cold / warm post-load query |979 /658ms|1,022 /707ms|
+
+Both miss the500ms histogram target; cold/warm/idle, visibility, backlog,
+resource and durability checks pass. The larger target did not improve the
+measured query/object counts, so it is not adopted. Because the submitted input
+hashes and compaction trajectories differ, these results do not establish that
+the target alone caused the deltas. The projected local monthly totals
+($668.20/$680.58) are run-specific estimates, not comparable cloud bills or a
+cost improvement claim. R3 remains open.
+
+### Historical official R3 profiles excluded after integrity regression
+
+The profiles below are retained for traceability but do not establish current-
+source latency, resource, S3 or cost behavior. They were run from dirty source
+that skipped payload HEAD verification for analytics operations. A later
+ARM64 `TestPublicQueryEndToEndFirstPagePruning` failed its full paired-catalog
+HEAD assertion for both sort orders. The candidate optimization was removed;
+`LoadVerifiedCatalog` again checks every analytics/payload pair before planning.
+The restored behavior has focused unit coverage and the pruning integration
+test passes. The later current-source official-duration rerun is recorded
+below; reports in this historical section remain excluded from G07.
+
+Historical ARM64 `5m/30m/10m` reports are
+`.tools/comparison-report-1.mLGrRk/report.json`,
+`.tools/comparison-report-2.pMhYAN/report.json`, and
+`.tools/comparison-report-4.kFHQi8/report.json`. The1-worker report is based on
+`36d4342` with a dirty worktree; the2/4-worker reports are based on `e9472a8`
+with dirty worktrees. All use the same frozen10m fixture-definition checksum
+`9326f0f7…`, but actual submitted envelope hashes differ
+(`b8efcd62…`, `fa8a9ebb…`, `2aa6c71c…`). These are official workload profiles,
+not byte-identical before/after samples; differences across reports are not
+causal performance claims.
+
+| Workers | Accepted | Rows / histogram p95 | Histogram server / HTTP overhead p95 | ACK / visibility p95 | Load backlog slope/min; max; final | Whole-installation peak / OOM kills | Estimated monthly cost |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+|1|220,500|2,862 /6,876ms|5,722 /1,264ms|375 /813,164ms|+393.05;11,194;10,910|1,793,640,625B /0|$772.59|
+|2|220,500|435 /754ms|556 /239ms|382 /846ms|+0.0312;43;0|2,033,146,919B /0|$541.92|
+|4|220,500|250 /521ms|395 /147ms|380 /642ms|−0.00127;7;0|2,195,005,109B /0|$596.79|
+
+Histogram p95 misses the500ms target at every worker count (by6,376/254/21ms).
+The1-worker profile also misses rows, visibility, backlog-drain and post-load
+completion; its idle phase retains10,860 backlog jobs. The2/4-worker profiles
+drain and pass all targets except histogram p95. All profiles have zero query
+failures, conflicts and cgroup OOM kills. Costs are us-east-1 monthly projections
+from the report's 2026-09-21 pricing inputs, not bills; their Fargate, PostgreSQL,
+backup, network, logging, tax and support assumptions/exclusions stay attached
+to each full report.
+
+| Workers | S3 HEAD / GET / Range / PUT requests | Range / GET / PUT bytes | PG end / WAL bytes |
+|---:|---:|---:|---:|
+|1|863,910 /53,457 /11,896 /28,353|94,603,751 /261,619,940 /124,677,616|303,363,763 /633,784,336|
+|2|143,386 /105,450 /15,821 /40,813|194,936,942 /702,496,809 /282,918,622|212,162,227 /659,831,328|
+|4|137,385 /105,291 /18,819 /40,757|270,986,544 /698,687,954 /281,462,324|211,605,171 /691,936,592|
+
+S3 LIST requests were0 in these profiles. Post-load cold/warm checks measured
+1-worker16,476/13,138ms and Range4,847→22 (45,609,707→182,352B), but idle
+backlog remained10,860. At2 workers they measured456/314ms and Range290→2
+(14,511,128→16,505B), with idle backlog0. At4 workers they measured680/633ms
+and Range305→305 (14,685,055→14,685,055B), also with idle backlog0; that sample
+shows no warm Range-cache reduction. Do not generalize these cache observations
+to other cohorts.
+
+The historical candidate retained the8-way catalog verifier but used HEAD for
+selected analytics objects and only HEADs payload objects for detail
+operations; that behavior violated the paired-catalog integrity contract and
+was removed. A four-worker16-way
+candidate report, `.tools/comparison-report-4.u10Qzx/report.json`, recorded
+histogram p95=791ms, server551ms, visibility709ms and a whole-installation peak
+of2,265,008,045B (versus2,195,005,109B in the separate8-way report); it was
+reverted to8. The submitted-envelope hashes differ, so this rejects16-way as an
+unsupported candidate, not as an isolated causal comparison. A local synthetic
+1ms-HEAD benchmark is not provider or end-to-end evidence.
+
+A separate aggregate scan-size128 experiment ran only the quick `20s/60s/30s`
+diagnostic, accepted8,400 per profile and collected5–6 histogram samples:
+
+| Workers | Rows / histogram / overall query p95 | ACK p95 | Load backlog slope/min | Post-load Range GET cold→warm |
+|---:|---:|---:|---:|---:|
+|1|391 /809 /809ms|376ms|+13.38|471→2|
+|2|256 /486 /486ms|379ms|+3.16|176→0|
+|4|394 /599 /1,167ms|557ms|+20.90|144→144|
+
+The2-worker quick profile passes both query p95 checks but fails backlog slope;
+the1-worker profile misses histogram/backlog/maintenance, and4 workers miss
+histogram/ACK/backlog. Post-load cold/warm Range bytes were4,183,259→16,484B,
+1,995,766→0B, and7,198,415→7,198,415B respectively. All reported OOM kills
+were0, but the short profiles are under-sampled, use different submitted
+envelopes and are not comparable to the official gate. This candidate is not
+adopted; the product retains the256-file scan bound. The fixed-dataset native
+oracle passed; the overall quick comparison exited1 on its failed profile
+targets. R3 remains incomplete.
+
+### Current-source official R3 rerun with full catalog verification
+
+The ARM64 `5m/30m/10m` profiles completed on2026-09-24 against revision
+`6c96edf3cb25626a1d4030ff0a5d72bfd9f669ad-dirty`, after restoring HEAD
+verification for every analytics/payload pair. Reports are
+`.tools/comparison-report-1.A6Y6Ee/report.json`,
+`.tools/comparison-report-2.X9qQdr/report.json`, and
+`.tools/comparison-report-4.3JEPGa/report.json`. Each accepted220,500 records,
+had zero query failures/conflicts and passed the fixed-dataset native oracle.
+The actual submitted envelope hashes differ across fresh installations, so
+worker-count deltas are not isolated causal comparisons.
+
+| Workers | Rows / histogram p95 | Histogram server / overhead p95 | ACK / visibility p95 | Backlog slope/min; max; final | Failed workload gates | Whole-installation peak / OOM kills | Projected monthly cost |
+|---:|---:|---:|---:|---:|---|---:|---:|
+|1|1,351 /4,458ms|3,543 /905ms|371 /137,262ms|+35.566;2,488;914|rows, histogram, visibility, growing backlog, drain/publication/post-load|2,039,792,793B /0|$1,142.59|
+|2|528 /1,070ms|732 /337ms|379 /1,021ms|+0.01762;22;0|rows, histogram|2,050,364,536B /0|$589.90|
+|4|423 /615ms|440 /249ms|376 /872ms|−0.00199;6;0|histogram|2,201,537,738B /0|$644.28|
+
+All profiles kept Go units within512MiB and recorded zero cgroup OOM events or
+kills. The1-worker public oracle returned202,100 logs and10,105 errors rather
+than the full210,000/10,500; the2/4-worker public counts were exact. The4-worker
+histogram p95 sample selected231 objects, scanned8,956,716B in one scan task,
+and measured440ms durable-job time. These are measured phases, not exclusive
+CPU timings. The4-worker query target is615ms end-to-end against500ms; the
+server-only p95 of440ms does not pass that end-to-end gate.
+
+S3 request/transfer counts and PG WAL are included to retain cost context, not
+to claim the runs are directly comparable:
+
+| Workers | PUT / HEAD / LIST / GET / Range requests | PUT / GET / Range bytes | PG WAL bytes |
+|---:|---:|---:|---:|
+|1|38,539 /1,437,132 /0 /88,950 /14,034|213,374,484 /502,541,704 /125,040,054|794,155,472|
+|2|40,795 /241,759 /0 /105,349 /15,159|282,500,123 /700,988,468 /189,940,604|664,904,440|
+|4|40,856 /231,770 /0 /105,555 /19,329|282,761,357 /701,706,017 /277,079,032|689,365,328|
+
+The report's date-stamped us-east-1 model projects `$1,142.59/$589.90/$644.28`
+per month for1/2/4 workers. These are run-specific projections, not bills or
+cross-profile cost claims. The1-worker post-load phase retained571 jobs and
+did not satisfy drain/post-load completion. The2-worker cold/warm regex was
+504/421ms with Range GET309→2 and14,685,567→16,326B; the4-worker result was
+551/504ms with Range GET294→294 and14,569,618B unchanged. Those post-load
+observations do not alter the failed histogram SLO. R3 remains incomplete; a
+fresh measurement alone did not fix the service gate.
+
+### Full-window R3 cache diagnostic (not an official profile)
+
+On2026-09-25, a separate4-worker ARM64 diagnostic used15minutes of the same
+105-records/s warmup to fill the real15-minute received-time query window, then
+measured5minutes of load and90seconds of drain. It accepted126,000 records and
+collected30 rows plus30 histogram samples. Rows/histogram p95 were251/490ms;
+histogram durable-job and HTTP-overhead p95 were371/123ms. The30-sample
+histogram p95 is below the official180-sample run and is not an official
+5m/30m/10m gate result. The report labels its reused application images
+`unverified-reused-image-6c96edf3-dirty`, so this diagnostic is not source
+provenance or a release claim.
+
+The added per-query `cache_bytes` evidence shows29/30 histogram samples served
+some verified bytes from the Range block cache; cache-byte p95 was7,541,834B
+against scanned-byte p95 of8,575,777B. Thus a general absence of cache hits is
+not supported as the cause of the earlier615ms official p95. The sample also
+passed local ACK, visibility, backlog/drain, public-count, and cold/warm checks:
+ACK/visibility p95 were370/533ms, backlog slope was−0.1802/min, final backlog0,
+and drain1,003ms. Go-unit memory limits and cgroup OOM checks passed. This does
+not supersede the current-source official failures at1/2/4 workers, the separate
+fixed-work capacity matrix, or release evidence.
+
+After those runs, review of the comparison gate found that both its load
+monitor and drain count omitted active `maintenance_tasks` and their reserved
+`maintenance_inputs`. The historic backlog slopes, peaks, and final counts
+above are therefore foreground-only undercounts; the old2/4-worker results do
+not prove the combined durable-work backlog gate. The harness now includes
+queued/running/prepared maintenance tasks and inputs in the same query, with a
+regression check for every queue. A fresh official1/2/4-worker profile is
+required before assessing that gate.
+
+### Corrected current-source R3 one-worker official rerun
+
+On2026-09-24 UTC, `./scripts/check-comparison` rebuilt both ARM64 images from
+the current dirty tree, reused the pinned local DuckDB2.0 native dependency,
+passed the10,000/100,000/1,000,000/10,000,000-row independent native oracle,
+and ran the official5m/30m/10m profile at one worker. The10,000,000-row native
+oracle reached a recorded cgroup peak of536,875,008B against a536,870,912B
+limit, with OOM/OOM-kill counters0; do not describe that sample as below the
+limit. The sustained report is
+`.tools/comparison-report-1.M4vwC2/report.json`; source revision is
+`6c96edf3cb25626a1d4030ff0a5d72bfd9f669ad-dirty`.
+
+The profile accepted220,500 records (210,000 logs+10,500 errors), had35
+duplicates, zero conflicts/query failures, exact public counts, ACK p95=370ms,
+and visibility p95=1,111ms. Rows/histogram end-to-end p95 were689/1,638ms
+(server179/1,127ms; HTTP/other overhead530/556ms), and the overall query p95
+was1,571ms. Its corrected combined durable-work backlog slope was+16.652/min
+(360 measured samples), load peak852 items, then a drain peak843 and final0 in
+55,449ms. The load-backlog gate and both query p95 gates failed; all other
+profile targets, including publication, maintenance accounting, post-load,
+and zero OOM, passed.
+
+The179 histogram samples all used some verified Range-cache bytes; p95 selected
+1,750 objects across7 scan tasks and scanned20,920,745B, of which20,450,478B
+came from the cache. That makes cold Range misses an unlikely explanation for
+the query-job latency. At load end, compaction had444 completed tasks over
+10,830 inputs, plus15 queued tasks reserving760 inputs and one running task
+reserving53. This is direct evidence of file fan-out and maintenance backlog,
+not proof that either alone causes the SLO misses.
+
+The run recorded PUT/HEAD/LIST/GET/Range requests of39,234/903,012/0/102,344/
+13,388; PUT/GET/Range bytes were242,768,948/626,165,654/132,045,347, and PG
+WAL was708,535,048B. Whole-installation sampled peak was1,961,665,493B;
+worker peak was164,499,456B, with zero cgroup OOM events/kills. Its dated
+us-east-1 fixture model projects `$883.34/month` (not a bill). A fresh worker
+with empty Eventglass block cache passed the post-load same-snapshot oracle:
+cold/warm363/223ms, Range requests167→0 and bytes13,803,454→0; the60s idle
+window produced no query work. This does not close R3.
+
+The run recorded3,866 S3 Range requests/76,586,637B,56,331 HEADs,23,089 PUTs,
+59,811 full GETs, and334,811,960B PostgreSQL WAL. Its report projects
+$566.92/month from the dated fixture pricing inputs, not a bill or a directly
+comparable cost result. Whole-installation sampled peak was1,555,405,207B;
+individual Go containers remained within their512MiB cgroup limits with zero
+OOM kills. Report: `.tools/comparison-report-4.2jfeTq/report.json`.
+
+A separate1-worker20s/60s/30s quick run then exercised the corrected combined
+backlog SQL against real disposable PostgreSQL/MinIO. It reported a
+`+77.34/min` load slope, max79 outstanding items and final0 after an8,025ms
+drain; its query and load-backlog targets failed. At load end it had queued or
+prepared compaction work across four lanes. This short run reuses images marked
+`unverified-reused-image-6c96edf3-dirty`; it proves the query executes and
+detects active maintenance work, not source provenance or an official R3 pass.
+Report: `.tools/comparison-report-1.Mzwbit/report.json`.
+
+### Rejected official one-worker 1,024-file scan cap
+
+On2026-09-25, an ARM64 official5m/30m/10m one-worker profile tested an
+experimental shared native/planner cap of1,024 analytics inputs per scan
+against the corrected256-file baseline above. The run rebuilt the source at
+`6c96edf3cb25626a1d4030ff0a5d72bfd9f669ad-dirty`, used the pinned DuckDB2.0
+image, accepted220,500 records, and passed the independent10k/100k/1M/10M fixed
+dataset oracle. Report: `.tools/comparison-report-1.NoACJb/report.json`;
+failed-run copy: `.tools/comparison-workers-1-failed.json`.
+
+The candidate is rejected. Compared with the corrected256-file one-worker
+profile (rows/histogram p95=689/1,638ms), end-to-end p95 regressed to6,332/
+6,614ms; visibility p95 reached841,445ms. Combined backlog grew+623.420/min,
+peaked at18,854 and remained18,638 after the full600,285ms drain. Only50,200
+logs and2,513 errors were visible to the publication-count oracle. Histogram
+p95 scan tasks fell7→5, but selected objects grew1,753→2,826; per-query p95
+timings also worsened (rows pre/job479/179→1,530/6,295ms; histogram
+531/1,140→1,408/6,265ms). The run had no query errors or conflicts, ACK
+p95=386ms, whole-installation sampled peak1,523,231,751B, worker cgroup
+peak104,779,776B, and zero OOM events/kills. These are independent fresh
+installations, so do not assert the file cap alone caused the backlog
+trajectory; the observed end-to-end regression is sufficient to reject this
+candidate. The production cap remains256 and R3 remains open.
+
+Post-load same-snapshot rows matched, and the60s idle window submitted no new
+query work, but backlog remained18,602 and maintenance-time accounting failed.
+Cold/warm latency was6,587/4,943ms; Range GETs fell3,453→7 and Range bytes
+29,894,457→57,027. S3 recorded19,817 PUT,877,944 HEAD,29,975 GET and6,921
+Range requests (zero LIST), with69,031,383 PUT,122,224,439 GET and56,728,845
+Range bytes; PG WAL was397,615,312B. The dated pricing model projects
+$694.07/month, not a bill. All resource and post-load results remain
+run-specific.
+
+### Rejected official catalog metadata-fanout16 experiment
+
+On2026-09-25, `EVENTGLASS_COMPARISON_WORKERS='1 2 4' ./scripts/check-comparison`
+tested a bounded increase of catalog metadata verification concurrency from8
+to16. It used Go1.27.1 ARM64, the pinned DuckDB2.0 image and isolated local
+PostgreSQL/MinIO. The independent10k/100k/1M/10M native oracle passed; the10M
+sample processed528,495,771B analytics and682,231,716B journal data in
+1,153,174ms, with no cgroup OOM. Its sampled peak536,875,008B was4,096B above
+the536,870,912B container limit, so it is not evidence of staying under that
+limit. The product fanout was restored to8 after the failed experiment.
+
+The completed one-worker report is `.tools/comparison-report-1.w538gI/report.json`.
+It accepted220,500 records, with overall/rows/histogram query p95
+7,904/6,594/8,694ms, visibility p95 849,387ms, and three client/decode query
+failures. Combined backlog grew637.215/min, peaked at18,836 and remained18,770
+after600,123ms drain. ACK p95 was409ms. Same-snapshot post-load rows matched,
+but idle backlog remained18,734; cold/warm latency was11,345/9,659ms. The
+whole-installation sampled peak was1,429,590,768B; worker cgroup peak was
+83,038,208B, with zero cgroup OOM events/kills. The run measured728,187 HEAD,
+28,114 GET,5,779 Range and19,168 PUT requests; PG WAL was
+368,960,032B. Its dated fixture cost projection was$612.45/month, not a bill.
+The independent installation's maintenance trajectory differs from earlier
+runs, so this sample rejects the candidate but does not prove fanout alone
+caused the regression.
+
+The two-worker profile did not produce a complete report: the30-minute load
+schedule elapsed30m8.462s and hit its two-second lateness guard before report
+serialization. The four-worker profile also stopped before report
+serialization, when input sequence425 received HTTP429 `admission_limited`.
+The independent fixed-dataset oracle then passed. These are failures and
+incomplete samples, not a passing1/2/4 matrix; R3 remains open. The code retains
+the original bounded eight-reader fanout.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency
@@ -3351,3 +3663,41 @@ Unknown schema versions/gaps/checksum drift fail before migration. Journal reade
 reject unknown versions. A development Down migration does not prove safe live
 downgrade. Backup restore verifies PG base/WAL plus all referenced S3 objects;
 never adopt newer unreferenced objects or expose partial restoration as healthy.
+
+### R4 local self-host recovery rehearsal
+
+On2026-09-25, a fresh `./scripts/check recovery` run used isolated Colima
+volumes, PostgreSQL17.11 and pinned pgBackRest2.59.1. It created and restored a
+real base backup plus WAL to LSN`0/502CF28`; the two restore clusters completed
+in10s after a5s backup. The restored generation verified one referenced18B S3
+object, passed `TestActivatedRestoreReadsVerifiedOldGenerationWithoutAdoptingNewerObject`,
+and did not adopt a newer unreferenced object. Deleting the referenced S3 object
+made verification fail with `NoSuchKey`; the installation remained
+`verification_required:true`. The script's random local rehearsal key/report
+and all PG/S3 volumes were confined to that disposable run and removed during
+cleanup. This passes the local self-host restore portion only; it is not AWS
+identity/restore evidence, a production attestation, authorization for physical
+GC, or a release. G08 remains incomplete.
+
+The same source also passed `./scripts/check-browser`: a fresh Linux ARM64 final
+image completed the Playwright Chromium SDK-to-UI scenario (1/1,3.1s) against
+disposable PostgreSQL/MinIO. The local BuildKit output identified image/index
+`sha256:55dadd53af9bb2ca20230622161df5f7f693ac88f54329451e2f3a96ef19c8ef`
+as `linux/arm64` and emitted attestation manifest
+`sha256:50c62b03bebe387d0b37117f322ce05f46283725c89c9275b238e30156bad47b`;
+this local build metadata is not signed or independently trusted release
+provenance. `./scripts/check sdk` passed fixture verification and the live
+localhost Go/API/Go-ingest/SDK suites (0.119/1.129/11.778/10.785s). Its first
+attempt failed only because the sandbox denied local TCP bind; the rerun with
+local networking permission passed and contacted no external service.
+
+Release assurance is still incomplete. This host has no `aws`, `syft`, `trivy`,
+`cosign`, or `go-licenses` executable and no AWS identity environment variables;
+no actual AWS restore, signed release provenance, image/dependency scan,
+license report, or deployment rollback rehearsal was performed. The changed-
+file `detect-secrets` hook passed. Its first run only requested a baseline line
+refresh for the existing `deploy/test_layout.py` high-entropy test fixture,
+already marked `is_secret:false`; the stored line moved132→137, and the rerun
+passed with no new findings. The documented SDK support matrix above is the
+scope verified by the passing live gate; no additional SDK or version
+compatibility is claimed. No production deploy or external alert was sent.

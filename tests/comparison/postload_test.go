@@ -70,7 +70,7 @@ func TestPostLoadComparison(t *testing.T) {
 	}
 	phase := &postLoadEvidence{CacheScope: "empty per-worker Eventglass block caches; provider/OS cache not cleared"}
 	report.PostLoad = phase
-	for _, target := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted", "postload_complete"} {
+	for _, target := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "idle_backlog_drained", "postload_maintenance_time_accounted", "postload_complete"} {
 		report.Targets[target] = false
 	}
 	defer func() { writeReport(t, env[2], report) }()
@@ -185,15 +185,29 @@ func TestPostLoadComparison(t *testing.T) {
 	}
 	_, phase.IdleBacklog = drainBacklog(t, pool, time.Nanosecond)
 	phase.PGWALBytes = pgWAL(t, pool) - walStart
-	report.Targets["idle_no_query_work"] = phase.IdleQueryJobsBefore == phase.IdleQueryJobsAfter && phase.IdleQueryWork == 0 && phase.IdleBacklog == 0
+	report.Targets["idle_no_query_work"] = idleNoQueryWork(phase.IdleQueryJobsBefore, phase.IdleQueryJobsAfter, phase.IdleQueryWork)
+	report.Targets["idle_backlog_drained"] = phase.IdleBacklog == 0
 	phase.Complete = true
 	report.Targets["postload_complete"] = true
-	for _, target := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "postload_maintenance_time_accounted"} {
+	for _, target := range []string{"cold_all_history_regex", "warm_same_snapshot_rows", "idle_no_query_work", "idle_backlog_drained", "postload_maintenance_time_accounted"} {
 		if !report.Targets[target] {
 			t.Errorf("post-load target failed: %s", target)
 		}
 	}
 	t.Logf("post-load cold=%dms warm=%dms ranges=%d/%d bytes=%d/%d idle=%ds new_queries=%d WAL=%d", phase.ColdMS, phase.WarmMS, phase.ColdIO.RangeGET, phase.WarmIO.RangeGET, phase.ColdIO.RangeBytes, phase.WarmIO.RangeBytes, phase.IdleSeconds, phase.IdleQueryJobsAfter-phase.IdleQueryJobsBefore, phase.PGWALBytes)
+}
+
+func idleNoQueryWork(jobsBefore, jobsAfter int64, work uint64) bool {
+	return jobsBefore == jobsAfter && work == 0
+}
+
+func TestIdleNoQueryWorkIsIndependentOfIngestBacklog(t *testing.T) {
+	if !idleNoQueryWork(362, 362, 0) {
+		t.Fatal("unchanged query jobs with zero query work did not pass")
+	}
+	if idleNoQueryWork(362, 363, 0) || idleNoQueryWork(362, 362, 1) {
+		t.Fatal("new query work passed the idle query target")
+	}
 }
 
 func verifyWorkerReplacements(data string, expected int) error {

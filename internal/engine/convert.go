@@ -105,15 +105,19 @@ func Convert(ctx context.Context, request ConversionRequest, emit func(Converted
 		return summary, nil
 	}
 
-	var after *partition
-	for bundleIndex := 0; ; bundleIndex++ {
-		current, found, err := nextPartition(ctx, db, after)
-		if err != nil {
-			return summary, fmt.Errorf("find conversion partition: %w", err)
+	partitions, err := listConversionPartitions(ctx, db, actualRecords)
+	if err != nil {
+		return summary, fmt.Errorf("list conversion partitions: %w", err)
+	}
+	if len(partitions) >= 8 {
+		// Each partition's COPY is an equality lookup into this materialized
+		// table. Build one bounded, single-column ART index after bulk loading;
+		// without it, a legal high-cardinality batch rescans all rows per day.
+		if _, err := db.ExecContext(ctx, "CREATE INDEX staged_event_day_idx ON staged(event_day)"); err != nil {
+			return summary, fmt.Errorf("index conversion partitions: %w", err)
 		}
-		if !found {
-			break
-		}
+	}
+	for bundleIndex, current := range partitions {
 		bundle, paths, err := writePartition(ctx, db, request.OutputDirectory, bundleIndex, current)
 		created = append(created, paths...)
 		if err != nil {
@@ -123,7 +127,6 @@ func Convert(ctx context.Context, request ConversionRequest, emit func(Converted
 			return summary, err
 		}
 		summary.BundleCount++
-		after = &current
 	}
 	return summary, nil
 }
@@ -382,19 +385,27 @@ func materializeStage(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
-func nextPartition(ctx context.Context, db *sql.DB, after *partition) (partition, bool, error) {
-	query := `SELECT event_day::VARCHAR,kind FROM staged GROUP BY event_day,kind ORDER BY event_day,kind LIMIT 1`
-	arguments := []any{}
-	if after != nil {
-		query = `SELECT event_day::VARCHAR,kind FROM staged WHERE event_day>CAST(? AS DATE) OR (event_day=CAST(? AS DATE) AND kind>?) GROUP BY event_day,kind ORDER BY event_day,kind LIMIT 1`
-		arguments = []any{after.day, after.day, string(after.kind)}
+func listConversionPartitions(ctx context.Context, db *sql.DB, maxPartitions int) ([]partition, error) {
+	rows, err := db.QueryContext(ctx, `SELECT event_day::VARCHAR,kind FROM staged GROUP BY event_day,kind ORDER BY event_day,kind`)
+	if err != nil {
+		return nil, err
 	}
-	var result partition
-	err := db.QueryRowContext(ctx, query, arguments...).Scan(&result.day, &result.kind)
-	if errors.Is(err, sql.ErrNoRows) {
-		return partition{}, false, nil
+	defer rows.Close()
+	partitions := make([]partition, 0, maxPartitions)
+	for rows.Next() {
+		if len(partitions) >= maxPartitions {
+			return nil, errors.New("conversion partition count exceeds selected record limit")
+		}
+		var current partition
+		if err := rows.Scan(&current.day, &current.kind); err != nil {
+			return nil, err
+		}
+		partitions = append(partitions, current)
 	}
-	return result, err == nil, err
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return partitions, nil
 }
 
 func writePartition(ctx context.Context, db *sql.DB, outputDirectory string, index int, current partition) (ConvertedBundle, []string, error) {

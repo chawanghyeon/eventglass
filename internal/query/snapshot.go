@@ -45,8 +45,7 @@ type CatalogObjectReader interface {
 }
 
 // LoadVerifiedCatalog distinguishes an authorized empty dataset from catalog
-// corruption. Every selected immutable object must still exist with the exact
-// size and checksum recorded by PostgreSQL before a plan may be sealed.
+// corruption and verifies every analytics/payload pair before planning.
 func LoadVerifiedCatalog(ctx context.Context, pager CatalogPager, objects CatalogObjectReader, command control.CatalogCommand) ([]model.CatalogFile, error) {
 	if pager == nil || objects == nil {
 		return nil, errors.New("catalog dependencies are required")
