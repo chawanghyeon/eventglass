@@ -23,7 +23,13 @@ RUN CORE_EXTENSIONS='icu;json;parquet;httpfs' \
     make bundle-library
 
 FROM golang:1.27.1-bookworm@sha256:69a7b9788769bec032d238959b61854e9ae87f57be9029ec04e9885fabf99195 AS build
-RUN apt-get update \
+ARG DEBIAN_APT_SNAPSHOT=20260926
+ARG DUCKDB_LIBRARY_SHA256=84ad753acc1390e13ce56e728d75d379bebeedec7f3df58ce071c1b373e4c79f
+RUN sed -i \
+    -e "s#http://deb.debian.org/debian-security#http://snapshot.debian.org/archive/debian-security/${DEBIAN_APT_SNAPSHOT}#" \
+    -e "s#http://deb.debian.org/debian#http://snapshot.debian.org/archive/debian/${DEBIAN_APT_SNAPSHOT}#" \
+    /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Check-Valid-Until=false update \
     && apt-get install -y --no-install-recommends libcurl4-openssl-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
@@ -34,6 +40,7 @@ RUN GOGC=off go mod download $(go list -m -f '{{if .Version}}{{.Path}}@{{.Versio
     | sed '/^github.com\/duckdb\/duckdb-go-bindings\/lib\//d; /^$/d')
 COPY . .
 COPY --from=duckdb-build /duckdb/build/release/libduckdb_bundle.a /opt/duckdb/lib/libduckdb_bundle.a
+RUN test "$(sha256sum /opt/duckdb/lib/libduckdb_bundle.a | awk '{print $1}')" = "$DUCKDB_LIBRARY_SHA256"
 ENV CGO_ENABLED=1 \
     CPPFLAGS=-DDUCKDB_STATIC_BUILD \
     CGO_LDFLAGS="-L/opt/duckdb/lib -lduckdb_bundle -lcurl -lssl -lcrypto -lstdc++ -lm -ldl -lpthread"
@@ -53,7 +60,12 @@ COPY web/ ./
 RUN npm run build
 
 FROM debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
-RUN apt-get update \
+ARG DEBIAN_APT_SNAPSHOT=20260926
+RUN sed -i \
+    -e "s#http://deb.debian.org/debian-security#http://snapshot.debian.org/archive/debian-security/${DEBIAN_APT_SNAPSHOT}#" \
+    -e "s#http://deb.debian.org/debian#http://snapshot.debian.org/archive/debian/${DEBIAN_APT_SNAPSHOT}#" \
+    /etc/apt/sources.list.d/debian.sources \
+    && apt-get -o Acquire::Check-Valid-Until=false update \
     && apt-get install -y --no-install-recommends ca-certificates libcurl4t64 libssl3t64 libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 65532 --home-dir /nonexistent --shell /usr/sbin/nologin eventglass

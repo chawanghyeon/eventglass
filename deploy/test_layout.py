@@ -60,6 +60,27 @@ class GoLayoutTests(unittest.TestCase):
         self.assertEqual(tool_versions["GO_VERSION"], module_version)
         self.assertIn(f"VERSION={module_version}", (ROOT / "scripts/bootstrap").read_text())
 
+    def test_release_apt_sources_use_the_locked_snapshot(self):
+        lock = dict(
+            line.split("=", 1)
+            for line in (ROOT / "deploy/versions.lock").read_text().splitlines()
+            if line and not line.startswith("#")
+        )
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        snapshot = lock["debian_apt_snapshot"]
+        self.assertRegex(snapshot, r"^20[0-9]{6}$")
+        self.assertEqual(dockerfile.count(f"ARG DEBIAN_APT_SNAPSHOT={snapshot}"), 2)
+        self.assertEqual(dockerfile.count("snapshot.debian.org/archive/debian/${DEBIAN_APT_SNAPSHOT}"), 2)
+        self.assertEqual(dockerfile.count("snapshot.debian.org/archive/debian-security/${DEBIAN_APT_SNAPSHOT}"), 2)
+        self.assertEqual(dockerfile.count("apt-get -o Acquire::Check-Valid-Until=false update"), 2)
+        library_sha = lock["duckdb_library_sha256"]
+        self.assertRegex(library_sha, r"^[0-9a-f]{64}$")
+        self.assertIn(f"ARG DUCKDB_LIBRARY_SHA256={library_sha}", dockerfile)
+        self.assertIn(
+            'RUN test "$(sha256sum /opt/duckdb/lib/libduckdb_bundle.a | awk \'{print $1}\')" = "$DUCKDB_LIBRARY_SHA256"',
+            dockerfile,
+        )
+
     def test_garage_contract_fixture_is_pinned_and_isolated(self):
         lock = dict(
             line.split("=", 1)
