@@ -3631,6 +3631,49 @@ The independent fixed-dataset oracle then passed. These are failures and
 incomplete samples, not a passing1/2/4 matrix; R3 remains open. The code retains
 the original bounded eight-reader fanout.
 
+### Rejected R3 catalog page-size 1,024 quick diagnostic
+
+On2026-09-25, a one-worker `20s/300s/90s` quick comparison tested catalog pages
+of1,024 against the production256-file page bound. Both fresh isolated
+PostgreSQL/MinIO ARM64 runs used Go1.27.1 and the pinned DuckDB2.0 build. The
+256-file baseline report is `.tools/comparison-report-1.MY834M/report.json`
+(`4c564ff`); the candidate report is
+`.tools/comparison-report-1.CE5Bu6/report.json` (`4c564ff-dirty`). Both accepted
+33,600 records (112/s over the300s load) with zero query failures; rows and
+histogram percentiles had30 and29 samples respectively.
+
+The256-file baseline rows/histogram p95 was538/1,420ms (server192/904ms,
+other overhead435/367ms); the1,024 candidate was1,811/3,043ms
+(server524/1,945ms, other overhead1,612/1,098ms). Visibility p95 changed from
+10,061ms to98,243ms. Combined load-backlog slope/max was+84.425/min and433
+versus+266.422/min and1,359; after90.346/90.138s drain,90/469 items remained.
+Both quick profiles miss R3 targets, and the candidate additionally missed
+publication, maintenance-progress, no-growth and post-load drain/accounting
+checks. The short diagnostic is not an official G07 profile.
+
+S3 HEAD counts were68,624/100,991. Full GETs were15,323/10,610 requests and
+89,963,238/55,096,906B; Range GETs were2,027/2,032 and19,096,061/17,240,963B;
+PUTs were5,963/5,440 and35,247,077/27,759,181B. PostgreSQL WAL was80,720,896/
+77,034,320B. Whole-installation sampled peaks were887,703,467/835,944,707B;
+worker cgroup peaks were77,737,984/62,664,704B; both runs recorded zero cgroup
+OOM events/kills. The model projected$654.36/$722.42 per month from its dated
+inputs; these independent-run estimates are not a comparative cost claim.
+Different fresh-installation object/maintenance trajectories prevent attributing
+the regressions solely to the page size. The candidate was not adopted and the
+production limit remains256.
+
+The added pagination test proves cursor progression across three bounded pages
+and HEAD-verifies every analytics/payload pair. Real PostgreSQL integration
+checks accept the256 boundary and reject257 for both snapshot and durable query
+catalog routes. `./scripts/check integration` passed on Go1.27.1 ARM64: host
+integration completed in128.839s, real-MinIO missing/corruption/retry checks in
+1.203s, and the pinned-native query/maintenance/tenant-scheduling selection in
+67.682s. The final10,000-event-day conversion test passed in927.21s with exact
+per-day identities, one outstanding pair and zero residual disk reservation;
+its ARM64 cgroup peak was155,635,712B against536,870,912B, swap0, and OOM/OOM-kill
+counters0. These checks validate the retained bound and integration contracts;
+they do not close the sustained R3 SLO.
+
 ## Release and workflow
 
 Verification image builds now share a recipe-addressed local DuckDB dependency

@@ -14,6 +14,8 @@ A subsequent official one-worker1024-file-cap experiment regressed rows/histogra
 
 A separate official catalog metadata-fanout16 experiment is also rejected; production fanout remains8. Its one-worker report accepted220,500 records but measured query p95 7,904ms, visibility p95 849,387ms, combined backlog growth+637.215/min, and18,770 outstanding items after600,123ms drain; three queries failed. It had no cgroup OOM. The two-worker run stopped before report serialization because its load schedule fell8.46s behind, and the four-worker run stopped before report serialization on HTTP429 `admission_limited` at input sequence425. These failed/incomplete runs do not establish causality; R3 remains open. See the detailed evidence and limits in [quality evidence](docs/observe/quality.md).
 
+A later one-worker `20s/300s/90s` catalog-page diagnostic compared the retained256-file bound with a1,024-file candidate. Both accepted33,600 records, but rows/histogram p95 changed538/1,420ms→1,811/3,043ms and combined backlog slope+84.425→+266.422/min. The candidate was rejected; production remains256 and R3 remains incomplete. This short comparison is not an official SLO pass; see [quality evidence](docs/observe/quality.md).
+
 The attached source brief at [`docs/observe/source-design.md`](docs/observe/source-design.md) remains byte-identical. Corrections and the Go architecture are documented separately.
 
 Read [`ARCHITECTURE.md`](ARCHITECTURE.md) for package ownership, request/batch/file

@@ -49,6 +49,15 @@ schedule was8.46s late; the four-worker run stopped before report serialization
 on HTTP429 `admission_limited` at sequence425. These are failed/incomplete
 samples, not a causal attribution. Retained one-worker evidence and exact
 limits are in quality.md; R3 remains incomplete.
+A separate one-worker `20s/300s/90s` catalog-page diagnostic accepted33,600
+records at both256 and1,024 files/page but regressed rows/histogram p95 from
+538/1,420ms to1,811/3,043ms and combined backlog slope from+84.425 to+266.422
+items/min. It is not an official G07 result and independent maintenance
+trajectories prevent a causal claim; the1,024 candidate was rejected and the
+production limit remains256. The bounded-cursor, every-object verification and
+real PostgreSQL256/257 boundary tests pass `./scripts/check integration`; exact
+S3/WAL/resource evidence and ARM64 conversion results are in quality.md. R3
+remains the first incomplete packet.
 M2 physical GC stays frozen whenever M4's signed coordinated backup attestation is absent or older than 24 hours.
 Do not mark a packet complete until
 its listed tests execute successfully. Update this status and README gate status

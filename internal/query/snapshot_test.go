@@ -208,6 +208,60 @@ func TestVerifiedCatalogRejectsChangedMetadata(t *testing.T) {
 	}
 }
 
+func TestVerifiedCatalogUsesBoundedPagesAndKeepsEveryObjectVerified(t *testing.T) {
+	const checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	total := control.MaxCatalogPageFiles*2 + 3
+	files := make([]model.CatalogFile, total)
+	indices := make(map[string]int, total)
+	for index := range files {
+		id := fmt.Sprintf("%08x-0000-4000-8000-000000000000", index)
+		files[index] = model.CatalogFile{
+			FileID: id, ObjectKey: "analytics/" + id, Bytes: 1, SHA256: checksum,
+			PayloadFileID: id, PayloadObjectKey: "payload/" + id, PayloadBytes: 1, PayloadSHA256: checksum,
+		}
+		indices[id] = index
+	}
+	var pageSizes []int
+	var cursors []string
+	pager := catalogPagerFunc(func(_ context.Context, command control.CatalogCommand) ([]model.CatalogFile, error) {
+		if command.Limit != control.MaxCatalogPageFiles {
+			t.Fatalf("catalog limit=%d want=%d", command.Limit, control.MaxCatalogPageFiles)
+		}
+		start := 0
+		if command.AfterFileID != "" {
+			index, ok := indices[command.AfterFileID]
+			if !ok {
+				t.Fatalf("unknown cursor %q", command.AfterFileID)
+			}
+			start = index + 1
+		}
+		end := min(start+command.Limit, len(files))
+		pageSizes = append(pageSizes, end-start)
+		cursors = append(cursors, command.AfterFileID)
+		return append([]model.CatalogFile(nil), files[start:end]...), nil
+	})
+	var heads atomic.Int64
+	reader := catalogReaderFunc(func(_ context.Context, key string) (storage.ObjectInfo, error) {
+		heads.Add(1)
+		return storage.ObjectInfo{Key: key, Size: 1, SHA256: checksum}, nil
+	})
+
+	got, err := LoadVerifiedCatalog(context.Background(), pager, reader, control.CatalogCommand{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantSizes := []int{control.MaxCatalogPageFiles, control.MaxCatalogPageFiles, 3}
+	wantCursors := []string{"", files[control.MaxCatalogPageFiles-1].FileID, files[2*control.MaxCatalogPageFiles-1].FileID}
+	if len(got) != total || heads.Load() != int64(total*2) || len(pageSizes) != len(wantSizes) || len(cursors) != len(wantCursors) {
+		t.Fatalf("verified=%d heads=%d page_sizes=%v cursors=%v", len(got), heads.Load(), pageSizes, cursors)
+	}
+	for index := range wantSizes {
+		if pageSizes[index] != wantSizes[index] || cursors[index] != wantCursors[index] {
+			t.Fatalf("page %d size/cursor=%d/%q want=%d/%q", index, pageSizes[index], cursors[index], wantSizes[index], wantCursors[index])
+		}
+	}
+}
+
 func TestVerifiedCatalogChecksAnalyticsAndPayload(t *testing.T) {
 	file := model.CatalogFile{
 		FileID: "00000000-0000-4000-8000-000000000001", ObjectKey: "analytics", Bytes: 4, SHA256: "expected",

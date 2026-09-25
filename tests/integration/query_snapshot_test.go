@@ -231,7 +231,7 @@ func TestSnapshotRetriesReaderLaneRaceAndCatalogUsesCapturedGeneration(t *testin
 	command := control.CatalogCommand{
 		SessionTokenHash: tokenHash, TenantID: fixture.tenantID, SnapshotID: got.snapshot.SnapshotID,
 		DatasetSHA256: got.snapshot.DatasetSHA256, DatasetBytes: got.snapshot.DatasetBytes,
-		TimeBasis: model.QueryTimeEvent, StartUS: 100, EndUS: 200, Kinds: []model.Kind{model.KindError}, Limit: 256,
+		TimeBasis: model.QueryTimeEvent, StartUS: 100, EndUS: 200, Kinds: []model.Kind{model.KindError}, Limit: control.MaxCatalogPageFiles,
 	}
 	files, err := operations.CatalogPage(ctx, command)
 	if err != nil {
@@ -240,6 +240,11 @@ func TestSnapshotRetriesReaderLaneRaceAndCatalogUsesCapturedGeneration(t *testin
 	if len(files) != 1 || files[0].ObjectKey != "v1/query/analytics.parquet" || len(files[0].BlockSHA256) != 1 || !files[0].AllProjectsSelected {
 		t.Fatalf("catalog=%#v", files)
 	}
+	command.Limit++
+	if _, err := operations.CatalogPage(ctx, command); err == nil {
+		t.Fatal("catalog page above the bounded maximum was accepted")
+	}
+	command.Limit = control.MaxCatalogPageFiles
 	// An intersecting bundle is not proof that every row belongs to the
 	// snapshot's requested projects, even when the principal is a tenant admin.
 	if _, err := fixture.pool.Exec(ctx, `INSERT INTO projects(tenant_id,project_id,scrub_revision) VALUES($1,$2,1)`, fixture.tenantID, fixture.projectID+1); err != nil {

@@ -269,10 +269,17 @@ func TestQueryCoordinatorTakeoverCancellationAndLateResultFence(t *testing.T) {
 	}
 	page, err := operations.CatalogPageForQuery(ctx, takeover.Authority, control.CatalogCommand{
 		TenantID: fixture.tenantID, SnapshotID: snapshot.SnapshotID, DatasetSHA256: snapshot.DatasetSHA256,
-		DatasetBytes: snapshot.DatasetBytes, TimeBasis: dataset.TimeBasis, StartUS: dataset.StartUS, EndUS: dataset.EndUS, Kinds: dataset.Kinds, Limit: 256,
+		DatasetBytes: snapshot.DatasetBytes, TimeBasis: dataset.TimeBasis, StartUS: dataset.StartUS, EndUS: dataset.EndUS, Kinds: dataset.Kinds, Limit: control.MaxCatalogPageFiles,
 	})
 	if err != nil || len(page) != 0 {
 		t.Fatalf("durable catalog page=%#v err=%v", page, err)
+	}
+	_, err = operations.CatalogPageForQuery(ctx, takeover.Authority, control.CatalogCommand{
+		TenantID: fixture.tenantID, SnapshotID: snapshot.SnapshotID, DatasetSHA256: snapshot.DatasetSHA256,
+		DatasetBytes: snapshot.DatasetBytes, TimeBasis: dataset.TimeBasis, StartUS: dataset.StartUS, EndUS: dataset.EndUS, Kinds: dataset.Kinds, Limit: control.MaxCatalogPageFiles + 1,
+	})
+	if err == nil {
+		t.Fatal("durable catalog page above the bounded maximum was accepted")
 	}
 	if _, err := operations.HeartbeatQueryCoordinator(ctx, takeover.Authority); err != nil {
 		t.Fatal(err)
