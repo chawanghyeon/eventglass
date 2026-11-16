@@ -111,7 +111,7 @@ UI is served by the final image; browser tests no longer depend on a Vite server
 
 ## Reading and authority
 
-1. Read [AGENTS.md](../../AGENTS.md), [DESIGN.md](../../DESIGN.md), and
+1. Read [CLAUDE.md](../../CLAUDE.md), [DESIGN.md](../../DESIGN.md), and
    [ARCHITECTURE.md](../../ARCHITECTURE.md) in full once.
 2. Read this index, [work plan](work-plan.md), and the selected packet's linked
    contracts before editing. Read [CONTRIBUTING.md](../../CONTRIBUTING.md) for
