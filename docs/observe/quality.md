@@ -3928,3 +3928,19 @@ the workspace first denied httptest loopback binds, and the same tests passed
 with local-only networking permission. No service profile was run for this
 harness correction. Existing official reports have not been rewritten and R3
 remains incomplete.
+
+### Fresh R4 local recovery rebuild stopped at APT verification
+
+On2026-09-26, `./scripts/check recovery` was run against the clean ARM64 `main`
+worktree. Its first attempt stopped while BuildKit constructed the
+`eventglass-pgbackrest:2.59.1` helper: Debian and PGDG APT metadata failed
+signature verification before the restore rehearsal. Both helper stages were
+then changed to use the repository's locked Debian snapshot, and the unpinned
+PGDG source was removed. The layout test and `./scripts/check unit` pass, but a
+second recovery attempt still exits100 because APT reports invalid signatures
+for all three snapshot indexes before creating the helper image or running the
+PostgreSQL/S3 restore. Disposable probes with APT2.6.1 also rejected the pinned
+snapshot over HTTP and HTTPS, while GPGV accepted the fetched `20260925`
+InRelease signatures with the base image's archive keyring. No insecure APT
+option was used. The helper-image change is not verified by a successful build;
+R4 recovery remains incomplete.

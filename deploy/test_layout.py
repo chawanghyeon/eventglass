@@ -81,6 +81,20 @@ class GoLayoutTests(unittest.TestCase):
             dockerfile,
         )
 
+    def test_recovery_apt_sources_use_the_locked_snapshot(self):
+        lock = dict(
+            line.split("=", 1)
+            for line in (ROOT / "deploy/versions.lock").read_text().splitlines()
+            if line and not line.startswith("#")
+        )
+        dockerfile = (ROOT / "deploy/recovery/Dockerfile").read_text()
+        snapshot = lock["debian_apt_snapshot"]
+        self.assertEqual(dockerfile.count(f"ARG DEBIAN_APT_SNAPSHOT={snapshot}"), 2)
+        self.assertEqual(dockerfile.count("snapshot.debian.org/archive/debian/${DEBIAN_APT_SNAPSHOT}"), 2)
+        self.assertEqual(dockerfile.count("snapshot.debian.org/archive/debian-security/${DEBIAN_APT_SNAPSHOT}"), 2)
+        self.assertEqual(dockerfile.count("apt-get -o Acquire::Check-Valid-Until=false update"), 2)
+        self.assertEqual(dockerfile.count("rm -f /etc/apt/sources.list.d/pgdg.list"), 2)
+
     def test_garage_contract_fixture_is_pinned_and_isolated(self):
         lock = dict(
             line.split("=", 1)
